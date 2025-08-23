@@ -1,0 +1,2 @@
+[console_scripts]
+sim = simulator.cli.app:app

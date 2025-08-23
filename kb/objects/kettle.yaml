@@ -1,0 +1,6 @@
+type: kettle
+version: 1
+attributes:
+  power:       { space: [off, on], mutable: true, default: off }
+  temperature: { space: [cold, warm, hot, boiling], mutable: true, default: cold }
+  water_level: { space: [empty, low, mid, full], mutable: true, default: mid }

@@ -1,0 +1,6 @@
+type: flashlight
+version: 1
+attributes:
+  switch:        { space: [off, on],        mutable: true,  default: off }
+  bulb:          { space: [off, on],        mutable: true,  default: off }
+  battery_level: { space: [empty, low, med, high], mutable: true, default: med }
