@@ -1,0 +1,33 @@
+# Set Power Action for Electric Kettle
+#
+# This action controls the kettle's power switch. It's a simple
+# binary control action that demonstrates basic parameter validation
+# and direct attribute assignment.
+#
+# Behavior:
+# - Sets power switch to the requested position (on/off)
+# - When powered on, heating will begin (handled by environment rules in Phase 4)
+# - No immediate temperature change (realistic delay)
+
+action: set_power
+object_type: kettle
+
+parameters:
+  # Target power state
+  to:
+    space: ["off", "on"]      # Must be valid power state
+
+preconditions:
+  # Parameter validation
+  - 'to in ["off","on"]'      # Ensure valid target state
+  
+  # Note: Future versions might add safety checks like:
+  # - 'to == "on" -> water_level != "empty"'  # Don't heat empty kettle
+
+effects:
+  # Primary effect: set power to requested state
+  - 'power = to'
+  
+  # Note: Temperature changes will be handled by environment rules
+  # in Phase 4, which will gradually increase temperature when
+  # power is on and water is present.

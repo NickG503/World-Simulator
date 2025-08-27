@@ -1,0 +1,35 @@
+# Flip Switch Action for Flashlight
+#
+# This action toggles the flashlight's switch to a specified position.
+# It demonstrates conditional effects, precondition logic, and trend setting.
+#
+# Behavior:
+# - Sets switch to the requested position (on/off)
+# - Bulb follows switch state automatically
+# - Battery starts draining when light turns on
+# - Prevents turning on if battery is empty (safety check)
+
+action: flip_switch
+object_type: flashlight
+
+parameters:
+  # Target switch position
+  to:
+    space: ["off", "on"]      # Must be valid switch position
+
+preconditions:
+  # Parameter validation
+  - 'to in ["off","on"]'      # Ensure valid target state
+  
+  # Safety constraint: can't turn on with empty battery
+  - 'to == "on" -> battery_level != "empty"'   # Implication: if turning on, battery must not be empty
+
+effects:
+  # Primary effect: set switch to requested position
+  - 'switch = to'
+  
+  # Secondary effect: bulb follows switch state
+  - 'bulb = "on" if switch == "on" else "off"'
+  
+  # Trend effect: battery drains when light is on
+  - 'battery_level trend = "down" if switch == "on" else "none"'
