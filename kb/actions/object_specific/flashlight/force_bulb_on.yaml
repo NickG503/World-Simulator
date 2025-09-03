@@ -1,0 +1,14 @@
+action: force_bulb_on
+object_type: flashlight
+
+parameters:
+  # No parameters needed
+
+preconditions:
+  # No preconditions - this action forces the bulb on regardless of battery
+
+effects:
+  # Force bulb to on state (this might violate constraint if battery is empty)
+  - type: set_attribute
+    target: bulb.state
+    value: "on"

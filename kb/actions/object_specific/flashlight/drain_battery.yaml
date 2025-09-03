@@ -1,0 +1,18 @@
+action: drain_battery
+object_type: flashlight
+
+parameters:
+  # No parameters needed
+
+preconditions:
+  # Can only drain if battery is not already empty
+  - type: attribute_check
+    target: battery.level
+    operator: not_equals
+    value: empty
+
+effects:
+  # Drain battery to empty
+  - type: set_attribute
+    target: battery.level
+    value: "empty"

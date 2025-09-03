@@ -1,0 +1,15 @@
+type: bottle
+
+parts:
+  container:
+    attributes:
+      contents_level:
+        space: liquid_amount
+        default: "empty"
+        mutable: true
+  lid:
+    attributes:
+      cap_state:
+        space: binary_state
+        default: "off"
+        mutable: true

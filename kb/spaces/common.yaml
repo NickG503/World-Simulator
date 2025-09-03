@@ -1,0 +1,32 @@
+spaces:
+  - id: binary_state
+    name: Binary State
+    levels: ["off", "on"]
+
+  - id: brightness_level
+    name: Brightness Level
+    levels: ["none", "low", "medium", "high"]
+
+  - id: battery_level
+    name: Battery Level
+    levels: ["empty", "low", "medium", "high", "full"]
+
+  - id: battery_types
+    name: Battery Types
+    levels: ["AA", "AAA", "CR123"]
+
+  - id: temperature_level
+    name: Temperature Level
+    levels: ["cold", "warm", "hot", "boiling"]
+
+  - id: water_level
+    name: Water Level
+    levels: ["empty", "low", "mid", "full"]
+
+  - id: liquid_amount
+    name: Liquid Amount
+    levels: ["empty", "few_drops", "quarter", "half", "three_quarters", "full", "overflowing"]
+
+  - id: temperature
+    name: Temperature
+    levels: ["freezing", "cold", "lukewarm", "warm", "hot", "boiling"]

@@ -1,32 +1,40 @@
-# Flashlight Object Type Definition
-#
-# This defines a basic flashlight with a switch, bulb, and battery.
-# It demonstrates core concepts like binary states (on/off) and 
-# qualitative levels (empty/low/med/high).
-#
-# Key behaviors modeled:
-# - Switch controls bulb state
-# - Battery drains when light is on
-# - Light won't turn on if battery is empty
-
 type: flashlight
-version: 1
-
-attributes:
-  # Physical switch that can be toggled
+parts:
   switch:
-    space: ["off", "on"]       # Binary state space
-    mutable: true              # Can be changed by actions
-    default: "off"             # Starts in off position
-
-  # Light bulb that illuminates when powered
+    attributes:
+      position:
+        space: binary_state
+        default: 'off'
+        mutable: true
   bulb:
-    space: ["off", "on"]       # Binary state space
-    mutable: true              # Controlled by switch state
-    default: "off"             # Starts off (follows switch)
+    attributes:
+      state:
+        space: binary_state
+        default: 'off'
+        mutable: true
+      brightness:
+        space: brightness_level
+        default: none
+  battery:
+    attributes:
+      level:
+        space: battery_level
+        default: medium
+        mutable: true
+      type:
+        space: battery_types
+        mutable: false
+        default: AA
 
-  # Battery charge level using qualitative values
-  battery_level:
-    space: ["empty", "low", "med", "high"]  # Ordered qualitative levels
-    mutable: true              # Decreases over time/use
-    default: "med"             # Starts with medium charge
+constraints:
+- type: dependency
+  condition:
+    type: attribute_check
+    target: bulb.state
+    operator: equals
+    value: on
+  requires:
+    type: attribute_check
+    target: battery.level
+    operator: not_equals
+    value: empty

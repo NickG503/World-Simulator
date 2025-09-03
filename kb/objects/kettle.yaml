@@ -1,33 +1,20 @@
-# Electric Kettle Object Type Definition
-#
-# This defines an electric kettle that heats water. It demonstrates
-# qualitative temperature progression and the relationship between
-# power state and heating processes.
-#
-# Key behaviors modeled:
-# - Power switch controls heating element
-# - Temperature increases when powered and water is present
-# - Water level affects heating efficiency
-# - Safety: won't heat when empty (future constraint)
-
 type: kettle
-version: 1
-
-attributes:
-  # Power switch for the heating element
-  power:
-    space: ["off", "on"]       # Binary power state
-    mutable: true              # Can be toggled by user
-    default: "off"             # Starts unpowered for safety
-
-  # Water temperature using qualitative levels
-  temperature:
-    space: ["cold", "warm", "hot", "boiling"]  # Progressive heating states
-    mutable: true              # Changes based on power and time
-    default: "cold"            # Starts at room temperature
-
-  # Amount of water in the kettle
-  water_level:
-    space: ["empty", "low", "mid", "full"]     # Qualitative volume levels
-    mutable: true              # Can be filled/emptied
-    default: "mid"             # Starts partially filled
+parts:
+  control:
+    attributes:
+      power:
+        space: binary_state
+        default: 'off'
+        mutable: true
+  tank:
+    attributes:
+      level:
+        space: water_level
+        default: low
+        mutable: true
+  heater:
+    attributes:
+      temperature:
+        space: temperature_level
+        default: cold
+        mutable: true

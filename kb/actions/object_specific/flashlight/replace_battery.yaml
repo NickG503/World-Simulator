@@ -1,0 +1,18 @@
+action: replace_battery
+object_type: flashlight
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: bulb.state
+    operator: equals
+    value: off
+
+effects:
+  - type: set_attribute
+    target: battery.level
+    value: full
+  - type: set_trend
+    target: battery.level
+    direction: none
