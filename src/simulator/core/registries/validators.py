@@ -1,8 +1,20 @@
 from __future__ import annotations
-from typing import List
+from typing import Callable, Iterable, List
+
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.objects.object_type import ObjectType
 from simulator.core.objects.part import AttributeTarget
+from simulator.core.attributes.attribute_spec import AttributeSpec
+from simulator.core.actions.conditions.base import Condition
+from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
+from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
+from simulator.core.actions.effects.base import Effect
+from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+from simulator.core.actions.effects.trend_effects import TrendEffect
+from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+from simulator.core.actions.parameter import ParameterReference
+from simulator.core.actions.specs import build_condition
 
 
 class RegistryValidator:
@@ -14,6 +26,7 @@ class RegistryValidator:
         errors: List[str] = []
         errors.extend(self._validate_attribute_spaces())
         errors.extend(self._validate_action_references())
+        errors.extend(self._validate_object_behaviors())
         errors.extend(self._validate_object_constraints())
         return errors
 
@@ -44,7 +57,6 @@ class RegistryValidator:
         """Ensure action targets and parameter references are valid for target objects."""
         errors: List[str] = []
         for (name, action) in self.registries.actions.items.items():
-            # Allow generic actions to skip strict object validation in Phase 1
             obj_name = action.object_type
             if obj_name.lower() == "generic":
                 continue
@@ -54,76 +66,201 @@ class RegistryValidator:
                 errors.append(f"Action {obj_name}/{action.name} references unknown object type")
                 continue
 
-            # Validate parameter references
-            def _param_exists(pname: str) -> bool:
-                return pname in action.parameters
+            context = f"Action {obj_name}/{action.name}"
+            param_exists = lambda pname: pname in action.parameters
 
-            # Walk conditions/effects for targets and parameter refs
-            from simulator.core.actions.conditions.base import Condition
-            from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-            from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-            from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
-            from simulator.core.actions.effects.base import Effect
-            from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-            from simulator.core.actions.effects.trend_effects import TrendEffect
-            from simulator.core.actions.effects.conditional_effects import ConditionalEffect
-            from simulator.core.actions.parameter import ParameterReference
-
-            def _check_target(obj: ObjectType, tgt: AttributeTarget) -> None:
-                if tgt.part is None:
-                    if tgt.attribute not in obj.global_attributes:
-                        errors.append(f"Action {obj_name}/{action.name}: unknown global attribute target '{tgt.to_string()}'")
-                else:
-                    if tgt.part not in obj.parts:
-                        errors.append(f"Action {obj_name}/{action.name}: unknown part '{tgt.part}' in target '{tgt.to_string()}'")
-                    else:
-                        if tgt.attribute not in obj.parts[tgt.part].attributes:
-                            errors.append(f"Action {obj_name}/{action.name}: unknown attribute '{tgt.attribute}' in part '{tgt.part}'")
-
-            def _check_condition(c: Condition) -> None:
-                if isinstance(c, (AttributeCondition,)):
-                    _check_target(obj_type, c.target)
-                    val = getattr(c, "value", None)
-                    if isinstance(val, ParameterReference) and not _param_exists(val.name):
-                        errors.append(f"Action {obj_name}/{action.name}: unknown parameter reference '{val.name}' in condition")
-                elif isinstance(c, LogicalCondition):
-                    for sub in c.conditions:
-                        _check_condition(sub)
-                elif isinstance(c, ImplicationCondition):
-                    _check_condition(c.if_condition)
-                    _check_condition(c.then_condition)
-                elif isinstance(c, (ParameterEquals, ParameterValid)):
-                    # Parameter names must be declared
-                    pname = getattr(c, "parameter", None)
-                    if pname and not _param_exists(pname):
-                        errors.append(f"Action {obj_name}/{action.name}: unknown parameter '{pname}' in condition")
-
-            def _check_effect(e: Effect) -> None:
-                if isinstance(e, SetAttributeEffect):
-                    _check_target(obj_type, e.target)
-                    val = e.value
-                    if isinstance(val, ParameterReference) and not _param_exists(val.name):
-                        errors.append(f"Action {obj_name}/{action.name}: unknown parameter reference '{val.name}' in effect")
-                elif isinstance(e, TrendEffect):
-                    _check_target(obj_type, e.target)
-                    if e.direction not in ("up", "down", "none"):
-                        errors.append(f"Action {obj_name}/{action.name}: invalid trend direction '{e.direction}'")
-                elif isinstance(e, ConditionalEffect):
-                    _check_condition(e.condition)
-                    for se in (e.then_effect if isinstance(e.then_effect, list) else [e.then_effect]):
-                        if se is not None:
-                            _check_effect(se)
-                    if e.else_effect is not None:
-                        for se in (e.else_effect if isinstance(e.else_effect, list) else [e.else_effect]):
-                            if se is not None:
-                                _check_effect(se)
-
-            for cond in action.preconditions:
-                _check_condition(cond)
-            for eff in action.effects:
-                _check_effect(eff)
+            for condition in action.preconditions:
+                errors.extend(
+                    self._validate_condition_tree(condition, obj_type, param_exists, f"{context} precondition")
+                )
+            for effect in action.effects:
+                errors.extend(
+                    self._validate_effect_tree(effect, obj_type, param_exists, f"{context} effect")
+                )
         return errors
 
     def _validate_object_constraints(self) -> List[str]:
-        # Placeholder: No constraints parsed yet in Phase 1
-        return []
+        errors: List[str] = []
+        for obj_type in self.registries.objects.all():
+            for idx, constraint in enumerate(obj_type.constraints, start=1):
+                context = f"Object {obj_type.name} constraint[{idx}] ({constraint.type})"
+                for label, spec in ("condition", constraint.condition), ("requires", constraint.requires):
+                    if spec is None:
+                        continue
+                    try:
+                        condition = build_condition(spec)
+                    except Exception as exc:  # pragma: no cover - defensive
+                        errors.append(f"{context}: invalid {label}: {exc}")
+                        continue
+                    errors.extend(
+                        self._validate_condition_tree(
+                            condition,
+                            obj_type,
+                            lambda pname: False,
+                            f"{context} {label}",
+                        )
+                    )
+        return errors
+
+    def _validate_object_behaviors(self) -> List[str]:
+        errors: List[str] = []
+        for obj_type in self.registries.objects.all():
+            for name, behavior in obj_type.behaviors.items():
+                context_base = f"Object {obj_type.name} behavior '{name}'"
+                param_exists = lambda _p: False
+                for idx, condition in enumerate(behavior.preconditions, start=1):
+                    errors.extend(
+                        self._validate_condition_tree(
+                            condition,
+                            obj_type,
+                            param_exists,
+                            f"{context_base} precondition[{idx}]",
+                        )
+                    )
+                for idx, effect in enumerate(behavior.effects, start=1):
+                    errors.extend(
+                        self._validate_effect_tree(
+                            effect,
+                            obj_type,
+                            param_exists,
+                            f"{context_base} effect[{idx}]",
+                        )
+                    )
+        return errors
+
+    def _validate_condition_tree(
+        self,
+        condition: Condition,
+        obj_type: ObjectType,
+        param_exists: Callable[[str], bool],
+        context: str,
+    ) -> List[str]:
+        errors: List[str] = []
+        if isinstance(condition, AttributeCondition):
+            attr_errors, _ = self._resolve_attribute_spec(obj_type, condition.target, context)
+            errors.extend(attr_errors)
+            value = getattr(condition, "value", None)
+            if isinstance(value, ParameterReference) and not param_exists(value.name):
+                errors.append(f"{context}: unknown parameter reference '{value.name}'")
+        elif isinstance(condition, LogicalCondition):
+            for idx, child in enumerate(condition.conditions, start=1):
+                errors.extend(
+                    self._validate_condition_tree(
+                        child,
+                        obj_type,
+                        param_exists,
+                        f"{context} ({condition.operator}#{idx})",
+                    )
+                )
+        elif isinstance(condition, ImplicationCondition):
+            errors.extend(
+                self._validate_condition_tree(
+                    condition.if_condition,
+                    obj_type,
+                    param_exists,
+                    f"{context} implication IF",
+                )
+            )
+            errors.extend(
+                self._validate_condition_tree(
+                    condition.then_condition,
+                    obj_type,
+                    param_exists,
+                    f"{context} implication THEN",
+                )
+            )
+        elif isinstance(condition, (ParameterEquals, ParameterValid)):
+            if not param_exists(condition.parameter):
+                errors.append(f"{context}: unknown parameter '{condition.parameter}'")
+        return errors
+
+    def _validate_effect_tree(
+        self,
+        effect: Effect,
+        obj_type: ObjectType,
+        param_exists: Callable[[str], bool],
+        context: str,
+    ) -> List[str]:
+        errors: List[str] = []
+        if isinstance(effect, SetAttributeEffect):
+            attr_errors, attr_spec = self._resolve_attribute_spec(obj_type, effect.target, context)
+            errors.extend(attr_errors)
+            if attr_spec is not None and not attr_spec.mutable:
+                errors.append(
+                    f"{context}: attribute '{effect.target.to_string()}' is immutable"
+                )
+            if isinstance(effect.value, ParameterReference) and not param_exists(effect.value.name):
+                errors.append(f"{context}: unknown parameter reference '{effect.value.name}'")
+        elif isinstance(effect, TrendEffect):
+            attr_errors, _ = self._resolve_attribute_spec(obj_type, effect.target, context)
+            errors.extend(attr_errors)
+        elif isinstance(effect, ConditionalEffect):
+            errors.extend(
+                self._validate_condition_tree(
+                    effect.condition,
+                    obj_type,
+                    param_exists,
+                    f"{context} condition",
+                )
+            )
+            for idx, sub_effect in enumerate(self._iter_effects(effect.then_effect), start=1):
+                errors.extend(
+                    self._validate_effect_tree(
+                        sub_effect,
+                        obj_type,
+                        param_exists,
+                        f"{context} then[{idx}]",
+                    )
+                )
+            for idx, sub_effect in enumerate(self._iter_effects(effect.else_effect), start=1):
+                errors.extend(
+                    self._validate_effect_tree(
+                        sub_effect,
+                        obj_type,
+                        param_exists,
+                        f"{context} else[{idx}]",
+                    )
+                )
+        return errors
+
+    @staticmethod
+    def _iter_effects(value: Effect | List[Effect] | None) -> Iterable[Effect]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return value
+        return [value]
+
+    def _resolve_attribute_spec(
+        self,
+        obj_type: ObjectType,
+        target: AttributeTarget,
+        context: str,
+    ) -> tuple[List[str], AttributeSpec | None]:
+        from simulator.core.objects.part import PartSpec
+
+        if target.part is None:
+            if target.attribute not in obj_type.global_attributes:
+                return (
+                    [
+                        f"{context}: unknown global attribute '{target.attribute}' on object '{obj_type.name}'"
+                    ],
+                    None,
+                )
+            return ([], obj_type.global_attributes[target.attribute])
+        if target.part not in obj_type.parts:
+            return (
+                [
+                    f"{context}: unknown part '{target.part}' on object '{obj_type.name}'"
+                ],
+                None,
+            )
+        part_spec = obj_type.parts[target.part]
+        if target.attribute not in part_spec.attributes:
+            return (
+                [
+                    f"{context}: unknown attribute '{target.attribute}' on part '{target.part}' of '{obj_type.name}'"
+                ],
+                None,
+            )
+        return ([], part_spec.attributes[target.attribute])

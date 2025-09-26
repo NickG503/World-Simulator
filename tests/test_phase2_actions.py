@@ -3,7 +3,7 @@ from simulator.core.registries import RegistryManager
 from simulator.io.loaders.yaml_loader import load_spaces
 from simulator.io.loaders.object_loader import load_object_types, instantiate_default
 from simulator.io.loaders.action_loader import load_actions
-from simulator.core.engine import TransitionEngine
+from simulator.core.engine.transition_engine import TransitionEngine
 
 
 def test_behavior_turn_on_ok(tmp_path: Path):

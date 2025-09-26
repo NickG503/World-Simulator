@@ -5,6 +5,9 @@ from typing import Dict, Any
 import yaml
 from simulator.core.attributes import QualitativeSpace
 from simulator.core.registries.registry_manager import RegistryManager
+from simulator.core.attributes.file_spec import QualitativeSpaceFileSpec
+from simulator.io.loaders.errors import LoaderError
+from pydantic import ValidationError
 
 
 def _read_yaml_file(path: str) -> Dict[str, Any]:
@@ -26,9 +29,18 @@ def load_spaces(path: str, registries: RegistryManager) -> None:
     files = sorted(glob.glob(os.path.join(path, "**", "*.yaml"), recursive=True))
     for fp in files:
         data = _read_yaml_file(fp)
-        for entry in data.get("spaces", []) or []:
-            space = QualitativeSpace(**entry)
-            # Avoid duplicate registrations if defaults already loaded
+        try:
+            spec = QualitativeSpaceFileSpec.model_validate(data)
+        except ValidationError as exc:
+            raise LoaderError(fp, "Invalid qualitative space definition", cause=exc) from exc
+        for entry in spec.spaces:
+            try:
+                space = entry.build()
+            except ValidationError as exc:
+                raise LoaderError(fp, "Invalid qualitative space entry", cause=exc) from exc
             if space.id in registries.spaces.spaces:
                 continue
-            registries.spaces.register(space)
+            try:
+                registries.spaces.register(space)
+            except Exception as exc:
+                raise LoaderError(fp, f"Failed to register qualitative space '{space.id}'", cause=exc) from exc

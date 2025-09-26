@@ -1,36 +1,17 @@
-# Mental Models Simulator — Ground-Truth Benchmark Engine
+# World Simulator
 
-A deterministic, qualitative simulator for everyday objects that produces canonical, labeled state transitions for benchmarking AI mental models.
+Robust, deterministic simulator for everyday objects. YAML knowledge bases are parsed into typed models, validated for consistency, and executed to produce canonical state transitions.
 
-## 🎯 Purpose
+---
 
-Build a ground-truth simulator (NOT LLM-facing) that defines canonical behavior for everyday objects. External AI models will be evaluated against the datasets we generate.
+## Overview
 
-## ✅ Current System Status (Phase 2 Complete - Unified Language)
+- **Knowledge driven** – qualitative spaces, object definitions, and actions live in `kb/` and are loaded through strict schemas.
+- **Explicit runtime** – `TransitionEngine` applies validated actions to object instances while enforcing constraints and recording diffs.
+- **Composed history** – simulations and story generation share typed snapshots that downstream tools can narrate or analyse.
+- **CLI oriented** – the `sim` command gives high-level entry points (validate, show, apply, simulate, history) with clear error reporting.
 
-### **Architecture with Unified Language**
-
-The simulator features a robust, validated system with:
-
-- **Unified Condition Language**: Single structured format for preconditions, effects, and constraints
-- **Clean Default State Display**: CLI shows default values from YAML definitions, not runtime state
-- **Safe State Mutations**: All attribute writes validated against qualitative spaces  
-- **Constraint Enforcement**: Business rules using same structured conditions as actions
-- **Capability-Based Actions**: Generic actions work across compatible object types
-- **Order-Aware Comparisons**: Support for lt, lte, gt, gte operators using qualitative space ordering
-- **Comprehensive Validation**: Cross-registry validation catches broken references
-- **Rich Error Messages**: Clear diagnostics with available options listed
-- **Immutable Snapshots**: State diffing and change tracking utilities
-
-### **Core Components**
-
-- **✅ Knowledge Base**: YAML-based authoring with unified structured conditions
-- **✅ Object Model**: Parts-based architecture with structured constraint definitions
-- **✅ Action Engine**: Unified condition language with 6 comparison operators (equals, not_equals, lt, lte, gt, gte)
-- **✅ Capability System**: Automatic detection and generic action compatibility  
-- **✅ Constraint Engine**: Structured conditions matching action preconditions exactly
-- **✅ State Tracking**: Full before/after states with detailed change diffs
-- **✅ Utilities**: Object builders, state snapshots, logging helpers
+---
 
 ## Quick Start
 
@@ -38,83 +19,109 @@ The simulator features a robust, validated system with:
 # Install dependencies
 uv sync
 
-# Validate knowledge base with unified language
+# Validate the bundled knowledge base
 uv run sim validate
 
-# Show object capabilities
-uv run sim show capabilities flashlight
+# Inspect an object definition
+uv run sim show object flashlight
 
-# Apply actions with structured condition validation
+# Apply an action
 uv run sim apply flashlight turn_on
 
-# Apply parametric actions
-uv run sim apply kettle pour_water -p to_level=full
+# Run a short simulation and save history
+uv run sim simulate flashlight "turn_on" "drain_battery" --save outputs/history.yaml
 ```
 
+Add `--verbose-load` to any command to see full loader validation traces, and `--verbose-run` during simulations for step-by-step logs.
 
+---
 
-## 🏗️ Architecture
+## Project Layout
 
 ```
-src/simulator/
-├── core/
-│   ├── capabilities/     # Capability detection & registry
-│   ├── constraints/      # Constraint engine & validation
-│   ├── objects/          # ObjectType, ObjectInstance, AttributeTarget
-│   ├── actions/          # Action conditions, effects, parameters  
-│   ├── registries/       # In-memory storage + cross-validation
-│   └── engine/           # Action application + state transitions
-├── io/loaders/           # YAML → validated objects
-└── cli/                  # CLI commands
-
-kb/                       # Knowledge base (YAML files)
-├── spaces/               # Qualitative spaces (binary_state, battery_level, etc.)
-├── objects/              # Object definitions (flashlight.yaml, kettle.yaml, etc.)
-└── actions/
-    └── generic/          # Capability-based actions (turn_on.yaml, turn_off.yaml)
+src/
+  simulator/
+    cli/              # Typer-based CLI commands
+    io/loaders/       # YAML → typed specs → runtime models
+    core/
+      actions/        # Action, Condition, Effect types & specs
+      objects/        # ObjectType, ObjectInstance, AttributeTarget
+      registries/     # RegistryManager + cross-validation
+      engine/         # TransitionEngine, ConditionEvaluator, EffectApplier
+      simulation_runner.py  # High-level simulation utilities
+      story_generator.py    # Narrative summaries from histories
+kb/
+  spaces/            # Qualitative space definitions
+  objects/           # Object type YAML files
+  actions/           # Generic & object-specific actions
+tests/               # Pytest suite covering loaders, smoke tests, behaviour validation
 ```
 
-## 🔬 Design Principles
+---
 
-- **Unified Language**: Single structured condition format across all components
-- **Capability-Based**: Actions work on object capabilities, not specific types  
-- **Constraint-Driven**: Business rules enforced automatically using structured conditions
-- **Order-Aware**: Qualitative space ordering enables lt/gt comparisons
-- **Deterministic**: Same input → same output, full state tracking
-- **Safe DSL**: No Python eval, only structured YAML conditions
-- **YAML Authoring**: Human-readable, version-controlled knowledge base
+## Core Components
 
-## 📊 Current System Stats
+| Area        | Key Classes | Responsibilities |
+|-------------|-------------|------------------|
+| Registries  | `RegistryManager`, `RegistryValidator` | Stores qualitative spaces, attributes, objects, and actions. Performs cross-registry validation on attribute references, behaviours, and constraints. |
+| Engine      | `TransitionEngine`, `ConditionEvaluator`, `EffectApplier`, `DiffEntry`, `TransitionResult` | Validates parameters, evaluates structured preconditions, applies effects, records diffs, and enforces object-level constraints. |
+| Actions     | `Action`, `ActionMetadata`, `ParameterSpec`, `Condition`/`Effect` subclasses | Encapsulate structured action definitions, parameter rules, conditional logic, and effect execution (attribute setters, trend updates, conditional branches). |
+| Objects     | `ObjectType`, `PartSpec`, `AttributeSpec`, `ObjectConstraint`, `ObjectBehavior`, `ObjectInstance`, `AttributeTarget` | Describe object structure, defaults, mutability, behaviours, and constraint definitions. Constraints use the same condition language as actions. |
+| Simulation  | `ActionRequest`, `AttributeSnapshot`, `ObjectStateSnapshot`, `SimulationStep`, `SimulationHistory`, `SimulationRunner` | Provide typed inputs/outputs for multi-step simulations and produce reusable history artefacts. |
+| Narration   | `StoryGenerator`, `ObjectLanguageTemplate` | Convert simulation histories into natural-language stories using the shared snapshot models and recorded diffs. |
 
-- **Object Types**: 3 (flashlight, kettle, bottle)
-- **Capabilities**: 6 (switchable, illuminating, battery_powered, fillable, heatable, water_container)
-- **Generic Actions**: 2 (turn_on, turn_off) using unified structured conditions
-- **Object-Specific Actions**: 5 (replace_battery, pour_water, set_power, drain_battery, force_bulb_on)
-- **Qualitative Spaces**: 8 with 2-7 levels each supporting order-aware comparisons
-- **Condition Operators**: 6 (equals, not_equals, lt, lte, gt, gte) 
-- **Constraint Types**: 1 (dependency constraints using structured conditions)
-- **CLI Commands**: 3 (validate, show, apply) with unified syntax
+Loaders rely on dedicated Pydantic specs (`ActionFileSpec`, `ObjectFileSpec`, `QualitativeSpaceFileSpec`). Validation failures raise `LoaderError`, which attaches the source path and concise error snippets for CLI display.
 
-## 💡 Key Features
+---
 
-### **Capability Detection**
-Objects automatically get capabilities based on their structure:
-- `flashlight`: switchable, illuminating, battery_powered
-- `kettle`: switchable, heatable, water_container  
-- `bottle`: fillable
+## Knowledge Base Schema
 
-### **Smart Action Resolution**
-The system finds compatible actions automatically:
-- `turn_on` works on flashlight, kettle (both have "switchable")
-- `replace_battery` only works on battery_powered objects
-- `pour_water` only works on water_container objects
+- **Spaces (`kb/spaces/`)** – define ordered qualitative levels (e.g., `binary_state`, `battery_level`).
+- **Objects (`kb/objects/`)** – declare parts, attributes, defaults, mutability, constraints, and optional behaviour overrides.
+- **Actions (`kb/actions/`)** – encode parameters, preconditions, and composable effects for both generic and object-specific actions.
 
-### **Unified Constraint Language**
-Business rules use the same structured conditions as actions:
-- Flashlight constraint: "If bulb.state equals on, then battery.level not_equals empty"
-- Structured format enables complex logical composition (and, or, not, implication)
-- Actions that would violate constraints are caught and reported with clear messages
+Conditions share a unified dictionary format supporting logical operators (`and`, `or`, `not`, `implication`) and comparative operators (`equals`, `not_equals`, `lt`, `lte`, `gt`, `gte`). Effects include attribute setters, trend setters, and nested conditional branches.
 
-## 📚 Documentation
+---
 
-- **[Complete Usage Guide](usage_instructions.md)**: Comprehensive guide with unified YAML language, interactive examples, live demos, structured conditions, CLI usage, and programmatic API. Works as both reference documentation and presentation material.
+## CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `sim validate [objs] [--acts] [--verbose-load]` | Load spaces, objects, and actions; run registry validation and report issues with file-aware messaging. |
+| `sim show object NAME [--full] [--verbose-load]` | Inspect object definitions, behaviours, and derived defaults. |
+| `sim show behaviors NAME` | List behaviour overrides bound to an object. |
+| `sim apply OBJECT ACTION [--param key=value] [--verbose-load]` | Instantiate the default object, resolve unknowns, apply an action, and print the resulting diff. |
+| `sim simulate OBJECT ACTION... [--save PATH] [--verbose-load] [--verbose-run]` | Execute action sequences, capture typed histories, and persist them. |
+| `sim history FILE [--step N] [--action NAME] [--states]` | Explore saved simulation histories interactively. |
+
+Use `--verbose-load` whenever you need the full validation trace for malformed YAML; otherwise, loader errors remain short and user friendly.
+
+---
+
+## Execution Flow
+
+1. **Load** – YAML files are parsed into spec models (`ActionFileSpec`, `ObjectFileSpec`, `QualitativeSpaceFileSpec`).
+2. **Build** – Specs construct runtime objects with precompiled constraints and behaviours.
+3. **Register** – `RegistryManager` ensures uniqueness and exposes lookup helpers for the engine.
+4. **Validate** – `RegistryValidator` traverses action/behaviour/constraint trees, checking attribute targets, mutability, and parameter references.
+5. **Execute** – `TransitionEngine` applies actions, emitting `TransitionResult` and `DiffEntry` records for downstream consumers.
+
+---
+
+## Development Notes
+
+- Install tooling with `uv sync`; run tests via `PYTHONPATH=src pytest`.
+- Knowledge base additions under `kb/` are validated automatically—use `--verbose-load` while authoring.
+- Simulations emit typed histories and can be fed directly into `StoryGenerator` or other analytics pipelines.
+- Constraint and behaviour checks run during validation, catching immutable writes or unknown targets before runtime.
+
+---
+
+## Change Log Highlights
+
+- CLI gained `--verbose-load` and `--verbose-run` options for detailed loader traces and simulation logging.
+- Core modules now emit logs via Python’s logging framework instead of unguarded prints.
+- Simulation and narration utilities operate on typed snapshot models, deprecating the previous ad-hoc helpers.
+
+World Simulator keeps the codebase lean: strong schemas, explicit registries, and a clear runtime pipeline so you can expand the knowledge base or integrate new evaluators with confidence.

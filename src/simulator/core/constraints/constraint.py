@@ -4,10 +4,11 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any
 from pydantic import BaseModel
-from simulator.core.objects import AttributeTarget, ObjectInstance
+from simulator.core.objects import ObjectInstance
 from simulator.core.actions.conditions.base import Condition
 from simulator.core.engine.context import EvaluationContext
 from simulator.core.engine.condition_evaluator import ConditionEvaluator
+from simulator.core.actions.specs import build_condition_from_raw
 
 
 class Constraint(BaseModel, ABC):
@@ -93,8 +94,8 @@ class ConstraintEngine:
         # Convert nested condition dicts to Condition instances
         data = dict(constraint_data)
         if constraint_type == "dependency":
-            data["condition"] = self._parse_condition(data.get("condition"))
-            data["requires"] = self._parse_condition(data.get("requires"))
+            data["condition"] = build_condition_from_raw(data.get("condition"))
+            data["requires"] = build_condition_from_raw(data.get("requires"))
         factory = self.constraint_factories[constraint_type]
         return factory(**data)
     
@@ -120,35 +121,3 @@ class ConstraintEngine:
                 violations.append(violation)
         
         return violations
-
-    def _parse_condition(self, data: Any) -> Condition:
-        if isinstance(data, Condition):
-            return data
-        if not isinstance(data, dict):
-            raise ValueError("Constraint condition must be a mapping")
-        ctype = data.get("type")
-        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-        from simulator.core.objects import AttributeTarget
-        # attribute_check
-        if ctype == "attribute_check":
-            target = AttributeTarget.from_string(str(data["target"]))
-            op = str(data.get("operator")).strip()
-            val = data.get("value")
-            # normalize booleans to on/off
-            if isinstance(val, bool):
-                val = "on" if val else "off"
-            else:
-                val = str(val)
-            return AttributeCondition(target=target, operator=op, value=val)  # type: ignore
-        # logical
-        if ctype in ("and", "or", "not"):
-            conds = data.get("conditions", []) or []
-            return LogicalCondition(operator=ctype, conditions=[self._parse_condition(c) for c in conds])
-        # implication
-        if ctype == "implication":
-            return ImplicationCondition(
-                if_condition=self._parse_condition(data["if"]),
-                then_condition=self._parse_condition(data["then"])
-            )
-        raise ValueError(f"Unknown condition type in constraint: {ctype}")

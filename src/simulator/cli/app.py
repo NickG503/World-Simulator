@@ -1,150 +1,150 @@
 from __future__ import annotations
-from pathlib import Path
+
+import logging
+from typing import Dict, Iterable
+
 import typer
 from rich.console import Console
 from rich.table import Table
+
+from simulator.cli.formatters import (
+    format_constraint,
+    build_object_definition_table,
+    build_changes_table,
+)
+from simulator.cli.load_helpers import load_or_exit
+from simulator.cli.paths import (
+    kb_actions_path,
+    kb_objects_path,
+    kb_spaces_path,
+    default_history_path,
+    default_story_path,
+)
+from simulator.cli.services import apply_action, run_simulation
+from simulator.core.engine.transition_engine import TransitionResult
+from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries import RegistryManager
 from simulator.core.registries.validators import RegistryValidator
-from simulator.io.loaders.yaml_loader import load_spaces
-from simulator.io.loaders.object_loader import load_object_types, instantiate_default
 from simulator.io.loaders.action_loader import load_actions
-from simulator.core.engine import TransitionEngine
-from simulator.core.prompt import UnknownValueResolver
+from simulator.io.loaders.object_loader import load_object_types, instantiate_default
+from simulator.io.loaders.yaml_loader import load_spaces
 
-app = typer.Typer(help="""Simulator CLI: validate/inspect (Phase 1) + apply actions (Phase 2).""")
+
+app = typer.Typer(help="Simulator CLI: validate knowledge base, inspect objects, and run actions.")
 console = Console()
 
 
-def _kb_spaces_path(path: str | None) -> str:
-    return path or str(Path.cwd() / "kb" / "spaces")
-
-def _kb_obj_path(path: str | None) -> str:
-    return path or str(Path.cwd() / "kb" / "objects")
-
-def _kb_act_path(path: str | None) -> str:
-    return path or str(Path.cwd() / "kb" / "actions")
-
-
-def _outputs_dir() -> Path:
-    """Get the outputs directory path."""
-    return Path.cwd() / "outputs"
-
-def _histories_dir() -> Path:
-    """Get the histories directory path."""
-    return _outputs_dir() / "histories"
-
-def _stories_dir() -> Path:
-    """Get the stories directory path."""
-    return _outputs_dir() / "stories"
-
-def _ensure_output_dirs() -> None:
-    """Ensure output directories exist."""
-    _histories_dir().mkdir(parents=True, exist_ok=True)
-    _stories_dir().mkdir(parents=True, exist_ok=True)
-
-def _default_history_path(simulation_id: str, object_type: str) -> str:
-    """Generate default path for history file."""
-    _ensure_output_dirs()
-    filename = f"{object_type}_{simulation_id}.yaml"
-    return str(_histories_dir() / filename)
-
-def _default_story_path(simulation_id: str, object_type: str) -> str:
-    """Generate default path for story file."""
-    _ensure_output_dirs()
-    filename = f"{object_type}_{simulation_id}_story.txt"
-    return str(_stories_dir() / filename)
+def _load_registries(
+    objs: str | None,
+    acts: str | None,
+    *,
+    verbose_load: bool = False,
+) -> RegistryManager:
+    rm = RegistryManager()
+    load_or_exit(load_spaces, kb_spaces_path(None), rm, console=console, verbose_errors=verbose_load)
+    rm.register_defaults()
+    load_or_exit(load_object_types, kb_objects_path(objs), rm, console=console, verbose_errors=verbose_load)
+    load_or_exit(load_actions, kb_actions_path(acts), rm, console=console, verbose_errors=verbose_load)
+    return rm
 
 
-def _format_constraint_description(constraint) -> str:
-    """Convert a constraint object to human-readable description."""
-    if constraint.type == "dependency":
-        condition_desc = _format_condition_description(constraint.condition)
-        requires_desc = _format_condition_description(constraint.requires)
-        return f"If {condition_desc}, then {requires_desc}"
-    else:
-        return f"{constraint.type} constraint"
+def _render_constraints(obj) -> None:
+    if not obj.constraints:
+        return
+    console.print(f"\n[bold]Constraints ({len(obj.constraints)}):[/bold]")
+    for idx, constraint in enumerate(obj.constraints, start=1):
+        console.print(f"  {idx}. {format_constraint(constraint)}")
 
 
-def _format_condition_description(condition) -> str:
-    """Convert a condition dict/object to human-readable description."""
-    # Handle both dict and object formats
-    if hasattr(condition, 'type'):
-        ctype = condition.type
-        target = getattr(condition, 'target', None)
-        operator = getattr(condition, 'operator', None)
-        value = getattr(condition, 'value', None)
-        conditions = getattr(condition, 'conditions', None)
-    else:
-        ctype = condition.get('type')
-        target = condition.get('target')
-        operator = condition.get('operator')
-        value = condition.get('value')
-        conditions = condition.get('conditions')
-    
-    if ctype == "attribute_check":
-        # Convert operators to readable format
-        op_map = {
-            "equals": "==",
-            "not_equals": "!=", 
-            "lt": "<",
-            "lte": "<=",
-            "gt": ">",
-            "gte": ">="
-        }
-        op_symbol = op_map.get(operator, operator)
-        
-        return f"{target} {op_symbol} {value}"
-    elif ctype == "and":
-        sub_conditions = [_format_condition_description(c) for c in (conditions or [])]
-        return f"({' AND '.join(sub_conditions)})"
-    elif ctype == "or":
-        sub_conditions = [_format_condition_description(c) for c in (conditions or [])]
-        return f"({' OR '.join(sub_conditions)})"
-    elif ctype == "not":
-        sub_condition = _format_condition_description((conditions or [None])[0]) if conditions else "<missing>"
-        return f"NOT ({sub_condition})"
-    else:
-        return f"{ctype} condition"
+def _render_changes(result: TransitionResult) -> None:
+    if result.changes:
+        console.print(build_changes_table(result))
+    elif result.status == "ok":
+        console.print("\n[dim]No changes made[/dim]")
 
+
+def _render_instance_state(title: str, instance: ObjectInstance) -> None:
+    table = Table(title=title)
+    table.add_column("Attribute")
+    table.add_column("Value")
+    table.add_column("Trend")
+
+    for part_name, part in instance.parts.items():
+        for attr_name, attr in part.attributes.items():
+            table.add_row(
+                f"{part_name}.{attr_name}",
+                str(attr.current_value),
+                str(attr.trend or "none"),
+            )
+
+    for attr_name, attr in instance.global_attributes.items():
+        table.add_row(
+            attr_name,
+            str(attr.current_value),
+            str(attr.trend or "none"),
+        )
+
+    console.print(table)
+
+
+def _render_snapshot(title: str, snapshot) -> None:
+    table = Table(title=title)
+    table.add_column("Attribute")
+    table.add_column("Value")
+    table.add_column("Trend")
+
+    for part_name, part in snapshot.parts.items():
+        for attr_name, attr in part.attributes.items():
+            table.add_row(
+                f"{part_name}.{attr_name}",
+                str(attr.value),
+                str(attr.trend or "none"),
+            )
+
+    for attr_name, attr in snapshot.global_attributes.items():
+        table.add_row(
+            attr_name,
+            str(attr.value),
+            str(attr.trend or "none"),
+        )
+
+    console.print(table)
 
 
 @app.command()
 def validate(
     objs: str | None = typer.Argument(None, help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, help="Path to kb/actions folder"),
+    verbose: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
 ) -> None:
-    rm = RegistryManager()
-    load_spaces(_kb_spaces_path(None), rm)
-    rm.register_defaults()
-    load_object_types(_kb_obj_path(objs), rm)
-    load_actions(_kb_act_path(acts or None), rm)
+    rm = _load_registries(objs, acts, verbose_load=verbose)
 
     console.print(f"[green]OK[/green] Loaded {len(list(rm.objects.all()))} object type(s)")
     console.print(f"[green]OK[/green] Loaded {len(rm.actions.items)} action(s)")
 
-    # Run registry validation
-    validator = RegistryValidator(rm)
-    errors = validator.validate_all()
+    errors = RegistryValidator(rm).validate_all()
     if errors:
         console.print("[red]Validation errors detected:[/red]")
-        for e in errors:
-            console.print(f" - {e}")
+        for error in errors:
+            console.print(f" - {error}")
         raise typer.Exit(code=1)
+
     console.print("[green]All validations passed[/green]")
 
 
 @app.command("show")
 def show_object(
-    what: str = typer.Argument(..., help="What to show: 'object', 'behaviors'"),
+    what: str = typer.Argument(..., help="What to show: 'object' or 'behaviors'"),
     name: str = typer.Argument(..., help="Object type name"),
     path: str | None = typer.Option(None, help="Path to kb/objects folder"),
-    full: bool = typer.Option(False, "--full", help="Show full details (default: summary only)"),
+    full: bool = typer.Option(False, "--full", help="Render full details"),
+    verbose: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
 ) -> None:
     rm = RegistryManager()
-    load_spaces(_kb_spaces_path(None), rm)
+    load_or_exit(load_spaces, kb_spaces_path(None), rm, console=console, verbose_errors=verbose)
     rm.register_defaults()
-    load_object_types(_kb_obj_path(path), rm)
-    
+    load_or_exit(load_object_types, kb_objects_path(path), rm, console=console, verbose_errors=verbose)
+
     try:
         obj = rm.objects.get(name)
     except KeyError:
@@ -152,84 +152,20 @@ def show_object(
         raise typer.Exit(code=2)
 
     if what == "behaviors":
-        behaviors = list(obj.behaviors.keys())
-        if full:
-            console.print(f"\n[bold]Behaviors for {name}:[/bold]")
-            if behaviors:
-                for behavior in sorted(behaviors):
-                    console.print(f"  ✓ {behavior}")
-            else:
-                console.print("  [dim]No behaviors defined[/dim]")
+        behaviours = sorted(obj.behaviors.keys())
+        console.print(f"\n[bold]Behaviors for {name}:[/bold]")
+        if behaviours:
+            for behaviour in behaviours:
+                console.print(f"  ✓ {behaviour}")
         else:
-            # Clean behaviors output
-            console.print(f"[bold]{name} behaviors:[/bold] {', '.join(sorted(behaviors)) if behaviors else 'none'}")
+            console.print("  [dim]No behaviors defined[/dim]")
         return
-    elif what != "object":
+
+    if what != "object":
         console.print("[red]Supported options[/red]: 'object', 'behaviors'")
         raise typer.Exit(code=2)
 
-    # Clean object type definition by default
-    if not full:
-        console.print(f"[bold]{obj.name}[/bold] (Object Type)")
-        
-        # Count attributes by part
-        attr_count = 0
-        for part_name, part in obj.parts.items():
-            attr_count += len(part.attributes)
-        attr_count += len(obj.global_attributes)
-        
-        console.print(f"Parts: {len(obj.parts)}, Attributes: {attr_count}, Constraints: {len(obj.constraints)}")
-        
-        # Show pure object type definition (no instance data)
-        table = Table(title="Definition", show_header=True, header_style="bold blue")
-        table.add_column("Attribute", style="cyan")
-        table.add_column("Default", style="green")
-        table.add_column("Mutable", style="dim")
-        
-        # Show part attributes
-        for part_name, part_spec in obj.parts.items():
-            for attr_name, attr_spec in part_spec.attributes.items():
-                full_name = f"{part_name}.{attr_name}"
-                mutable_icon = "✓" if attr_spec.mutable else "✗"
-                
-                # Get default value from spec or space
-                default_val = attr_spec.default_value
-                if default_val is None:
-                    space = rm.spaces.get(attr_spec.space_id)
-                    default_val = space.levels[0]
-                
-                table.add_row(
-                    full_name, 
-                    str(default_val), 
-                    mutable_icon
-                )
-        
-        # Show global attributes
-        for g_name, g_attr_spec in obj.global_attributes.items():
-            mutable_icon = "✓" if g_attr_spec.mutable else "✗"
-            
-            # Get default value from spec or space
-            default_val = g_attr_spec.default_value
-            if default_val is None:
-                space = rm.spaces.get(g_attr_spec.space_id)
-                default_val = space.levels[0]
-            
-            table.add_row(
-                f"global.{g_name}", 
-                str(default_val), 
-                mutable_icon
-            )
-        
-        console.print(table)
-        
-        # Show constraints in human-readable format
-        if obj.constraints:
-            console.print(f"\n[bold]Constraints ({len(obj.constraints)}):[/bold]")
-            for i, constraint in enumerate(obj.constraints, 1):
-                constraint_desc = _format_constraint_description(constraint)
-                console.print(f"  {i}. {constraint_desc}")
-    else:
-        # Full detailed output (original behavior)
+    if full:
         table = Table(title=f"{obj.name} (Full Details)")
         table.add_column("Part")
         table.add_column("Attribute")
@@ -239,14 +175,19 @@ def show_object(
         for part_name, part in obj.parts.items():
             for attr_name, attr in part.attributes.items():
                 table.add_row(part_name, attr_name, attr.space_id, str(attr.mutable), str(attr.default_value))
-        for g_name, g_attr in obj.global_attributes.items():
-            table.add_row("<global>", g_name, g_attr.space_id, str(g_attr.mutable), str(g_attr.default_value))
+        for attr_name, attr in obj.global_attributes.items():
+            table.add_row("<global>", attr_name, attr.space_id, str(attr.mutable), str(attr.default_value))
         console.print(table)
 
-        inst = instantiate_default(obj, rm)
-        state_json = inst.model_dump()
+        instance = instantiate_default(obj, rm)
         console.print("\n[bold]Default instance[/bold]:")
-        console.print_json(data=state_json)
+        console.print_json(data=instance.model_dump())
+    else:
+        console.print(f"[bold]{obj.name}[/bold] (Object Type)")
+        attr_count = sum(len(part.attributes) for part in obj.parts.values()) + len(obj.global_attributes)
+        console.print(f"Parts: {len(obj.parts)}, Attributes: {attr_count}, Constraints: {len(obj.constraints)}")
+        console.print(build_object_definition_table(obj, rm))
+        _render_constraints(obj)
 
 
 @app.command()
@@ -254,361 +195,204 @@ def apply(
     object_name: str = typer.Argument(..., help="Object type name"),
     action_name: str = typer.Argument(..., help="Action name"),
     params: list[str] = typer.Option([], "--param", "-p", help="key=value pairs"),
-    full: bool = typer.Option(False, "--full", help="Show full object states (default: summary only)"),
-    no_interactive: bool = typer.Option(False, "--no-interactive", help="Skip interactive prompts for unknown values"),
+    full: bool = typer.Option(False, "--full", help="Show full object states"),
+    no_interactive: bool = typer.Option(False, "--no-interactive", help="Skip prompts for unknown values"),
     objs: str | None = typer.Option(None, help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, help="Path to kb/actions folder"),
+    verbose: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
 ) -> None:
-    rm = RegistryManager()
-    load_spaces(_kb_spaces_path(None), rm)
-    rm.register_defaults()
-    load_object_types(_kb_obj_path(objs), rm)
-    load_actions(_kb_act_path(acts), rm)
+    rm = _load_registries(objs, acts, verbose_load=verbose)
 
-    obj = rm.objects.get(object_name)
-    
-    # Create behavior-enhanced action (merges object behavior with base action)
-    action = rm.create_behavior_enhanced_action(object_name, action_name)
-    
-    if not action:
+    param_map: Dict[str, str] = {}
+    for item in params:
+        if "=" not in item:
+            console.print(f"[red]Bad --param[/red] (expected key=value): {item}")
+            raise typer.Exit(code=2)
+        key, value = item.split("=", 1)
+        param_map[key.strip()] = value.strip()
+
+    obj_type, action, instance, result = apply_action(
+        rm,
+        object_name,
+        action_name,
+        param_map,
+        console,
+        interactive=not no_interactive,
+    )
+
+    if action is None or result is None or instance is None:
         console.print(f"[red]No action found[/red] for {object_name}.{action_name}")
         raise typer.Exit(code=1)
-    
-    # Check if object has custom behavior
-    obj_type = rm.objects.get(object_name)
+
     if action_name in obj_type.behaviors:
         console.print(f"[cyan]Using object-specific behavior for[/cyan] {object_name}.{action_name}")
     else:
         console.print(f"[yellow]Using generic behavior for[/yellow] {object_name}.{action_name}")
 
-    p: dict[str, str] = {}
-    for kv in params:
-        if "=" not in kv:
-            console.print(f"[red]Bad --param[/red] (expected k=v): {kv}")
-            raise typer.Exit(code=2)
-        k, v = kv.split("=", 1)
-        p[k.strip()] = v.strip()
-
-    instance = instantiate_default(obj, rm)
-    
-    # Resolve any unknown attribute values
-    resolver = UnknownValueResolver(rm, console)
-    resolver.resolve_unknowns(instance, interactive=not no_interactive)
-
-    engine = TransitionEngine(rm)
-    result = engine.apply_action(instance, action, p)
-
-    # Show summary by default, full details with --full flag
     if full:
         console.print("\n[bold]Full Result[/bold]:")
         console.print_json(data=result.model_dump())
     else:
-        # Clean summary output
         status_color = "green" if result.status == "ok" else "red" if result.status == "rejected" else "yellow"
         console.print(f"\n[bold]Status:[/bold] [{status_color}]{result.status}[/{status_color}]")
-        
         if result.reason:
             console.print(f"[bold]Reason:[/bold] {result.reason}")
 
-    # Show constraint violations prominently
     if result.violations:
         console.print(f"\n[red bold]⚠️  Constraint Violations ({len(result.violations)}):[/red bold]")
         for violation in result.violations:
-            console.print(f"[red]  • {violation}[/red]")
+            console.print(f"  • {violation}")
 
-    # Show changes diff (always shown as it's the most important info)
-    if result.changes:
-        table = Table(title="Changes")
-        table.add_column("Attribute")
-        table.add_column("Before")
-        table.add_column("After")
-        table.add_column("Kind")
-        for d in result.changes:
-            table.add_row(d.attribute or "", str(d.before), str(d.after), d.kind)
-        console.print(table)
-    elif result.status == "ok":
-        console.print("\n[dim]No changes made[/dim]")
+    _render_changes(result)
+
+    if full and instance is not None:
+        _render_instance_state("Resulting state", instance)
 
 
 @app.command()
 def simulate(
     object_type: str = typer.Argument(..., help="Object type to simulate"),
-    actions: list[str] = typer.Argument(..., help="Actions to run in sequence (e.g., turn_on drain_battery turn_off)"),
-    save_to: str = typer.Option(None, "--save", help="Save simulation history to YAML file"),
-    simulation_id: str = typer.Option(None, "--id", help="Custom simulation ID"),
+    actions: list[str] = typer.Argument(..., help="Actions (name or name:param=value pairs)"),
+    save_to: str | None = typer.Option(None, "--save", help="Save simulation history to this path"),
+    simulation_id: str | None = typer.Option(None, "--id", help="Custom simulation ID"),
     objs: str | None = typer.Option(None, help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, help="Path to kb/actions folder"),
+    verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
+    verbose_run: bool = typer.Option(False, "--verbose-run", help="Print simulation progress"),
 ) -> None:
-    """Run a multi-step simulation on an object."""
-    from simulator.core.simulation_runner import create_simulation_runner
-    
-    # Initialize registry
-    rm = RegistryManager()
-    load_spaces(_kb_spaces_path(None), rm)
-    rm.register_defaults()
-    load_object_types(_kb_obj_path(objs), rm)
-    load_actions(_kb_act_path(acts), rm)
-    
-    # Parse actions (format: "action_name" or "action_name:param1=value1,param2=value2")
-    action_specs = []
+    rm = _load_registries(objs, acts, verbose_load=verbose_load)
+
+    action_specs: list[dict] = []
     for action_str in actions:
         if ":" in action_str:
-            action_name, params_str = action_str.split(":", 1)
-            params = {}
-            for param_pair in params_str.split(","):
-                if "=" in param_pair:
-                    key, value = param_pair.split("=", 1)
+            name, params_str = action_str.split(":", 1)
+            params: Dict[str, str] = {}
+            for pair in params_str.split(","):
+                if "=" in pair:
+                    key, value = pair.split("=", 1)
                     params[key.strip()] = value.strip()
-            action_specs.append({"name": action_name.strip(), "parameters": params})
+            action_specs.append({"name": name.strip(), "parameters": params})
         else:
             action_specs.append({"name": action_str.strip()})
-    
-    # Create and run simulation
-    runner = create_simulation_runner(rm)
-    history = runner.run_simulation(object_type, action_specs, simulation_id)
-    
-    # Save to file (auto-save to organized location or custom path)
-    if save_to:
-        runner.save_history_to_yaml(history, save_to)
-    else:
-        # Auto-save to organized outputs directory
-        default_path = _default_history_path(history.simulation_id, object_type)
-        runner.save_history_to_yaml(history, default_path)
-    
-    # Show summary
-    console.print(f"\n[bold]Simulation Summary[/bold]")
+
+    if verbose_run:
+        logging.basicConfig(level=logging.INFO, format="%(message)s")
+
+    history, runner = run_simulation(rm, object_type, action_specs, simulation_id, verbose=verbose_run)
+
+    target_path = save_to or default_history_path(history.simulation_id, object_type)
+    runner.save_history_to_yaml(history, target_path)
+
+    console.print("\n[bold]Simulation Summary[/bold]")
     console.print(f"ID: {history.simulation_id}")
     console.print(f"Object: {history.object_type}")
     console.print(f"Duration: {history.started_at} to {history.completed_at}")
-    
+
     successful = len(history.get_successful_steps())
     failed = len(history.get_failed_steps())
-    
-    if successful > 0:
+    if successful:
         console.print(f"✅ Successful actions: {successful}")
-    if failed > 0:
+    if failed:
         console.print(f"❌ Failed actions: {failed}")
 
 
 @app.command()
 def history(
     file_path: str = typer.Argument(..., help="Path to simulation history YAML file"),
-    step: int = typer.Option(None, "--step", help="Show state at specific step (0-based)"),
-    action: str = typer.Option(None, "--action", help="Find steps that executed this action"),
-    show_states: bool = typer.Option(False, "--states", help="Show object states"),
+    step: int | None = typer.Option(None, "--step", help="Show state at a specific step"),
+    action: str | None = typer.Option(None, "--action", help="Filter by action name"),
+    show_states: bool = typer.Option(False, "--states", help="Display initial and final states"),
 ) -> None:
-    """Query simulation history from saved YAML file."""
     from simulator.core.simulation_runner import SimulationRunner
-    
-    # Load history
-    rm = RegistryManager()  # Minimal registry for loading
+
+    rm = RegistryManager()
     runner = SimulationRunner(rm)
-    
     try:
-        history = runner.load_history_from_yaml(file_path)
-    except Exception as e:
-        console.print(f"[red]Error loading history file[/red]: {e}")
+        history_obj = runner.load_history_from_yaml(file_path)
+    except Exception as exc:
+        console.print(f"[red]Error loading history file[/red]: {exc}")
         raise typer.Exit(code=1)
-    
-    # Show basic info
-    console.print(f"[bold]Simulation History[/bold]: {history.simulation_id}")
-    console.print(f"Object: {history.object_type}")
-    console.print(f"Total steps: {history.total_steps}")
-    console.print(f"Duration: {history.started_at} to {history.completed_at}")
-    
-    # Handle specific queries
+
+    console.print(f"[bold]Simulation History[/bold]: {history_obj.simulation_id}")
+    console.print(f"Object: {history_obj.object_type}")
+    console.print(f"Total steps: {history_obj.total_steps}")
+    console.print(f"Duration: {history_obj.started_at} to {history_obj.completed_at}")
+
     if step is not None:
-        state = history.get_state_at_step(step)
-        if state:
-            console.print(f"\n[bold]State at step {step}:[/bold]")
-            
-            # Show state in table format
-            table = Table(title=f"Object State After Step {step}")
-            table.add_column("Attribute")
-            table.add_column("Value") 
-            table.add_column("Trend")
-            
-            # Add part attributes
-            for part_name, part_data in state.get("parts", {}).items():
-                for attr_name, attr_data in part_data.items():
-                    table.add_row(
-                        f"{part_name}.{attr_name}",
-                        str(attr_data.get("value", "")),
-                        str(attr_data.get("trend", "none"))
-                    )
-            
-            # Add global attributes
-            for attr_name, attr_data in state.get("global_attributes", {}).items():
-                table.add_row(
-                    attr_name,
-                    str(attr_data.get("value", "")),
-                    str(attr_data.get("trend", "none"))
-                )
-            
-            console.print(table)
-        else:
-            console.print(f"[red]Step {step} not found[/red] (valid range: 0-{len(history.steps)-1})")
+        snapshot = history_obj.get_state_at_step(step)
+        if snapshot is None:
+            console.print(f"[red]Step {step} not found[/red]")
+            raise typer.Exit(code=2)
+        _render_snapshot(f"State after step {step}", snapshot)
         return
-    
+
     if action:
-        steps = history.find_step_by_action(action)
+        steps = history_obj.find_step_by_action(action)
         console.print(f"\n[bold]Steps with action '{action}':[/bold]")
         if steps:
-            for step in steps:
-                status_color = "green" if step.status == "ok" else "red"
-                console.print(f"  Step {step.step_number}: [{status_color}]{step.status}[/{status_color}]")
-                if step.status != "ok":
-                    console.print(f"    Error: {step.error_message}")
+            for step_obj in steps:
+                status_color = "green" if step_obj.status == "ok" else "red"
+                console.print(f"  Step {step_obj.step_number}: [{status_color}]{step_obj.status}[/{status_color}]")
+                if step_obj.status != "ok" and step_obj.error_message:
+                    console.print(f"    Error: {step_obj.error_message}")
         else:
-            console.print(f"  No steps found with action '{action}'")
+            console.print("  [dim]No matching steps[/dim]")
         return
-    
-    # Default: show step summary
-    console.print(f"\n[bold]Step Summary:[/bold]")
-    table = Table()
+
+    table = Table(title="Step Summary")
     table.add_column("Step")
     table.add_column("Action")
     table.add_column("Status")
     table.add_column("Changes")
-    
-    for step in history.steps:
-        status_color = "green" if step.status == "ok" else "red"
+    for step_obj in history_obj.steps:
+        status_color = "green" if step_obj.status == "ok" else "red"
         table.add_row(
-            str(step.step_number),
-            step.action_name,
-            f"[{status_color}]{step.status}[/{status_color}]",
-            str(len(step.changes))
+            str(step_obj.step_number),
+            step_obj.action_name,
+            f"[{status_color}]{step_obj.status}[/{status_color}]",
+            str(len(step_obj.changes)),
         )
-    
     console.print(table)
-    
+
     if show_states:
-        # Show initial and final states in table format
-        def _show_state_table(state_data, title):
-            table = Table(title=title)
-            table.add_column("Attribute")
-            table.add_column("Value") 
-            table.add_column("Trend")
-            
-            for part_name, part_data in state_data.get("parts", {}).items():
-                for attr_name, attr_data in part_data.items():
-                    table.add_row(
-                        f"{part_name}.{attr_name}",
-                        str(attr_data.get("value", "")),
-                        str(attr_data.get("trend", "none"))
-                    )
-            
-            for attr_name, attr_data in state_data.get("global_attributes", {}).items():
-                table.add_row(
-                    attr_name,
-                    str(attr_data.get("value", "")),
-                    str(attr_data.get("trend", "none"))
-                )
-            
-            console.print(table)
-        
-        initial_state = history.get_initial_state()
-        final_state = history.get_final_state()
-        
-        if initial_state:
-            _show_state_table(initial_state, "Initial State")
-        
-        if final_state:
-            _show_state_table(final_state, "Final State")
+        initial = history_obj.get_initial_state()
+        final = history_obj.get_final_state()
+        if initial:
+            _render_snapshot("Initial State", initial)
+        if final:
+            _render_snapshot("Final State", final)
 
 
 @app.command()
 def story(
     history_file: str = typer.Argument(..., help="Path to simulation history YAML file"),
-    output_file: str = typer.Option(None, "--output", "-o", help="Output text file (auto-generated if not provided)"),
+    output_file: str | None = typer.Option(None, "--output", "-o", help="Output text file"),
 ) -> None:
-    """Convert simulation history to natural language story."""
-    from simulator.core.story_generator import create_story_generator
     from simulator.core.simulation_runner import SimulationRunner
-    
-    # Load history
-    rm = RegistryManager()  # Minimal registry for loading
+    from simulator.core.story_generator import create_story_generator
+
+    rm = RegistryManager()
     runner = SimulationRunner(rm)
-    
     try:
-        history = runner.load_history_from_yaml(history_file)
-    except Exception as e:
-        console.print(f"[red]Error loading history file[/red]: {e}")
+        history_obj = runner.load_history_from_yaml(history_file)
+    except Exception as exc:
+        console.print(f"[red]Error loading history file[/red]: {exc}")
         raise typer.Exit(code=1)
-    
-    # Generate story
-    story_generator = create_story_generator()
-    story_text = story_generator.generate_story(history)
-    
-    # Auto-generate output filename if not provided
-    if not output_file:
-        output_file = _default_story_path(history.simulation_id, history.object_type)
-    
-    # Save story
-    story_generator.save_story_to_file(story_text, output_file)
-    
-    # Show preview
-    console.print(f"\nPreview:")
+
+    generator = create_story_generator()
+    story_text = generator.generate_story(history_obj)
+
+    target_path = output_file or default_story_path(history_obj.simulation_id, history_obj.object_type)
+    generator.save_story_to_file(story_text, target_path)
+
+    console.print("\nPreview:")
     console.print("-" * 40)
-    
-    # Show first few lines
-    lines = story_text.split('\n')
-    preview_lines = lines[:15]  # Show first 15 lines
-    for line in preview_lines:
-        if line.startswith("#"):
-            console.print(f"[bold blue]{line}[/bold blue]")
-        elif line.strip():
-            console.print(line)
-        else:
-            console.print("")
-    
-    if len(lines) > 15:
+    for line in story_text.splitlines()[:15]:
+        console.print(line or "")
+    if len(story_text.splitlines()) > 15:
         console.print("[dim]... (see full story in output file)[/dim]")
-    
     console.print("-" * 40)
-    console.print(f"Story saved to: [green]{output_file}[/green]")
+    console.print(f"Story saved to: [green]{target_path}[/green]")
 
 
-"""
-uv run sim show object tv # show this 
-
-uv run sim show behaviors tv # show this
-
-
-uv run sim apply tv turn_on # show this
-uv run sim apply flashlight turn_on # show this
-
-uv run sim apply kettle heat  # should fail because kettle doesn't have heat behavior
-
-
-# Run complete flashlight cycle
-uv run sim simulate flashlight turn_on turn_off --save flashlight_cycle.yaml # show this
-
-# Show step-by-step progression
-uv run sim history flashlight_cycle.yaml # show this
-
-# Show state after turn_on (step 0)
-uv run sim history flashlight_cycle.yaml --step 0 # show this
-
-# Show state after turn_off (step 1) 
-uv run sim history flashlight_cycle.yaml --step 1 # show this
-
-# Compare initial vs final states
-uv run sim history flashlight_cycle.yaml --states # show this
-
-
-########################################################
-# stringing it all together
-########################################################
-uv run sim simulate flashlight turn_on turn_off --save flashlight_perfect.yaml # show this
-uv run sim story flashlight_perfect.yaml # show this
-cat flashlight_perfect_story.txt # show this
-
-
-########################################################
-# stringing it all together
-########################################################
-uv run sim simulate flashlight turn_on drain_battery --save flashlight_constraint_fail.yaml
-uv run sim story flashlight_constraint_fail.yaml
-cat flashlight_constraint_fail_story.txt
-"""
+__all__ = ["app"]

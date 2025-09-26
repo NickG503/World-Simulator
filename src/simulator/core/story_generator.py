@@ -6,12 +6,18 @@ what happened to objects during multi-step simulations in intuitive language.
 """
 
 from __future__ import annotations
-from typing import Dict, List, Any, Optional
+from typing import List, Optional
 from datetime import datetime
-from pathlib import Path
 import re
+import logging
+from pathlib import Path
 
-from .simulation_runner import SimulationHistory, SimulationStep
+from simulator.core.engine.transition_engine import DiffEntry
+from .simulation_runner import (
+    SimulationHistory,
+    SimulationStep,
+    ObjectStateSnapshot,
+)
 
 
 class ObjectLanguageTemplate:
@@ -20,17 +26,14 @@ class ObjectLanguageTemplate:
     def __init__(self, object_type: str):
         self.object_type = object_type
     
-    def describe_initial_state(self, state: Dict[str, Any]) -> str:
+    def describe_initial_state(self, state: ObjectStateSnapshot) -> str:
         """Describe the object's starting state."""
         attributes = []
-        if "parts" in state:
-            for part_name, part_data in state["parts"].items():
-                if isinstance(part_data, dict):
-                    for attr_name, attr_data in part_data.items():
-                        if isinstance(attr_data, dict) and "value" in attr_data:
-                            value = attr_data["value"]
-                            attributes.append(f"{part_name} {attr_name} is {value}")
-        
+        for part_name, part_data in state.parts.items():
+            for attr_name, attr_data in part_data.attributes.items():
+                value = attr_data.value
+                attributes.append(f"{part_name} {attr_name} is {value}")
+
         if attributes:
             return f"the {self.object_type} has " + ", ".join(attributes)
         else:
@@ -47,12 +50,8 @@ class ObjectLanguageTemplate:
         
         changes_text = []
         for change in step.changes:
-            attribute = change.get("attribute", "")
-            before = change.get("before", "")
-            after = change.get("after", "")
-            clean_attribute = attribute.replace(".", " ")
-            changes_text.append(f"{clean_attribute} changed from {before} to {after}")
-        
+            changes_text.append(self._describe_change(change))
+
         return f"The {step.action_name} action succeeded. " + ". ".join(changes_text)
     
     def describe_action_failure(self, step: SimulationStep) -> str:
@@ -60,28 +59,25 @@ class ObjectLanguageTemplate:
         reason = step.error_message or "unknown reason"
         return f"the {step.action_name} action failed: {reason}"
     
-    def describe_final_state(self, initial_state: Dict[str, Any], final_state: Dict[str, Any]) -> str:
+    def describe_final_state(self, initial_state: ObjectStateSnapshot, final_state: ObjectStateSnapshot) -> str:
         """Describe how the object ended up."""
         attributes = []
-        if "parts" in final_state:
-            for part_name, part_data in final_state["parts"].items():
-                if isinstance(part_data, dict):
-                    for attr_name, attr_data in part_data.items():
-                        if isinstance(attr_data, dict) and "value" in attr_data:
-                            value = attr_data["value"]
-                            attributes.append(f"{part_name} {attr_name} is {value}")
-        
+        for part_name, part_data in final_state.parts.items():
+            for attr_name, attr_data in part_data.attributes.items():
+                value = attr_data.value
+                attributes.append(f"{part_name} {attr_name} is {value}")
+
         if attributes:
             return f"In the end, the {self.object_type} has " + ", ".join(attributes)
         else:
             return f"In the end, the {self.object_type} has no visible attributes"
-    
-    def _describe_change(self, change: Dict[str, Any]) -> str:
+
+    def _describe_change(self, change: DiffEntry) -> str:
         """Convert a single change to natural language."""
-        attribute = change.get("attribute", "")
-        before = change.get("before", "")
-        after = change.get("after", "")
-        kind = change.get("kind", "value")
+        attribute = change.attribute or ""
+        before = change.before or ""
+        after = change.after or ""
+        kind = change.kind
         
         # Clean up attribute name
         clean_attr = attribute.replace(".", " ").replace("_", " ")
@@ -212,7 +208,7 @@ class StoryGenerator:
         
         with open(file_path, 'w') as f:
             f.write(story)
-        print(f"Saved story to: {file_path}")
+        logging.getLogger(__name__).info("Saved story to: %s", file_path)
 
 
 def create_story_generator() -> StoryGenerator:

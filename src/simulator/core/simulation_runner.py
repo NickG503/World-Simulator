@@ -9,21 +9,42 @@ This module provides functionality to:
 """
 
 from __future__ import annotations
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Optional, Union
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
 import yaml
 
 from simulator.core.objects.object_instance import ObjectInstance
-from simulator.core.engine.transition_engine import TransitionEngine
+from simulator.core.engine.transition_engine import TransitionEngine, DiffEntry
+import logging
 from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.prompt import UnknownValueResolver
+
+
+class AttributeSnapshot(BaseModel):
+    value: Optional[str]
+    trend: Optional[str]
+    confidence: float
+
+
+class PartStateSnapshot(BaseModel):
+    attributes: Dict[str, AttributeSnapshot] = Field(default_factory=dict)
+
+
+class ObjectStateSnapshot(BaseModel):
+    type: str
+    parts: Dict[str, PartStateSnapshot] = Field(default_factory=dict)
+    global_attributes: Dict[str, AttributeSnapshot] = Field(default_factory=dict)
+
+
+class ActionRequest(BaseModel):
+    name: str
+    parameters: Dict[str, str] = Field(default_factory=dict)
 
 
 class SimulationStep(BaseModel):
     """Represents a single step in the simulation."""
-    
+
     step_number: int
     action_name: str
     object_name: str
@@ -31,9 +52,9 @@ class SimulationStep(BaseModel):
     timestamp: str
     status: str  # "ok", "rejected", "error"
     error_message: Optional[str] = None
-    object_state_before: Dict[str, Any]
-    object_state_after: Dict[str, Any]
-    changes: List[Dict[str, Any]] = Field(default_factory=list)
+    object_state_before: ObjectStateSnapshot
+    object_state_after: ObjectStateSnapshot
+    changes: List[DiffEntry] = Field(default_factory=list)
 
 
 class SimulationHistory(BaseModel):
@@ -47,19 +68,19 @@ class SimulationHistory(BaseModel):
     total_steps: int = 0
     steps: List[SimulationStep] = Field(default_factory=list)
     
-    def get_state_at_step(self, step_number: int) -> Optional[Dict[str, Any]]:
+    def get_state_at_step(self, step_number: int) -> Optional[ObjectStateSnapshot]:
         """Get object state after a specific step (0-based)."""
         if step_number < 0 or step_number >= len(self.steps):
             return None
         return self.steps[step_number].object_state_after
-    
-    def get_initial_state(self) -> Optional[Dict[str, Any]]:
+
+    def get_initial_state(self) -> Optional[ObjectStateSnapshot]:
         """Get the initial object state (before any actions)."""
         if not self.steps:
             return None
         return self.steps[0].object_state_before
-    
-    def get_final_state(self) -> Optional[Dict[str, Any]]:
+
+    def get_final_state(self) -> Optional[ObjectStateSnapshot]:
         """Get the final object state (after all actions)."""
         if not self.steps:
             return None
@@ -88,9 +109,10 @@ class SimulationRunner:
     def run_simulation(
         self, 
         object_type: str,
-        actions: List[Dict[str, Any]],
+        actions: List[Union[ActionRequest, Dict[str, str], Dict[str, Dict[str, str]]]],
         simulation_id: Optional[str] = None,
-        resolve_unknowns: bool = True
+        resolve_unknowns: bool = True,
+        verbose: bool = False,
     ) -> SimulationHistory:
         """
         Run a simulation with multiple actions.
@@ -128,16 +150,23 @@ class SimulationRunner:
             total_steps=len(actions)
         )
         
-        print(f"🎬 Starting simulation '{simulation_id}' with {len(actions)} actions")
-        print(f"📦 Object: {object_type}")
+        logger = logging.getLogger(__name__)
+        if verbose:
+            logger.info("Starting simulation '%s' with %d actions", simulation_id, len(actions))
+            logger.info("Object: %s", object_type)
         
         current_instance = obj_instance
-        
-        for step_num, action_spec in enumerate(actions):
-            action_name = action_spec["name"]
-            parameters = action_spec.get("parameters", {})
+        action_requests = [
+            action if isinstance(action, ActionRequest) else ActionRequest.model_validate(action)
+            for action in actions
+        ]
+
+        for step_num, request in enumerate(action_requests):
+            action_name = request.name
+            parameters = request.parameters
             
-            print(f"\n🎯 Step {step_num + 1}: {action_name}")
+            if verbose:
+                logger.info("Step %d: %s", step_num + 1, action_name)
             
             # Capture state before action
             state_before = self._capture_object_state(current_instance)
@@ -156,11 +185,12 @@ class SimulationRunner:
                     status="error",
                     error_message=f"Action '{action_name}' not found for {object_type}",
                     object_state_before=state_before,
-                    object_state_after=state_before,  # No change
-                    changes=[]
+                    object_state_after=state_before,
+                    changes=[],
                 )
                 history.steps.append(step)
-                print(f"   ❌ Error: Action not found")
+                if verbose:
+                    logger.warning("Action '%s' not found for object '%s'", action_name, object_type)
                 continue
             
             # Execute action
@@ -180,7 +210,7 @@ class SimulationRunner:
                 error_message=result.reason if result.status != "ok" else None,
                 object_state_before=state_before,
                 object_state_after=state_after,
-                changes=[change.model_dump() for change in result.changes] if result.changes else []
+                changes=result.changes,
             )
             
             history.steps.append(step)
@@ -189,54 +219,52 @@ class SimulationRunner:
             if result.after:
                 current_instance = result.after
             
-            # Print step result
-            if result.status == "ok":
-                print(f"   ✅ Success: {len(result.changes)} changes")
-                for change in result.changes[:3]:  # Show first 3 changes
-                    print(f"      • {change.attribute}: {change.before} → {change.after}")
-                if len(result.changes) > 3:
-                    print(f"      ... and {len(result.changes) - 3} more")
-            else:
-                print(f"   ❌ Failed: {result.reason}")
-        
+            if verbose:
+                if result.status == "ok":
+                    logger.info("Success: %d change(s)", len(result.changes))
+                    for change in result.changes[:3]:
+                        logger.info("  • %s: %s → %s", change.attribute, change.before, change.after)
+                    if len(result.changes) > 3:
+                        logger.info("  ... and %d more", len(result.changes) - 3)
+                else:
+                    logger.warning("Action failed: %s", result.reason)
+
         # Complete simulation
         history.completed_at = datetime.now().isoformat()
         
         successful_steps = len(history.get_successful_steps())
-        print(f"\n🏁 Simulation complete!")
-        print(f"   ✅ Successful: {successful_steps}/{len(actions)} actions")
-        print(f"   ❌ Failed: {len(actions) - successful_steps}/{len(actions)} actions")
+        if verbose:
+            logger.info("Simulation complete: %d successful, %d failed", successful_steps, len(actions) - successful_steps)
         
         return history
     
-    def _capture_object_state(self, obj_instance: ObjectInstance) -> Dict[str, Any]:
+    def _capture_object_state(self, obj_instance: ObjectInstance) -> ObjectStateSnapshot:
         """Capture the complete state of an object instance."""
-        state = {
-            "type": obj_instance.type.name,
-            "parts": {},
-            "global_attributes": {}
-        }
-        
-        # Capture part attributes
+
+        parts: Dict[str, PartStateSnapshot] = {}
         for part_name, part_instance in obj_instance.parts.items():
-            part_state = {}
+            attrs: Dict[str, AttributeSnapshot] = {}
             for attr_name, attr_instance in part_instance.attributes.items():
-                part_state[attr_name] = {
-                    "value": attr_instance.current_value,
-                    "trend": attr_instance.trend,
-                    "confidence": attr_instance.confidence
-                }
-            state["parts"][part_name] = part_state
-        
-        # Capture global attributes
+                attrs[attr_name] = AttributeSnapshot(
+                    value=attr_instance.current_value,
+                    trend=attr_instance.trend,
+                    confidence=attr_instance.confidence,
+                )
+            parts[part_name] = PartStateSnapshot(attributes=attrs)
+
+        global_attrs: Dict[str, AttributeSnapshot] = {}
         for attr_name, attr_instance in obj_instance.global_attributes.items():
-            state["global_attributes"][attr_name] = {
-                "value": attr_instance.current_value,
-                "trend": attr_instance.trend,
-                "confidence": attr_instance.confidence
-            }
-        
-        return state
+            global_attrs[attr_name] = AttributeSnapshot(
+                value=attr_instance.current_value,
+                trend=attr_instance.trend,
+                confidence=attr_instance.confidence,
+            )
+
+        return ObjectStateSnapshot(
+            type=obj_instance.type.name,
+            parts=parts,
+            global_attributes=global_attrs,
+        )
     
     def save_history_to_yaml(self, history: SimulationHistory, file_path: str) -> None:
         """Save simulation history to YAML file."""
@@ -245,7 +273,7 @@ class SimulationRunner:
         
         with open(file_path, 'w') as f:
             yaml.dump(history.model_dump(), f, default_flow_style=False, indent=2)
-        print(f"💾 Saved simulation history to: {file_path}")
+        logging.getLogger(__name__).info("Saved simulation history to %s", file_path)
     
     def load_history_from_yaml(self, file_path: str) -> SimulationHistory:
         """Load simulation history from YAML file."""

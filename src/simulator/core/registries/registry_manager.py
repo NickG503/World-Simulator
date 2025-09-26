@@ -1,8 +1,8 @@
 from __future__ import annotations
-from typing import List, Dict, Any
 from pydantic import BaseModel, Field
 from simulator.core.attributes import QualitativeSpace, QualitativeSpaceRegistry, AttributeRegistry
-from simulator.core.objects.object_type import ObjectType
+from simulator.core.objects.object_type import ObjectType, ObjectBehavior
+from simulator.core.actions.action import Action
 from .registry_base import NameRegistry
 
 
@@ -90,15 +90,13 @@ class RegistryManager(BaseModel):
         
         return base_action
     
-    def _merge_action_with_behavior(self, base_action, behavior):
+    def _merge_action_with_behavior(self, base_action: Action, behavior: ObjectBehavior):
         """Merge object behavior with base action."""
         # Import here to avoid circular imports
         from simulator.core.actions.action import Action
-        from simulator.io.loaders.action_loader import _parse_condition, _parse_effect
-        
-        # Parse behavior conditions and effects
-        behavior_preconditions = [_parse_condition(c) for c in behavior.preconditions]
-        behavior_effects = [_parse_effect(e) for e in behavior.effects]
+        # Behavior preconditions/effects are already parsed at load time
+        behavior_preconditions = behavior.preconditions
+        behavior_effects = behavior.effects
         
         # Create new action combining base + behavior  
         # Priority: behavior preconditions/effects override base ones

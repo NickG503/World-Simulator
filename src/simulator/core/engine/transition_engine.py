@@ -4,8 +4,7 @@ from pydantic import BaseModel, Field
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.objects import ObjectInstance
 from simulator.core.actions.action import Action
-from simulator.core.constraints import ConstraintEngine, ConstraintViolation
-from simulator.core.constraints.constraint import Constraint
+from simulator.core.constraints.constraint import ConstraintEngine, ConstraintViolation, Constraint
 from .condition_evaluator import ConditionEvaluator
 from .effect_applier import EffectApplier
 from .context import EvaluationContext, ApplicationContext
@@ -55,18 +54,19 @@ class TransitionEngine:
             return self._constraint_cache[object_type]
 
         obj_type = self.registries.objects.get(object_type)
+        if obj_type.compiled_constraints:
+            self._constraint_cache[object_type] = obj_type.compiled_constraints
+            return obj_type.compiled_constraints
+
         constraints: List[Constraint] = []
         for constraint_data in obj_type.constraints:
             try:
                 constraints.append(self.constraint_engine.create_constraint(constraint_data.model_dump()))
-            except Exception as e:
-                # Soft-fail: constraints should be validated at load time
-                # Keep going but do not include invalid constraint
-                # This avoids breaking execution due to a single malformed rule
-                # while still surfacing it later if evaluated.
-                # In a fuller implementation we could log this.
+            except Exception as e:  # pragma: no cover - defensive
                 _ = e
                 continue
+        if constraints:
+            obj_type.compiled_constraints.extend(constraints)
         self._constraint_cache[object_type] = constraints
         return constraints
 
@@ -103,7 +103,12 @@ class TransitionEngine:
 
         # Phase 4: Apply effects
         new_instance = instance.deep_copy()
-        app_ctx = ApplicationContext.model_validate(eval_ctx.model_dump())
+        app_ctx = ApplicationContext.model_construct(
+            instance=eval_ctx.instance,
+            action=eval_ctx.action,
+            parameters=dict(eval_ctx.parameters),
+            registries=eval_ctx.registries,
+        )
         changes: List[DiffEntry] = []
 
         for effect in action.effects:
