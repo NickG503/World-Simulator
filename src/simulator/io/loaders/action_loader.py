@@ -126,15 +126,6 @@ def load_actions(path: str, registries: RegistryManager) -> None:
         data = _read_yaml(fp)
         name = str(data["action"]).strip()
         object_type = str(data["object_type"]).strip()
-        
-        # New: capability support
-        required_capabilities = set()
-        if "required_capabilities" in data:
-            cap_list = data["required_capabilities"]
-            if isinstance(cap_list, list):
-                required_capabilities = set(cap_list)
-            elif isinstance(cap_list, str):
-                required_capabilities = {cap_list}
 
         # parameters
         params_raw = data.get("parameters", {}) or {}
@@ -155,18 +146,11 @@ def load_actions(path: str, registries: RegistryManager) -> None:
         action = Action(
             name=name,
             object_type=object_type,
-            required_capabilities=required_capabilities,
             parameters=parameters,
             preconditions=preconditions,
             effects=effects,
         )
         
-        # Register with capability-based key if it's capability-based
-        if required_capabilities:
-            # Capability-based actions get registered as "capability:{name}"
-            key = f"capability:{name}"
-        else:
-            # Traditional object-specific actions
-            key = f"{object_type}/{name}"
-        
+        # Register with object_type/name key
+        key = f"{object_type}/{name}"
         registries.actions.register(key, action)

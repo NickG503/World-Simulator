@@ -5,7 +5,7 @@ from typing import Any, Dict
 import yaml
 from simulator.core.attributes import AttributeSpec, AttributeInstance
 from simulator.core.objects import PartSpec, PartInstance
-from simulator.core.objects.object_type import ObjectType, ObjectConstraint
+from simulator.core.objects.object_type import ObjectType, ObjectConstraint, ObjectBehavior
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
 
@@ -48,7 +48,17 @@ def _spec_from_yaml(obj_name: str, data: Dict[str, Any]) -> ObjectType:
     constraints_raw = data.get("constraints", []) or []
     constraints = [ObjectConstraint(**c) for c in constraints_raw if isinstance(c, dict)]
 
-    return ObjectType(name=name, parts=parts, global_attributes=global_attrs, constraints=constraints)
+    # behaviors (optional)
+    behaviors_raw = data.get("behaviors", {}) or {}
+    behaviors: Dict[str, ObjectBehavior] = {}
+    for behavior_name, behavior_spec in behaviors_raw.items():
+        behavior = ObjectBehavior(
+            preconditions=behavior_spec.get("preconditions", []),
+            effects=behavior_spec.get("effects", [])
+        )
+        behaviors[behavior_name] = behavior
+
+    return ObjectType(name=name, parts=parts, global_attributes=global_attrs, constraints=constraints, behaviors=behaviors)
 
 
 def load_object_types(path: str, registries: RegistryManager) -> None:
@@ -69,24 +79,38 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
         attrs: Dict[str, AttributeInstance] = {}
         for a_name, a_spec in p_spec.attributes.items():
             space = registries.spaces.get(a_spec.space_id)
-            default = a_spec.default_value if a_spec.default_value is not None else space.levels[0]
+            # Handle 'unknown' as a special default value
+            if a_spec.default_value == "unknown":
+                default = "unknown"
+                confidence = 0.0  # Unknown values have no confidence
+            else:
+                default = a_spec.default_value if a_spec.default_value is not None else space.levels[0]
+                confidence = 1.0
+            
             attrs[a_name] = AttributeInstance(
                 spec=a_spec, 
                 current_value=default, 
                 trend="none",
-                confidence=1.0
+                confidence=confidence
             )
         parts[p_name] = PartInstance(spec=p_spec, attributes=attrs)
 
     g_attrs: Dict[str, AttributeInstance] = {}
     for g_name, g_spec in obj_type.global_attributes.items():
         space = registries.spaces.get(g_spec.space_id)
-        default = g_spec.default_value if g_spec.default_value is not None else space.levels[0]
+        # Handle 'unknown' as a special default value
+        if g_spec.default_value == "unknown":
+            default = "unknown"
+            confidence = 0.0  # Unknown values have no confidence
+        else:
+            default = g_spec.default_value if g_spec.default_value is not None else space.levels[0]
+            confidence = 1.0
+            
         g_attrs[g_name] = AttributeInstance(
             spec=g_spec, 
             current_value=default, 
             trend="none",
-            confidence=1.0
+            confidence=confidence
         )
 
     return ObjectInstance(type=obj_type, parts=parts, global_attributes=g_attrs)

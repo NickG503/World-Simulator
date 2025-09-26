@@ -1,0 +1,35 @@
+type: tv
+parts:
+  button:
+    attributes:
+      state:
+        space: binary_state
+        default: 'off'
+        mutable: true
+  screen:
+    attributes:
+      power:
+        space: binary_state
+        default: 'off'
+        mutable: true
+      brightness:
+        space: brightness_level
+        default: none
+
+behaviors:
+  turn_on:
+    preconditions:
+      - type: attribute_check
+        target: button.state
+        operator: equals
+        value: off
+    effects:
+      - type: set_attribute
+        target: button.state
+        value: "on"
+      - type: set_attribute
+        target: screen.power
+        value: "on"
+      - type: set_attribute
+        target: screen.brightness
+        value: medium

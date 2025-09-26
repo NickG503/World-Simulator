@@ -38,3 +38,50 @@ constraints:
     target: battery.level
     operator: not_equals
     value: empty
+
+behaviors:
+  turn_on:
+    preconditions:
+      - type: attribute_check
+        target: switch.position
+        operator: equals
+        value: off
+      - type: attribute_check
+        target: battery.level
+        operator: not_equals
+        value: empty
+    effects:
+      - type: set_attribute
+        target: switch.position
+        value: "on"
+      - type: set_attribute
+        target: bulb.state
+        value: "on"
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: high
+        then:
+          - type: set_attribute
+            target: bulb.brightness
+            value: high
+        else:
+          - type: conditional
+            condition:
+              type: attribute_check
+              target: battery.level
+              operator: equals
+              value: medium
+            then:
+              - type: set_attribute
+                target: bulb.brightness
+                value: medium
+            else:
+              - type: set_attribute
+                target: bulb.brightness
+                value: low
+      - type: set_trend
+        target: battery.level
+        direction: down
