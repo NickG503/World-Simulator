@@ -15,3 +15,11 @@ spaces:
     name: Simple Temperature
     levels: ["cold", "warm", "hot"]
 
+  - id: battery_types
+    name: Battery Types
+    levels: ["AA", "AAA", "9V", "lithium"]
+
+  - id: liquid_amount
+    name: Liquid Amount
+    levels: ["empty", "low", "medium", "high", "full"]
+

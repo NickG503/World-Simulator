@@ -1,0 +1,9 @@
+action: turn_off
+object_type: generic
+description: "Generic turn_off action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []

@@ -1,0 +1,9 @@
+action: heat
+object_type: generic
+description: "Generic heat action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
