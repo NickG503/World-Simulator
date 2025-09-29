@@ -48,11 +48,21 @@ def run_simulation(
     actions: Iterable[dict],
     simulation_id: str | None,
     verbose: bool,
+    *,
+    interactive: bool = False,
+    unknown_paths: list[str] | None = None,
 ):
     from simulator.core.simulation_runner import create_simulation_runner
 
     runner = create_simulation_runner(registries)
-    history = runner.run_simulation(object_type, list(actions), simulation_id, verbose=verbose)
+    history = runner.run_simulation(
+        object_type,
+        list(actions),
+        simulation_id,
+        verbose=verbose,
+        interactive=interactive,
+        unknown_paths=unknown_paths,
+    )
     return history, runner
 
 

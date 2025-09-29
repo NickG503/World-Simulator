@@ -30,6 +30,10 @@ class AttributeCondition(Condition):
         # Read current value
         lhs = context.read_attribute(self.target)
 
+        # Unknown values should not satisfy preconditions; force clarification path.
+        if isinstance(lhs, str) and lhs == "unknown":
+            return False
+
         if self.operator == "equals":
             return lhs == rhs
         elif self.operator == "not_equals":

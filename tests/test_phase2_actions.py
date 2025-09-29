@@ -21,6 +21,8 @@ def test_behavior_turn_on_ok(tmp_path: Path):
     assert action is not None, "Should find turn_on action for flashlight"
 
     inst = instantiate_default(obj, rm)
+    # Ensure known battery level for this test
+    inst.parts["battery"].attributes["level"].current_value = "medium"
     engine = TransitionEngine(rm)
     result = engine.apply_action(inst, action, {})
     assert result.status == "ok"

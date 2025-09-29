@@ -9,7 +9,7 @@ This module provides functionality to:
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, Any
 from datetime import datetime
 from pathlib import Path
 from pydantic import BaseModel, Field
@@ -67,6 +67,9 @@ class SimulationHistory(BaseModel):
     completed_at: Optional[str] = None
     total_steps: int = 0
     steps: List[SimulationStep] = Field(default_factory=list)
+    # Interactive clarification events captured during run
+    # Stored separately from steps for simple presentation
+    interactions: List[Dict[str, Any]] = Field(default_factory=list)
     
     def get_state_at_step(self, step_number: int) -> Optional[ObjectStateSnapshot]:
         """Get object state after a specific step (0-based)."""
@@ -113,6 +116,9 @@ class SimulationRunner:
         simulation_id: Optional[str] = None,
         resolve_unknowns: bool = True,
         verbose: bool = False,
+        *,
+        interactive: bool = False,
+        unknown_paths: Optional[List[str]] = None,
     ) -> SimulationHistory:
         """
         Run a simulation with multiple actions.
@@ -139,7 +145,18 @@ class SimulationRunner:
         # Create object instance
         obj_type = self.registry_manager.objects.get(object_type)
         from simulator.io.loaders.object_loader import instantiate_default
+        from simulator.core.objects.part import AttributeTarget
         obj_instance = instantiate_default(obj_type, self.registry_manager)
+        # Apply unknown injections if requested
+        if unknown_paths:
+            for ref in unknown_paths:
+                try:
+                    ai = AttributeTarget.from_string(ref).resolve(obj_instance)
+                    ai.current_value = "unknown"  # type: ignore
+                    ai.confidence = 0.0
+                except Exception:
+                    # ignore invalid unknown paths
+                    pass
         
         # Initialize simulation history
         history = SimulationHistory(
@@ -161,6 +178,12 @@ class SimulationRunner:
             for action in actions
         ]
 
+        # Lazy import to avoid console hard-dependency
+        from simulator.core.prompt import UnknownValueResolver
+        from rich.console import Console
+        resolver = UnknownValueResolver(self.registry_manager, Console()) if interactive else None
+
+        step_index = 0
         for step_num, request in enumerate(action_requests):
             action_name = request.name
             parameters = request.parameters
@@ -193,15 +216,93 @@ class SimulationRunner:
                     logger.warning("Action '%s' not found for object '%s'", action_name, object_type)
                 continue
             
-            # Execute action
+            # Execute action (with optional interactive clarification loop)
             result = self.engine.apply_action(current_instance, action, parameters)
+            if interactive:
+                # If preconditions failed due to unknowns, ask and retry
+                def _extract_attr_from_question(q: str) -> Optional[str]:
+                    qs = q.strip()
+                    if qs.lower().startswith("what is ") and qs.endswith("?"):
+                        return qs[len("What is "):-1].strip()
+                    return None
+
+                retry_guard = 0
+                while result.status == "rejected" and getattr(result, "clarifications", None) and retry_guard < 5:
+                    retry_guard += 1
+                    asked_any = False
+                    for q in result.clarifications:
+                        attr_ref = _extract_attr_from_question(q)
+                        if not attr_ref:
+                            continue
+                        try:
+                            from simulator.core.objects.part import AttributeTarget as _AT
+                            ai = _AT.from_string(attr_ref).resolve(current_instance)
+                            space = self.registry_manager.spaces.get(ai.spec.space_id)
+                            if resolver is not None:
+                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id)
+                            else:
+                                picked = None
+                            if picked is None:
+                                # user cancelled; stop clarification loop
+                                break
+                            # validate and set
+                            if picked not in space.levels:
+                                continue
+                            ai.current_value = picked
+                            ai.confidence = 1.0
+                            # record interaction for dataset/history
+                            self_log_entry = {
+                                "step": step_index,
+                                "action": action_name,
+                                "attribute": attr_ref,
+                                "question": q,
+                                "answer": picked,
+                                "options": list(space.levels),
+                            }
+                            # Make sure history object exists
+                            # (We can append to history here—it will be saved later)
+                            # history is available in outer scope
+                            # Add now; if step ultimately fails, it still records the asked Q/A
+                            try:
+                                # pylint: disable=protected-access
+                                pass
+                            finally:
+                                history.interactions.append(self_log_entry)
+                            asked_any = True
+                        except Exception:
+                            continue
+                    # Retry if we asked at least one clarification
+                    if asked_any:
+                        result = self.engine.apply_action(current_instance, action, parameters)
+                    else:
+                        break
+
+                # If still failing without clarifications, record and stop the run
+                if result.status != "ok" and not getattr(result, "clarifications", None):
+                    state_after = self._capture_object_state(current_instance)
+                    step = SimulationStep(
+                        step_number=step_index,
+                        action_name=action_name,
+                        object_name=object_type,
+                        parameters=parameters,
+                        timestamp=datetime.now().isoformat(),
+                        status=result.status,
+                        error_message=result.reason if result.status != "ok" else None,
+                        object_state_before=state_before,
+                        object_state_after=state_after,
+                        changes=result.changes,
+                    )
+                    history.steps.append(step)
+                    step_index += 1
+                    history.completed_at = datetime.now().isoformat()
+                    return history
             
             # Capture state after action
             state_after = self._capture_object_state(result.after if result.after else current_instance)
             
             # Create simulation step
             step = SimulationStep(
-                step_number=step_num,
+                step_number=step_index,
                 action_name=action_name,
                 object_name=object_type,
                 parameters=parameters,
@@ -214,6 +315,7 @@ class SimulationRunner:
             )
             
             history.steps.append(step)
+            step_index += 1
             
             # Update current instance for next iteration
             if result.after:
@@ -267,18 +369,112 @@ class SimulationRunner:
         )
     
     def save_history_to_yaml(self, history: SimulationHistory, file_path: str) -> None:
-        """Save simulation history to YAML file."""
+        """Save simulation history to YAML file (compact, readable format)."""
         # Ensure parent directory exists
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
-        
+
+        # Build a compact v2 format to improve readability and avoid redundant fields
+        data: Dict[str, Any] = {
+            "history_version": 2,
+            "simulation_id": history.simulation_id,
+            "object_type": history.object_type,
+            "object_name": history.object_name,
+            "started_at": history.started_at,
+            "completed_at": history.completed_at,
+            "total_steps": history.total_steps,
+            "steps": [],
+        }
+        if history.interactions:
+            data["interactions"] = history.interactions
+
+        for s in history.steps:
+            step_entry: Dict[str, Any] = {
+                "step": s.step_number,
+                "action": s.action_name,
+                "timestamp": s.timestamp,
+                "status": s.status,
+            }
+            if s.error_message:
+                step_entry["error"] = s.error_message
+            if s.changes:
+                step_entry["changes"] = [
+                    {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind}
+                    for c in s.changes
+                ]
+            step_entry["object_state_before"] = s.object_state_before.model_dump()
+            step_entry["object_state_after"] = s.object_state_after.model_dump()
+            data["steps"].append(step_entry)
+
         with open(file_path, 'w') as f:
-            yaml.dump(history.model_dump(), f, default_flow_style=False, indent=2)
+            yaml.dump(data, f, default_flow_style=False, indent=2, sort_keys=False)
         logging.getLogger(__name__).info("Saved simulation history to %s", file_path)
     
     def load_history_from_yaml(self, file_path: str) -> SimulationHistory:
-        """Load simulation history from YAML file."""
+        """Load simulation history from YAML file (supports v1 and compact v2 formats)."""
         with open(file_path, 'r') as f:
             data = yaml.safe_load(f)
+
+        # v2 compact format
+        if isinstance(data, dict) and data.get("history_version") == 2 and "steps" in data:
+            sim_id = data.get("simulation_id", "unknown")
+            obj_type = data.get("object_type", "unknown")
+            obj_name = data.get("object_name", obj_type)
+            started = data.get("started_at")
+            completed = data.get("completed_at")
+            total = data.get("total_steps", len(data.get("steps") or []))
+
+            steps: List[SimulationStep] = []
+            for entry in data.get("steps", []):
+                step_num = entry.get("step") if entry.get("step") is not None else entry.get("step_number", 0)
+                action = entry.get("action") or entry.get("action_name")
+                ts = entry.get("timestamp") or entry.get("time")
+                status = entry.get("status", "ok")
+                error = entry.get("error") or entry.get("error_message")
+                before_raw = entry.get("object_state_before") or {}
+                after_raw = entry.get("object_state_after") or {}
+
+                try:
+                    before = ObjectStateSnapshot.model_validate(before_raw)
+                    after = ObjectStateSnapshot.model_validate(after_raw)
+                except Exception as exc:
+                    raise ValueError(f"Invalid state snapshot in history file: {exc}") from exc
+
+                changes_raw = entry.get("changes", []) or []
+                changes: List[DiffEntry] = []
+                for cr in changes_raw:
+                    try:
+                        changes.append(DiffEntry(**cr))
+                    except Exception:
+                        # ignore malformed change entries
+                        continue
+
+                steps.append(
+                    SimulationStep(
+                        step_number=int(step_num),
+                        action_name=str(action),
+                        object_name=str(obj_name),
+                        parameters={},
+                        timestamp=str(ts),
+                        status=str(status),
+                        error_message=error,
+                        object_state_before=before,
+                        object_state_after=after,
+                        changes=changes,
+                    )
+                )
+
+            return SimulationHistory(
+                simulation_id=str(sim_id),
+                object_type=str(obj_type),
+                object_name=str(obj_name),
+                started_at=str(started),
+                completed_at=str(completed) if completed is not None else None,
+                total_steps=int(total),
+                steps=steps,
+                interactions=list(data.get("interactions") or []),
+            )
+
+        # Fallback to legacy format (pydantic dump)
         return SimulationHistory.model_validate(data)
 
 

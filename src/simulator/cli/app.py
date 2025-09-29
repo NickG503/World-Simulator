@@ -18,7 +18,9 @@ from simulator.cli.paths import (
     kb_objects_path,
     kb_spaces_path,
     default_history_path,
-    default_story_path,
+    default_dataset_path,
+    resolve_history_path,
+    resolve_dataset_path,
 )
 from simulator.cli.services import apply_action, run_simulation
 from simulator.core.engine.transition_engine import TransitionResult
@@ -28,6 +30,8 @@ from simulator.core.registries.validators import RegistryValidator
 from simulator.io.loaders.action_loader import load_actions
 from simulator.io.loaders.object_loader import load_object_types, instantiate_default
 from simulator.io.loaders.yaml_loader import load_spaces
+from simulator.core.objects.part import AttributeTarget
+from simulator.core.dataset.sequential_dataset import build_interactive_dataset_text
 
 
 app = typer.Typer(help="Simulator CLI: validate knowledge base, inspect objects, and run actions.")
@@ -61,6 +65,10 @@ def _render_changes(result: TransitionResult) -> None:
         console.print(build_changes_table(result))
     elif result.status == "ok":
         console.print("\n[dim]No changes made[/dim]")
+    if getattr(result, "clarifications", None):
+        console.print(f"\n[yellow]Clarifications needed ({len(result.clarifications)}):[/yellow]")
+        for q in result.clarifications:
+            console.print(f"  • {q}")
 
 
 def _render_instance_state(title: str, instance: ObjectInstance) -> None:
@@ -137,7 +145,6 @@ def show_object(
     what: str = typer.Argument(..., help="What to show: 'object' or 'behaviors'"),
     name: str = typer.Argument(..., help="Object type name"),
     path: str | None = typer.Option(None, help="Path to kb/objects folder"),
-    full: bool = typer.Option(False, "--full", help="Render full details"),
     verbose: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
 ) -> None:
     rm = RegistryManager()
@@ -165,29 +172,11 @@ def show_object(
         console.print("[red]Supported options[/red]: 'object', 'behaviors'")
         raise typer.Exit(code=2)
 
-    if full:
-        table = Table(title=f"{obj.name} (Full Details)")
-        table.add_column("Part")
-        table.add_column("Attribute")
-        table.add_column("Space id")
-        table.add_column("Mutable")
-        table.add_column("Default")
-        for part_name, part in obj.parts.items():
-            for attr_name, attr in part.attributes.items():
-                table.add_row(part_name, attr_name, attr.space_id, str(attr.mutable), str(attr.default_value))
-        for attr_name, attr in obj.global_attributes.items():
-            table.add_row("<global>", attr_name, attr.space_id, str(attr.mutable), str(attr.default_value))
-        console.print(table)
-
-        instance = instantiate_default(obj, rm)
-        console.print("\n[bold]Default instance[/bold]:")
-        console.print_json(data=instance.model_dump())
-    else:
-        console.print(f"[bold]{obj.name}[/bold] (Object Type)")
-        attr_count = sum(len(part.attributes) for part in obj.parts.values()) + len(obj.global_attributes)
-        console.print(f"Parts: {len(obj.parts)}, Attributes: {attr_count}, Constraints: {len(obj.constraints)}")
-        console.print(build_object_definition_table(obj, rm))
-        _render_constraints(obj)
+    console.print(f"[bold]{obj.name}[/bold] (Object Type)")
+    attr_count = sum(len(part.attributes) for part in obj.parts.values()) + len(obj.global_attributes)
+    console.print(f"Parts: {len(obj.parts)}, Attributes: {attr_count}, Constraints: {len(obj.constraints)}")
+    console.print(build_object_definition_table(obj, rm))
+    _render_constraints(obj)
 
 
 @app.command()
@@ -253,12 +242,14 @@ def apply(
 def simulate(
     object_type: str = typer.Argument(..., help="Object type to simulate"),
     actions: list[str] = typer.Argument(..., help="Actions (name or name:param=value pairs)"),
-    save_to: str | None = typer.Option(None, "--save", help="Save simulation history to this path"),
-    simulation_id: str | None = typer.Option(None, "--id", help="Custom simulation ID"),
+    history_name: str | None = typer.Option(None, "--history-name", help="History filename under outputs/histories (e.g., run1.yaml)"),
+    dataset_name: str | None = typer.Option(None, "--dataset-name", help="Dataset filename under outputs/datasets (e.g., run1.txt)"),
+    simulation_id: str | None = typer.Option(None, "--id", help="Custom simulation ID (used in defaults)"),
     objs: str | None = typer.Option(None, help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, help="Path to kb/actions folder"),
     verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
     verbose_run: bool = typer.Option(False, "--verbose-run", help="Print simulation progress"),
+    save_to: str | None = typer.Option(None, "--save", help="[Deprecated] Use --history-name instead"),
 ) -> None:
     rm = _load_registries(objs, acts, verbose_load=verbose_load)
 
@@ -278,15 +269,40 @@ def simulate(
     if verbose_run:
         logging.basicConfig(level=logging.INFO, format="%(message)s")
 
-    history, runner = run_simulation(rm, object_type, action_specs, simulation_id, verbose=verbose_run)
+    history, runner = run_simulation(
+        rm,
+        object_type,
+        action_specs,
+        simulation_id,
+        verbose=verbose_run,
+        interactive=True,
+        unknown_paths=None,
+    )
 
-    target_path = save_to or default_history_path(history.simulation_id, object_type)
+    # Backward-compat: map deprecated --save to history_name if provided
+    if not history_name and save_to:
+        history_name = save_to
+
+    # Save history under outputs/histories, using provided name or default
+    if history_name:
+        target_path = resolve_history_path(history_name, history.simulation_id, history.object_type)
+    else:
+        target_path = default_history_path(history.simulation_id, history.object_type)
     runner.save_history_to_yaml(history, target_path)
+
+    # Also build and save a dataset text next to outputs/datasets
+    dataset_path = resolve_dataset_path(dataset_name, history.simulation_id, history.object_type)
+    text = build_interactive_dataset_text(history)
+    from pathlib import Path as _P
+    _p = _P(dataset_path)
+    _p.parent.mkdir(parents=True, exist_ok=True)
+    _p.write_text(text, encoding="utf-8")
 
     console.print("\n[bold]Simulation Summary[/bold]")
     console.print(f"ID: {history.simulation_id}")
     console.print(f"Object: {history.object_type}")
-    console.print(f"Duration: {history.started_at} to {history.completed_at}")
+    console.print(f"Saved history: {target_path}")
+    console.print(f"Saved dataset: {dataset_path}")
 
     successful = len(history.get_successful_steps())
     failed = len(history.get_failed_steps())
@@ -299,9 +315,6 @@ def simulate(
 @app.command()
 def history(
     file_path: str = typer.Argument(..., help="Path to simulation history YAML file"),
-    step: int | None = typer.Option(None, "--step", help="Show state at a specific step"),
-    action: str | None = typer.Option(None, "--action", help="Filter by action name"),
-    show_states: bool = typer.Option(False, "--states", help="Display initial and final states"),
 ) -> None:
     from simulator.core.simulation_runner import SimulationRunner
 
@@ -318,27 +331,6 @@ def history(
     console.print(f"Total steps: {history_obj.total_steps}")
     console.print(f"Duration: {history_obj.started_at} to {history_obj.completed_at}")
 
-    if step is not None:
-        snapshot = history_obj.get_state_at_step(step)
-        if snapshot is None:
-            console.print(f"[red]Step {step} not found[/red]")
-            raise typer.Exit(code=2)
-        _render_snapshot(f"State after step {step}", snapshot)
-        return
-
-    if action:
-        steps = history_obj.find_step_by_action(action)
-        console.print(f"\n[bold]Steps with action '{action}':[/bold]")
-        if steps:
-            for step_obj in steps:
-                status_color = "green" if step_obj.status == "ok" else "red"
-                console.print(f"  Step {step_obj.step_number}: [{status_color}]{step_obj.status}[/{status_color}]")
-                if step_obj.status != "ok" and step_obj.error_message:
-                    console.print(f"    Error: {step_obj.error_message}")
-        else:
-            console.print("  [dim]No matching steps[/dim]")
-        return
-
     table = Table(title="Step Summary")
     table.add_column("Step")
     table.add_column("Action")
@@ -354,45 +346,89 @@ def history(
         )
     console.print(table)
 
-    if show_states:
-        initial = history_obj.get_initial_state()
-        final = history_obj.get_final_state()
-        if initial:
-            _render_snapshot("Initial State", initial)
-        if final:
-            _render_snapshot("Final State", final)
-
-
-@app.command()
-def story(
-    history_file: str = typer.Argument(..., help="Path to simulation history YAML file"),
-    output_file: str | None = typer.Option(None, "--output", "-o", help="Output text file"),
-) -> None:
-    from simulator.core.simulation_runner import SimulationRunner
-    from simulator.core.story_generator import create_story_generator
-
-    rm = RegistryManager()
-    runner = SimulationRunner(rm)
-    try:
-        history_obj = runner.load_history_from_yaml(history_file)
-    except Exception as exc:
-        console.print(f"[red]Error loading history file[/red]: {exc}")
-        raise typer.Exit(code=1)
-
-    generator = create_story_generator()
-    story_text = generator.generate_story(history_obj)
-
-    target_path = output_file or default_story_path(history_obj.simulation_id, history_obj.object_type)
-    generator.save_story_to_file(story_text, target_path)
-
-    console.print("\nPreview:")
-    console.print("-" * 40)
-    for line in story_text.splitlines()[:15]:
-        console.print(line or "")
-    if len(story_text.splitlines()) > 15:
-        console.print("[dim]... (see full story in output file)[/dim]")
-    console.print("-" * 40)
-    console.print(f"Story saved to: [green]{target_path}[/green]")
+    # Print inline errors for any failed steps
+    for step_obj in history_obj.steps:
+        if step_obj.status != "ok" and step_obj.error_message:
+            console.print(f"[red]Step {step_obj.step_number} '{step_obj.action_name}' failed:[/red] {step_obj.error_message}")
 
 
 __all__ = ["app"]
+
+
+"""
+# Flashlight CLI Cheat Sheet
+
+# 1) Validate and inspect
+uv run sim validate
+uv run sim show behaviors flashlight
+uv run sim show object flashlight
+
+# Note: flashlight.battery.level default is 'unknown' in the KB.
+# During simulation, you'll be asked for its value when needed.
+
+# 2) Core simulations (compact history v2 + dataset text)
+uv run sim simulate flashlight turn_on turn_off \
+  --history-name basic.yaml --dataset-name basic.txt --id basic
+uv run sim history outputs/histories/basic.yaml
+
+# 3) Failure and reasoning evidence
+uv run sim simulate flashlight drain_battery turn_on \
+  --history-name fail.yaml --dataset-name fail.txt --id failv2
+uv run sim history outputs/histories/fail.yaml
+
+# 4) Dataset text is automatically saved for each simulate run
+
+# 5) Interactive simulation (stop/clarify/continue)
+# Interactive simulate is the default; unknowns should be defined in YAML defaults.
+uv run sim simulate flashlight turn_on \
+  --history-name turn_on_interactive.yaml --dataset-name turn_on_interactive.txt --id turn_on_interactive
+
+# Failure handling semantics
+# - Unknown-driven failure: If a precondition depends on an unknown value
+#   (e.g., battery.level == unknown), the CLI will ASK a clarification, set
+#   your answer, and RETRY the same action immediately. If it then succeeds,
+#   the step is recorded as OK and the state advances.
+# - True precondition failure: If a precondition is not met and no clarification
+#   applies, the simulator ALWAYS STOPS the run immediately after recording the
+#   failed step. The object state remains unchanged from the last valid state.
+#   The dataset text will include the full story, Q/A clarifications (if any),
+#   and per-step results including the failure reason.
+# Example:
+#   uv run sim simulate flashlight drain_battery turn_on turn_off \
+#     --history-name fail.yaml --dataset-name fail.txt --id fail
+#   # If 'turn_on' fails (empty battery), the run stops right there. The
+#   # dataset shows 'turn_on' FAILED and no further actions are executed.
+
+# 6) History inspection for any run
+uv run sim history outputs/histories/basic.yaml
+
+# 7) TV four-step sequence (no Q → Q → no Q → FAIL)
+# Object: tv (network.wifi_connected default = unknown)
+# Actions in a single simulate:
+#   1) turn_on         → no question (precondition doesn't use unknown) → PASS
+#   2) open_streaming  → asks for network.wifi_connected (unknown) → you answer 'on' → PASS
+#                        (If you answer anything else, this step FAILS and the run stops.)
+#   3) adjust_volume   → no question (requires power on) → PASS
+#   4) factory_reset   → FAIL (requires screen.power == off; it's on) → STOP
+uv run sim simulate tv turn_on open_streaming adjust_volume factory_reset \
+  --history-name tv_advanced.yaml --dataset-name tv_advanced.txt --id tv_adv
+uv run sim history outputs/histories/tv_advanced.yaml
+
+# 8) TV flow without unknown-triggered action (no question asked)
+# Here we skip open_streaming, so no unknown is needed.
+uv run sim simulate tv turn_on adjust_volume \
+  --history-name tv_simple.yaml --dataset-name tv_simple.txt --id tv_simple
+uv run sim history outputs/histories/tv_simple.yaml
+
+# =====
+"""
+
+
+@app.command()
+def minimal():
+    """Deprecated: minimal is now built into 'simulate' via dataset output generation."""
+    console.print("[yellow]The 'minimal' command is deprecated. Use 'sim simulate ... --dataset-name <name>'.[/yellow]")
+@app.command()
+def dataset():
+    """Deprecated: dataset generation is now part of 'simulate'."""
+    console.print("[yellow]The 'dataset' command is deprecated. Use 'sim simulate ... --dataset-name <name>'.[/yellow]")

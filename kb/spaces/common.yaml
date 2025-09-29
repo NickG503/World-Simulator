@@ -8,6 +8,10 @@ spaces:
     name: Brightness Level
     levels: ["none", "low", "medium", "high"]
 
+  - id: volume_level
+    name: Volume Level
+    levels: ["mute", "low", "medium", "high"]
+
   - id: generic_level
     name: Generic Level
     levels: ["empty", "low", "medium", "high", "full"]
@@ -23,3 +27,18 @@ spaces:
     name: Liquid Amount
     levels: ["empty", "low", "medium", "high", "full"]
 
+  - id: power_level
+    name: Power Level
+    levels: ["low", "medium", "high"]
+
+  - id: volume_level
+    name: Volume Level
+    levels: ["mute", "low", "medium", "high", "max"]
+
+  - id: channel_number
+    name: Channel Number
+    levels: ["low", "medium", "high"]
+
+  - id: temperature_level
+    name: Temperature Level
+    levels: ["cold", "warm", "hot"]

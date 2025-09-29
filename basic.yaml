@@ -1,0 +1,170 @@
+history_version: 2
+simulation_id: basic
+object_type: flashlight
+object_name: flashlight
+started_at: '2025-09-27T21:31:45.584202'
+completed_at: '2025-09-27T21:31:45.584912'
+total_steps: 2
+steps:
+- step: 0
+  action: turn_on
+  timestamp: '2025-09-27T21:31:45.584585'
+  status: ok
+  changes:
+  - attribute: switch.position
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: bulb.state
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: bulb.brightness
+    before: none
+    after: medium
+    kind: value
+  - attribute: battery.level.trend
+    before: none
+    after: down
+    kind: trend
+  object_state_before:
+    type: flashlight
+    parts:
+      switch:
+        attributes:
+          position:
+            value: 'off'
+            trend: none
+            confidence: 1.0
+      bulb:
+        attributes:
+          state:
+            value: 'off'
+            trend: none
+            confidence: 1.0
+          brightness:
+            value: none
+            trend: none
+            confidence: 1.0
+      battery:
+        attributes:
+          level:
+            value: medium
+            trend: none
+            confidence: 1.0
+          type:
+            value: AA
+            trend: none
+            confidence: 1.0
+    global_attributes: {}
+  object_state_after:
+    type: flashlight
+    parts:
+      switch:
+        attributes:
+          position:
+            value: 'on'
+            trend: none
+            confidence: 1.0
+      bulb:
+        attributes:
+          state:
+            value: 'on'
+            trend: none
+            confidence: 1.0
+          brightness:
+            value: medium
+            trend: none
+            confidence: 1.0
+      battery:
+        attributes:
+          level:
+            value: medium
+            trend: down
+            confidence: 1.0
+          type:
+            value: AA
+            trend: none
+            confidence: 1.0
+    global_attributes: {}
+- step: 1
+  action: turn_off
+  timestamp: '2025-09-27T21:31:45.584907'
+  status: ok
+  changes:
+  - attribute: switch.position
+    before: 'on'
+    after: 'off'
+    kind: value
+  - attribute: bulb.state
+    before: 'on'
+    after: 'off'
+    kind: value
+  - attribute: bulb.brightness
+    before: medium
+    after: none
+    kind: value
+  - attribute: battery.level.trend
+    before: down
+    after: none
+    kind: trend
+  object_state_before:
+    type: flashlight
+    parts:
+      switch:
+        attributes:
+          position:
+            value: 'on'
+            trend: none
+            confidence: 1.0
+      bulb:
+        attributes:
+          state:
+            value: 'on'
+            trend: none
+            confidence: 1.0
+          brightness:
+            value: medium
+            trend: none
+            confidence: 1.0
+      battery:
+        attributes:
+          level:
+            value: medium
+            trend: down
+            confidence: 1.0
+          type:
+            value: AA
+            trend: none
+            confidence: 1.0
+    global_attributes: {}
+  object_state_after:
+    type: flashlight
+    parts:
+      switch:
+        attributes:
+          position:
+            value: 'off'
+            trend: none
+            confidence: 1.0
+      bulb:
+        attributes:
+          state:
+            value: 'off'
+            trend: none
+            confidence: 1.0
+          brightness:
+            value: none
+            trend: none
+            confidence: 1.0
+      battery:
+        attributes:
+          level:
+            value: medium
+            trend: none
+            confidence: 1.0
+          type:
+            value: AA
+            trend: none
+            confidence: 1.0
+    global_attributes: {}

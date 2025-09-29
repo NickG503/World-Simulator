@@ -24,10 +24,24 @@ class TransitionResult(BaseModel):
     reason: Optional[str] = None
     changes: List[DiffEntry] = Field(default_factory=list)
     violations: List[str] = Field(default_factory=list)  # Constraint violation messages
+    clarifications: List[str] = Field(default_factory=list)  # Questions needed to resolve unknowns
 
     @classmethod
-    def rejected(cls, reason: str, before: ObjectInstance) -> "TransitionResult":
-        return cls(before=before, after=None, status="rejected", reason=reason, changes=[])
+    def rejected(
+        cls,
+        reason: str,
+        before: ObjectInstance,
+        *,
+        clarifications: List[str] | None = None,
+    ) -> "TransitionResult":
+        return cls(
+            before=before,
+            after=None,
+            status="rejected",
+            reason=reason,
+            changes=[],
+            clarifications=clarifications or [],
+        )
 
     @classmethod
     def success(cls, before: ObjectInstance, after: ObjectInstance, changes: List[DiffEntry]) -> "TransitionResult":
@@ -95,11 +109,19 @@ class TransitionEngine:
 
         # Phase 3: Check preconditions
         for condition in action.preconditions:
-            ok = self.condition_evaluator.evaluate(condition, eval_ctx)
+            ok = False
+            try:
+                ok = self.condition_evaluator.evaluate(condition, eval_ctx)
+            except Exception:
+                # If evaluation crashed due to unknown value in ordered comparison, treat as not ok
+                ok = False
             if not ok:
                 # Create detailed failure message with resolved values
                 failure_msg = self._create_failure_message(condition, eval_ctx)
-                return TransitionResult.rejected(f"Precondition failed: {failure_msg}", before=instance)
+                clar = self._clarify_if_unknown(condition, eval_ctx)
+                return TransitionResult.rejected(
+                    f"Precondition failed: {failure_msg}", before=instance, clarifications=([clar] if clar else [])
+                )
 
         # Phase 4: Apply effects
         new_instance = instance.deep_copy()
@@ -175,3 +197,19 @@ class TransitionEngine:
         
         # Fallback
         return condition.describe()
+
+    def _clarify_if_unknown(self, condition, eval_ctx) -> Optional[str]:
+        """If a precondition depends on an unknown attribute value, produce a clarification question.
+
+        Returns a plain question string like "What is battery.level?" or None if not applicable.
+        """
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        try:
+            if isinstance(condition, AttributeCondition):
+                lhs = eval_ctx.read_attribute(condition.target)
+                if isinstance(lhs, str) and lhs == "unknown":
+                    return f"What is {condition.target.to_string()}?"
+        except Exception:
+            # Best-effort; if we cannot read, do nothing
+            return None
+        return None

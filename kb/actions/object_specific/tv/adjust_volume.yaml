@@ -1,0 +1,15 @@
+action: adjust_volume
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  - type: set_attribute
+    target: audio.volume
+    value: high

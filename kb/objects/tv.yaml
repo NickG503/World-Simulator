@@ -15,6 +15,68 @@ parts:
       brightness:
         space: brightness_level
         default: none
+  audio:
+    attributes:
+      volume:
+        space: volume_level
+        default: medium
+        mutable: true
+  network:
+    attributes:
+      wifi_connected:
+        space: binary_state
+        default: unknown
+        mutable: true
+  power_source:
+    attributes:
+      connection:
+        space: binary_state
+        default: unknown  # This will trigger clarification!
+        mutable: true
+      voltage:
+        space: power_level
+        default: unknown  # This will trigger clarification!
+        mutable: true
+  audio:
+    attributes:
+      volume:
+        space: volume_level
+        default: medium
+        mutable: true
+      channel:
+        space: channel_number
+        default: unknown  # This will trigger clarification!
+        mutable: true
+  cooling:
+    attributes:
+      temperature:
+        space: temperature_level
+        default: cold
+        mutable: true
+
+constraints:
+- type: dependency
+  condition:
+    type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+  requires:
+    type: attribute_check
+    target: power_source.connection
+    operator: equals
+    value: on
+- type: dependency
+  condition:
+    type: attribute_check
+    target: cooling.temperature
+    operator: equals
+    value: hot
+  requires:
+    type: attribute_check
+    target: screen.power
+    operator: equals
+    value: off
 
 behaviors:
   turn_on:
@@ -23,13 +85,101 @@ behaviors:
         target: button.state
         operator: equals
         value: off
+      # No power_source check here - first action should succeed
     effects:
       - type: set_attribute
         target: button.state
         value: "on"
+      - type: set_attribute
+        target: power_source.connection
+        value: "on"  # Auto-connect when turning on
       - type: set_attribute
         target: screen.power
         value: "on"
       - type: set_attribute
         target: screen.brightness
         value: medium
+      - type: set_trend
+        target: cooling.temperature
+        direction: up
+  
+  change_channel:
+    preconditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: on
+      - type: attribute_check
+        target: power_source.voltage
+        operator: not_equals
+        value: low  # This will need clarification!
+    effects:
+      - type: set_attribute
+        target: audio.channel
+        value: high  # Assume changing to high channel number
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: power_source.voltage
+          operator: equals
+          value: high
+        then:
+          - type: set_attribute
+            target: screen.brightness
+            value: high
+        else:
+          - type: set_attribute
+            target: screen.brightness
+            value: medium
+
+  adjust_volume:
+    preconditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: on
+    effects:
+      - type: set_attribute
+        target: audio.volume
+        value: high
+      - type: set_trend
+        target: cooling.temperature
+        direction: up
+
+  overheat:
+    preconditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: on
+      - type: attribute_check
+        target: cooling.temperature
+        operator: equals
+        value: hot  # This will violate constraint!
+    effects:
+      - type: set_attribute
+        target: cooling.temperature
+        value: hot
+      - type: set_attribute
+        target: screen.brightness
+        value: none  # Screen dims due to overheating
+
+  turn_off:
+    preconditions:
+      - type: attribute_check
+        target: button.state
+        operator: equals
+        value: on
+    effects:
+      - type: set_attribute
+        target: button.state
+        value: off
+      - type: set_attribute
+        target: screen.power
+        value: off
+      - type: set_attribute
+        target: screen.brightness
+        value: none
+      - type: set_trend
+        target: cooling.temperature
+        direction: down

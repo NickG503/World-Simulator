@@ -19,7 +19,7 @@ parts:
     attributes:
       level:
         space: battery_level
-        default: medium
+        default: unknown
         mutable: true
       type:
         space: battery_types
@@ -85,3 +85,22 @@ behaviors:
       - type: set_trend
         target: battery.level
         direction: down
+  turn_off:
+    preconditions:
+      - type: attribute_check
+        target: switch.position
+        operator: equals
+        value: on
+    effects:
+      - type: set_attribute
+        target: switch.position
+        value: off
+      - type: set_attribute
+        target: bulb.state
+        value: off
+      - type: set_attribute
+        target: bulb.brightness
+        value: none
+      - type: set_trend
+        target: battery.level
+        direction: none

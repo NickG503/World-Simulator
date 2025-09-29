@@ -1,0 +1,11 @@
+fix the _ issua in the outputs/datasets
+remove the .yaml and .txt in simulate commands
+remove the full path form simluate command
+fix the date format
+remove the duration
+remove the the deprecated form the --help
+remove the precondition from drain action
+weird current empty target empty
+fix the format of the precondition fail
+trace after each action when we have sim simulate command
+be able to do the params option like in this command uv run sim simluate kettle --actions pour_water --params to_level=overflow 

@@ -8,7 +8,7 @@ Robust, deterministic simulator for everyday objects. YAML knowledge bases are p
 
 - **Knowledge driven** – qualitative spaces, object definitions, and actions live in `kb/` and are loaded through strict schemas.
 - **Explicit runtime** – `TransitionEngine` applies validated actions to object instances while enforcing constraints and recording diffs.
-- **Composed history** – simulations and story generation share typed snapshots that downstream tools can narrate or analyse.
+- **Composed outputs** – simulations produce compact YAML histories and minimal dataset text for downstream evaluation.
 - **CLI oriented** – the `sim` command gives high-level entry points (validate, show, apply, simulate, history) with clear error reporting.
 
 ---
@@ -28,8 +28,8 @@ uv run sim show object flashlight
 # Apply an action
 uv run sim apply flashlight turn_on
 
-# Run a short simulation and save history
-uv run sim simulate flashlight "turn_on" "drain_battery" --save outputs/history.yaml
+# Run a short simulation and save history + dataset
+uv run sim simulate flashlight "turn_on" "drain_battery" --history-name run.yaml --dataset-name run.txt
 ```
 
 Add `--verbose-load` to any command to see full loader validation traces, and `--verbose-run` during simulations for step-by-step logs.
@@ -49,7 +49,7 @@ src/
       registries/     # RegistryManager + cross-validation
       engine/         # TransitionEngine, ConditionEvaluator, EffectApplier
       simulation_runner.py  # High-level simulation utilities
-      story_generator.py    # Narrative summaries from histories
+      dataset/              # Dataset text builders (minimal story + clarifications + results)
 kb/
   spaces/            # Qualitative space definitions
   objects/           # Object type YAML files
@@ -68,7 +68,7 @@ tests/               # Pytest suite covering loaders, smoke tests, behaviour val
 | Actions     | `Action`, `ActionMetadata`, `ParameterSpec`, `Condition`/`Effect` subclasses | Encapsulate structured action definitions, parameter rules, conditional logic, and effect execution (attribute setters, trend updates, conditional branches). |
 | Objects     | `ObjectType`, `PartSpec`, `AttributeSpec`, `ObjectConstraint`, `ObjectBehavior`, `ObjectInstance`, `AttributeTarget` | Describe object structure, defaults, mutability, behaviours, and constraint definitions. Constraints use the same condition language as actions. |
 | Simulation  | `ActionRequest`, `AttributeSnapshot`, `ObjectStateSnapshot`, `SimulationStep`, `SimulationHistory`, `SimulationRunner` | Provide typed inputs/outputs for multi-step simulations and produce reusable history artefacts. |
-| Narration   | `StoryGenerator`, `ObjectLanguageTemplate` | Convert simulation histories into natural-language stories using the shared snapshot models and recorded diffs. |
+| Dataset     | `build_interactive_dataset_text` | Convert a simulation run into a minimal dataset block with story, clarifications, and per-step results. |
 
 Loaders rely on dedicated Pydantic specs (`ActionFileSpec`, `ObjectFileSpec`, `QualitativeSpaceFileSpec`). Validation failures raise `LoaderError`, which attaches the source path and concise error snippets for CLI display.
 
@@ -89,11 +89,11 @@ Conditions share a unified dictionary format supporting logical operators (`and`
 | Command | Description |
 |---------|-------------|
 | `sim validate [objs] [--acts] [--verbose-load]` | Load spaces, objects, and actions; run registry validation and report issues with file-aware messaging. |
-| `sim show object NAME [--full] [--verbose-load]` | Inspect object definitions, behaviours, and derived defaults. |
+| `sim show object NAME [--verbose-load]` | Inspect object definitions, behaviours, and derived defaults. |
 | `sim show behaviors NAME` | List behaviour overrides bound to an object. |
 | `sim apply OBJECT ACTION [--param key=value] [--verbose-load]` | Instantiate the default object, resolve unknowns, apply an action, and print the resulting diff. |
-| `sim simulate OBJECT ACTION... [--save PATH] [--verbose-load] [--verbose-run]` | Execute action sequences, capture typed histories, and persist them. |
-| `sim history FILE [--step N] [--action NAME] [--states]` | Explore saved simulation histories interactively. |
+| `sim simulate OBJECT ACTION... [--history-name NAME] [--dataset-name NAME] [--id] [--verbose-load] [--verbose-run]` | Execute action sequences interactively (clarify unknowns), save a compact history and a dataset text. |
+| `sim history FILE` | Show a step summary table and inline errors for a saved history. |
 
 Use `--verbose-load` whenever you need the full validation trace for malformed YAML; otherwise, loader errors remain short and user friendly.
 
@@ -113,7 +113,7 @@ Use `--verbose-load` whenever you need the full validation trace for malformed Y
 
 - Install tooling with `uv sync`; run tests via `PYTHONPATH=src pytest`.
 - Knowledge base additions under `kb/` are validated automatically—use `--verbose-load` while authoring.
-- Simulations emit typed histories and can be fed directly into `StoryGenerator` or other analytics pipelines.
+- Simulations emit typed histories and dataset text blocks for downstream evaluation or LLM testing.
 - Constraint and behaviour checks run during validation, catching immutable writes or unknown targets before runtime.
 
 ---

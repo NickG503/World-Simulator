@@ -7,7 +7,7 @@ from typing import Any, Iterable, Mapping, TYPE_CHECKING
 from rich.table import Table
 
 from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.specs import build_condition_from_raw
+from simulator.core.actions.specs import build_condition_from_raw, build_condition, ConditionSpec
 from simulator.core.engine.transition_engine import TransitionResult
 
 if TYPE_CHECKING:  # pragma: no cover - import for type hints only
@@ -34,6 +34,18 @@ def format_condition(condition: Condition | Mapping[str, Any] | None) -> str:
         except Exception:  # pragma: no cover - defensive fallback
             ctype = condition.get("type", "condition")
             return f"{ctype} condition"
+
+    # Handle spec objects (e.g., AttributeCheckConditionSpec) that are not yet built
+    if isinstance(condition, ConditionSpec):
+        try:
+            condition = build_condition(condition)
+        except Exception:
+            # Fallback textual hint; best-effort
+            try:
+                ctype = getattr(condition, "type", "condition")
+                return f"{ctype} condition"
+            except Exception:  # pragma: no cover
+                return "condition"
 
     if isinstance(condition, AttributeCondition):
         op_map = {
