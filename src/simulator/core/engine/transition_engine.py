@@ -170,11 +170,21 @@ class TransitionEngine:
                     expected_value = condition.value
                     resolved_value_str = str(condition.value)
                 
-                # Create description with resolved values
-                op_map = {"equals": "==", "not_equals": "!=", "lt": "<", "lte": "<=", "gt": ">", "gte": ">="}
-                op_symbol = op_map.get(condition.operator, condition.operator)
-                
-                return f"{condition.target.to_string()} {op_symbol} {resolved_value_str} (current: '{actual_value}', target: '{expected_value}')"
+                # Create human-readable description
+                op_map = {
+                    "equals": ("should be", "but got"),
+                    "not_equals": ("should not be", "but got"),
+                    "lt": ("should be less than", "but got"),
+                    "lte": ("should be at most", "but got"),
+                    "gt": ("should be greater than", "but got"),
+                    "gte": ("should be at least", "but got"),
+                }
+                if condition.operator in op_map:
+                    should_be, but_got = op_map[condition.operator]
+                    return f"{condition.target.to_string()} {should_be} {resolved_value_str}, {but_got} {actual_value}"
+                else:
+                    # Fallback for unknown operators
+                    return f"{condition.target.to_string()} {condition.operator} {resolved_value_str} (current: '{actual_value}', target: '{expected_value}')"
             
             elif isinstance(condition, ParameterEquals):
                 actual_value = eval_ctx.parameters.get(condition.parameter)

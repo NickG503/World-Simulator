@@ -1,7 +1,11 @@
 action: replace_battery
 object_type: flashlight
 
-parameters: {}
+parameters:
+  new_level:
+    type: choice
+    choices: [low, medium, high, full]
+    required: true
 
 preconditions:
   - type: attribute_check
@@ -12,7 +16,9 @@ preconditions:
 effects:
   - type: set_attribute
     target: battery.level
-    value: full
+    value:
+      type: parameter_ref
+      name: new_level
   - type: set_trend
     target: battery.level
     direction: none

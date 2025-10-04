@@ -3,12 +3,10 @@ simulation_id: basic
 object_type: flashlight
 object_name: flashlight
 started_at: '2025-09-27T21:31:45.584202'
-completed_at: '2025-09-27T21:31:45.584912'
 total_steps: 2
 steps:
 - step: 0
   action: turn_on
-  timestamp: '2025-09-27T21:31:45.584585'
   status: ok
   changes:
   - attribute: switch.position
@@ -89,7 +87,6 @@ steps:
     global_attributes: {}
 - step: 1
   action: turn_off
-  timestamp: '2025-09-27T21:31:45.584907'
   status: ok
   changes:
   - attribute: switch.position

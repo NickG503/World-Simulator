@@ -4,7 +4,7 @@ object_type: kettle
 parameters:
   to_level:
     type: choice
-    choices: [low, mid, full]
+    choices: [low, medium, full]
     required: true
 
 preconditions:

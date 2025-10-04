@@ -8,6 +8,7 @@ Builds a single text block that:
 - Provides expected outcomes per option by simulating from the start up to the failing action
 """
 
+import re
 from typing import Dict, List, Optional, Tuple
 
 from simulator.core.engine.transition_engine import TransitionEngine
@@ -16,6 +17,21 @@ from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.actions.action import Action
 from simulator.core.dataset.minimal_context import _nl_action, _format_changes
 from simulator.core.objects.part import AttributeTarget
+
+
+_ATTR_PATH_PATTERN = re.compile(r"([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")
+
+
+def _humanize_attribute_paths(text: Optional[str]) -> str:
+    if not text:
+        return ""
+
+    def _repl(match: re.Match[str]) -> str:
+        attr = match.group(0)
+        parts = [segment.replace("_", " ") for segment in attr.split(".")]
+        return " ".join(parts)
+
+    return _ATTR_PATH_PATTERN.sub(_repl, text)
 
 
 def _extract_attr_from_question(q: str) -> Optional[str]:
@@ -85,7 +101,7 @@ def build_sequential_dataset_text(
         # Prepare options from space
         ai = AttributeTarget.from_string(failing_attr).resolve(instance)
         space = registries.spaces.get(ai.spec.space_id)
-        nice_attr = failing_attr.replace(".", " ")
+        nice_attr = _humanize_attribute_paths(failing_attr)
         lines.append("")
         lines.append(f"QUESTION: \"Given the story, what will happen?\"")
         lines.append(f"CLARIFICATION_NEEDED: \"What is {nice_attr}?\"")
@@ -153,27 +169,28 @@ def build_interactive_dataset_text(history) -> str:
         lines.append("")
         lines.append("CLARIFICATIONS:")
         for ev in history.interactions:
-            attr = ev.get("attribute")
-            q = ev.get("question")
+            q = _humanize_attribute_paths(ev.get("question"))
             a = ev.get("answer")
             step = ev.get("step")
-            act = ev.get("action")
+            act = _nl_action(ev.get("action", ""))
             lines.append(f"- step {step} ({act}): Q: \"{q}\" A: \"{a}\"")
 
     # Summarize per-step results
     lines.append("")
     lines.append("RESULTS:")
     for st in history.steps:
+        human_action = _nl_action(st.action_name)
         if st.status != "ok":
-            lines.append(f"- {st.action_name}: FAILED — {st.error_message or 'unknown error'}")
+            message = _humanize_attribute_paths(st.error_message)
+            lines.append(f"- {human_action}: FAILED — {message or 'unknown error'}")
         elif st.changes:
             # reuse formatter from minimal context
             class _Tmp:
                 changes = st.changes
                 status = st.status
                 reason = st.error_message
-            lines.append(f"- {st.action_name}: {_format_changes(_Tmp)}")
+            lines.append(f"- {human_action}: {_format_changes(_Tmp)}")
         else:
-            lines.append(f"- {st.action_name}: no visible changes")
+            lines.append(f"- {human_action}: no visible changes")
 
     return "\n".join(lines) + "\n"

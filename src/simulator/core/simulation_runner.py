@@ -49,7 +49,6 @@ class SimulationStep(BaseModel):
     action_name: str
     object_name: str
     parameters: Dict[str, str] = Field(default_factory=dict)
-    timestamp: str
     status: str  # "ok", "rejected", "error"
     error_message: Optional[str] = None
     object_state_before: ObjectStateSnapshot
@@ -59,12 +58,11 @@ class SimulationStep(BaseModel):
 
 class SimulationHistory(BaseModel):
     """Complete history of a simulation run."""
-    
+
     simulation_id: str
     object_type: str
     object_name: str
     started_at: str
-    completed_at: Optional[str] = None
     total_steps: int = 0
     steps: List[SimulationStep] = Field(default_factory=list)
     # Interactive clarification events captured during run
@@ -163,14 +161,11 @@ class SimulationRunner:
             simulation_id=simulation_id,
             object_type=object_type,
             object_name=object_type,  # Could be parameterized later
-            started_at=datetime.now().isoformat(),
+            started_at=datetime.now().date().isoformat(),
             total_steps=len(actions)
         )
         
         logger = logging.getLogger(__name__)
-        if verbose:
-            logger.info("Starting simulation '%s' with %d actions", simulation_id, len(actions))
-            logger.info("Object: %s", object_type)
         
         current_instance = obj_instance
         action_requests = [
@@ -188,9 +183,6 @@ class SimulationRunner:
             action_name = request.name
             parameters = request.parameters
             
-            if verbose:
-                logger.info("Step %d: %s", step_num + 1, action_name)
-            
             # Capture state before action
             state_before = self._capture_object_state(current_instance)
             
@@ -204,7 +196,6 @@ class SimulationRunner:
                     action_name=action_name,
                     object_name=object_type,
                     parameters=parameters,
-                    timestamp=datetime.now().isoformat(),
                     status="error",
                     error_message=f"Action '{action_name}' not found for {object_type}",
                     object_state_before=state_before,
@@ -285,7 +276,6 @@ class SimulationRunner:
                         action_name=action_name,
                         object_name=object_type,
                         parameters=parameters,
-                        timestamp=datetime.now().isoformat(),
                         status=result.status,
                         error_message=result.reason if result.status != "ok" else None,
                         object_state_before=state_before,
@@ -294,7 +284,6 @@ class SimulationRunner:
                     )
                     history.steps.append(step)
                     step_index += 1
-                    history.completed_at = datetime.now().isoformat()
                     return history
             
             # Capture state after action
@@ -306,7 +295,6 @@ class SimulationRunner:
                 action_name=action_name,
                 object_name=object_type,
                 parameters=parameters,
-                timestamp=datetime.now().isoformat(),
                 status=result.status,
                 error_message=result.reason if result.status != "ok" else None,
                 object_state_before=state_before,
@@ -323,21 +311,11 @@ class SimulationRunner:
             
             if verbose:
                 if result.status == "ok":
-                    logger.info("Success: %d change(s)", len(result.changes))
-                    for change in result.changes[:3]:
-                        logger.info("  • %s: %s → %s", change.attribute, change.before, change.after)
-                    if len(result.changes) > 3:
-                        logger.info("  ... and %d more", len(result.changes) - 3)
+                    logger.info("✅ %s ran successfully", action_name)
                 else:
                     logger.warning("Action failed: %s", result.reason)
 
         # Complete simulation
-        history.completed_at = datetime.now().isoformat()
-        
-        successful_steps = len(history.get_successful_steps())
-        if verbose:
-            logger.info("Simulation complete: %d successful, %d failed", successful_steps, len(actions) - successful_steps)
-        
         return history
     
     def _capture_object_state(self, obj_instance: ObjectInstance) -> ObjectStateSnapshot:
@@ -380,7 +358,6 @@ class SimulationRunner:
             "object_type": history.object_type,
             "object_name": history.object_name,
             "started_at": history.started_at,
-            "completed_at": history.completed_at,
             "total_steps": history.total_steps,
             "steps": [],
         }
@@ -391,7 +368,6 @@ class SimulationRunner:
             step_entry: Dict[str, Any] = {
                 "step": s.step_number,
                 "action": s.action_name,
-                "timestamp": s.timestamp,
                 "status": s.status,
             }
             if s.error_message:
@@ -407,7 +383,6 @@ class SimulationRunner:
 
         with open(file_path, 'w') as f:
             yaml.dump(data, f, default_flow_style=False, indent=2, sort_keys=False)
-        logging.getLogger(__name__).info("Saved simulation history to %s", file_path)
     
     def load_history_from_yaml(self, file_path: str) -> SimulationHistory:
         """Load simulation history from YAML file (supports v1 and compact v2 formats)."""
@@ -420,14 +395,12 @@ class SimulationRunner:
             obj_type = data.get("object_type", "unknown")
             obj_name = data.get("object_name", obj_type)
             started = data.get("started_at")
-            completed = data.get("completed_at")
             total = data.get("total_steps", len(data.get("steps") or []))
 
             steps: List[SimulationStep] = []
             for entry in data.get("steps", []):
                 step_num = entry.get("step") if entry.get("step") is not None else entry.get("step_number", 0)
                 action = entry.get("action") or entry.get("action_name")
-                ts = entry.get("timestamp") or entry.get("time")
                 status = entry.get("status", "ok")
                 error = entry.get("error") or entry.get("error_message")
                 before_raw = entry.get("object_state_before") or {}
@@ -454,7 +427,6 @@ class SimulationRunner:
                         action_name=str(action),
                         object_name=str(obj_name),
                         parameters={},
-                        timestamp=str(ts),
                         status=str(status),
                         error_message=error,
                         object_state_before=before,
@@ -468,7 +440,6 @@ class SimulationRunner:
                 object_type=str(obj_type),
                 object_name=str(obj_name),
                 started_at=str(started),
-                completed_at=str(completed) if completed is not None else None,
                 total_steps=int(total),
                 steps=steps,
                 interactions=list(data.get("interactions") or []),

@@ -1,7 +1,11 @@
 action: adjust_volume
 object_type: tv
 
-parameters: {}
+parameters:
+  to_level:
+    type: choice
+    choices: [mute, low, medium, high]
+    required: true
 
 preconditions:
   - type: attribute_check
@@ -12,4 +16,6 @@ preconditions:
 effects:
   - type: set_attribute
     target: audio.volume
-    value: high
+    value:
+      type: parameter_ref
+      name: to_level

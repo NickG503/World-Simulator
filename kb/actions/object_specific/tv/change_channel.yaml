@@ -1,7 +1,11 @@
 action: change_channel
 object_type: tv
 
-parameters: {}
+parameters:
+  to_channel:
+    type: choice
+    choices: [low, medium, high]
+    required: true
 
 preconditions:
   - type: attribute_check
@@ -16,7 +20,9 @@ preconditions:
 effects:
   - type: set_attribute
     target: audio.channel
-    value: high
+    value:
+      type: parameter_ref
+      name: to_channel
   - type: conditional
     condition:
       type: attribute_check

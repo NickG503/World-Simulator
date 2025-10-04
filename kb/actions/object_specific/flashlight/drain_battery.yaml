@@ -5,11 +5,7 @@ parameters:
   # No parameters needed
 
 preconditions:
-  # Can only drain if battery is not already empty
-  - type: attribute_check
-    target: battery.level
-    operator: not_equals
-    value: empty
+  # No preconditions
 
 effects:
   # Drain battery to empty

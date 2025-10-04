@@ -82,7 +82,7 @@ def _format_changes(result) -> str:
 
     phrases: List[str] = []
     for ch in result.changes:
-        attr = (ch.attribute or "").replace("_", " ")
+        attr = (ch.attribute or "").replace("_", " ").replace(".", " ")
         if ch.kind == "trend":
             if ch.after == "down":
                 phrases.append(f"{attr} starts decreasing")

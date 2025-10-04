@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Dict, Iterable
 
 import typer
 from rich.console import Console
 from rich.table import Table
+
+from typer.core import TyperCommand
 
 from simulator.cli.formatters import (
     format_constraint,
@@ -18,9 +21,9 @@ from simulator.cli.paths import (
     kb_objects_path,
     kb_spaces_path,
     default_history_path,
-    default_dataset_path,
+    default_result_path,
     resolve_history_path,
-    resolve_dataset_path,
+    resolve_result_path,
 )
 from simulator.cli.services import apply_action, run_simulation
 from simulator.core.engine.transition_engine import TransitionResult
@@ -36,6 +39,65 @@ from simulator.core.dataset.sequential_dataset import build_interactive_dataset_
 
 app = typer.Typer(help="Simulator CLI: validate knowledge base, inspect objects, and run actions.")
 console = Console()
+
+
+_ACTIONS_OPTION_NAMES = {"--actions"}
+_ATTR_PATH_PATTERN = re.compile(r"([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")
+
+
+def _humanize_attr_paths(text: str | None) -> str:
+    if not text:
+        return ""
+
+    def _repl(match: re.Match[str]) -> str:
+        parts = [segment.replace("_", " ") for segment in match.group(0).split(".")]
+        return " ".join(parts)
+
+    return _ATTR_PATH_PATTERN.sub(_repl, text)
+
+
+def _expand_actions_args(raw_args: list[str]) -> list[str]:
+    """Allow passing multiple actions with a single --actions flag."""
+    expanded: list[str] = []
+    i = 0
+    length = len(raw_args)
+    while i < length:
+        token = raw_args[i]
+        if token in _ACTIONS_OPTION_NAMES or any(
+            token.startswith(f"{name}=") for name in _ACTIONS_OPTION_NAMES
+        ):
+            option_name, _, inline_value = token.partition("=")
+            if option_name not in _ACTIONS_OPTION_NAMES:
+                option_name = token
+            values_found = 0
+            if inline_value:
+                expanded.extend([option_name, inline_value])
+                values_found += 1
+            i += 1
+            while i < length:
+                next_token = raw_args[i]
+                if next_token == "--":
+                    break
+                if next_token.startswith("-"):
+                    break
+                expanded.extend([option_name, next_token])
+                values_found += 1
+                i += 1
+            if values_found == 0:
+                expanded.append(option_name)
+            continue
+        if token == "--":
+            expanded.append(token)
+            expanded.extend(raw_args[i + 1 :])
+            break
+        expanded.append(token)
+        i += 1
+    return expanded
+
+
+class _SimulateCommand(TyperCommand):
+    def parse_args(self, ctx, args):
+        return super().parse_args(ctx, _expand_actions_args(list(args)))
 
 
 def _load_registries(
@@ -238,74 +300,86 @@ def apply(
         _render_instance_state("Resulting state", instance)
 
 
-@app.command()
+@app.command(cls=_SimulateCommand)
 def simulate(
-    object_type: str = typer.Argument(..., help="Object type to simulate"),
-    actions: list[str] = typer.Argument(..., help="Actions (name or name:param=value pairs)"),
-    history_name: str | None = typer.Option(None, "--history-name", help="History filename under outputs/histories (e.g., run1.yaml)"),
-    dataset_name: str | None = typer.Option(None, "--dataset-name", help="Dataset filename under outputs/datasets (e.g., run1.txt)"),
-    simulation_id: str | None = typer.Option(None, "--id", help="Custom simulation ID (used in defaults)"),
-    objs: str | None = typer.Option(None, help="Path to kb/objects folder"),
-    acts: str | None = typer.Option(None, help="Path to kb/actions folder"),
+    obj: str = typer.Option(..., "--obj", help="Object type to simulate"),
+    actions: list[str] = typer.Option(..., "--actions", help="Actions to execute (name or name:param=value pairs)"),
+    name: str | None = typer.Option(None, "--name", help="Name for history and result files (auto-generated if not provided)"),
+    params: list[str] = typer.Option([], "--params", help="Global key=value pairs to apply to all actions"),
+    objs: str | None = typer.Option(None, "--objs-path", help="Path to kb/objects folder"),
+    acts: str | None = typer.Option(None, "--acts-path", help="Path to kb/actions folder"),
     verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
-    verbose_run: bool = typer.Option(False, "--verbose-run", help="Print simulation progress"),
-    save_to: str | None = typer.Option(None, "--save", help="[Deprecated] Use --history-name instead"),
 ) -> None:
     rm = _load_registries(objs, acts, verbose_load=verbose_load)
+
+    # Parse global params from --params flag
+    global_params: Dict[str, str] = {}
+    for item in params:
+        if "=" not in item:
+            console.print(f"[red]Bad --params[/red] (expected key=value): {item}")
+            raise typer.Exit(code=2)
+        key, value = item.split("=", 1)
+        global_params[key.strip()] = value.strip()
 
     action_specs: list[dict] = []
     for action_str in actions:
         if ":" in action_str:
             name, params_str = action_str.split(":", 1)
-            params: Dict[str, str] = {}
+            action_params: Dict[str, str] = {}
             for pair in params_str.split(","):
                 if "=" in pair:
                     key, value = pair.split("=", 1)
-                    params[key.strip()] = value.strip()
-            action_specs.append({"name": name.strip(), "parameters": params})
+                    action_params[key.strip()] = value.strip()
+            # Merge global params with action-specific params (action-specific takes precedence)
+            merged_params = {**global_params, **action_params}
+            action_specs.append({"name": name.strip(), "parameters": merged_params})
         else:
-            action_specs.append({"name": action_str.strip()})
+            # Use global params if no action-specific params
+            action_specs.append({"name": action_str.strip(), "parameters": global_params.copy()})
 
-    if verbose_run:
-        logging.basicConfig(level=logging.INFO, format="%(message)s")
+    # Always enable verbose output to show real-time progress
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
 
+    # Use provided name or auto-generate
+    simulation_name = name if name else None
+    
     history, runner = run_simulation(
         rm,
-        object_type,
+        obj,
         action_specs,
-        simulation_id,
-        verbose=verbose_run,
+        simulation_name,
+        verbose=True,
         interactive=True,
         unknown_paths=None,
     )
 
-    # Backward-compat: map deprecated --save to history_name if provided
-    if not history_name and save_to:
-        history_name = save_to
+    # Save history under outputs/histories
+    history_path = resolve_history_path(history.simulation_id)
+    runner.save_history_to_yaml(history, history_path)
 
-    # Save history under outputs/histories, using provided name or default
-    if history_name:
-        target_path = resolve_history_path(history_name, history.simulation_id, history.object_type)
-    else:
-        target_path = default_history_path(history.simulation_id, history.object_type)
-    runner.save_history_to_yaml(history, target_path)
-
-    # Also build and save a dataset text next to outputs/datasets
-    dataset_path = resolve_dataset_path(dataset_name, history.simulation_id, history.object_type)
+    # Also build and save a result text to outputs/results
+    result_path = resolve_result_path(history.simulation_id)
     text = build_interactive_dataset_text(history)
     from pathlib import Path as _P
-    _p = _P(dataset_path)
+    _p = _P(result_path)
     _p.parent.mkdir(parents=True, exist_ok=True)
     _p.write_text(text, encoding="utf-8")
 
+    failed_steps = history.get_failed_steps()
+    if failed_steps:
+        console.print("\n[red]Failed actions detected:[/red]")
+        for step in failed_steps:
+            action_label = step.action_name.replace("_", " ")
+            reason = _humanize_attr_paths(getattr(step, "error_message", "") or "unknown error")
+            console.print(f"  • {action_label} — {reason}")
+
     console.print("\n[bold]Simulation Summary[/bold]")
-    console.print(f"ID: {history.simulation_id}")
-    console.print(f"Object: {history.object_type}")
-    console.print(f"Saved history: {target_path}")
-    console.print(f"Saved dataset: {dataset_path}")
+    console.print(f"Name: {history.simulation_id}")
+    console.print(f"Saved history: {history_path}")
+    console.print(f"Saved result: {result_path}")
 
     successful = len(history.get_successful_steps())
-    failed = len(history.get_failed_steps())
+    failed = len(failed_steps)
     if successful:
         console.print(f"✅ Successful actions: {successful}")
     if failed:
@@ -329,7 +403,7 @@ def history(
     console.print(f"[bold]Simulation History[/bold]: {history_obj.simulation_id}")
     console.print(f"Object: {history_obj.object_type}")
     console.print(f"Total steps: {history_obj.total_steps}")
-    console.print(f"Duration: {history_obj.started_at} to {history_obj.completed_at}")
+    console.print(f"Date: {history_obj.started_at}")
 
     table = Table(title="Step Summary")
     table.add_column("Step")
@@ -353,82 +427,3 @@ def history(
 
 
 __all__ = ["app"]
-
-
-"""
-# Flashlight CLI Cheat Sheet
-
-# 1) Validate and inspect
-uv run sim validate
-uv run sim show behaviors flashlight
-uv run sim show object flashlight
-
-# Note: flashlight.battery.level default is 'unknown' in the KB.
-# During simulation, you'll be asked for its value when needed.
-
-# 2) Core simulations (compact history v2 + dataset text)
-uv run sim simulate flashlight turn_on turn_off \
-  --history-name basic.yaml --dataset-name basic.txt --id basic
-uv run sim history outputs/histories/basic.yaml
-
-# 3) Failure and reasoning evidence
-uv run sim simulate flashlight drain_battery turn_on \
-  --history-name fail.yaml --dataset-name fail.txt --id failv2
-uv run sim history outputs/histories/fail.yaml
-
-# 4) Dataset text is automatically saved for each simulate run
-
-# 5) Interactive simulation (stop/clarify/continue)
-# Interactive simulate is the default; unknowns should be defined in YAML defaults.
-uv run sim simulate flashlight turn_on \
-  --history-name turn_on_interactive.yaml --dataset-name turn_on_interactive.txt --id turn_on_interactive
-
-# Failure handling semantics
-# - Unknown-driven failure: If a precondition depends on an unknown value
-#   (e.g., battery.level == unknown), the CLI will ASK a clarification, set
-#   your answer, and RETRY the same action immediately. If it then succeeds,
-#   the step is recorded as OK and the state advances.
-# - True precondition failure: If a precondition is not met and no clarification
-#   applies, the simulator ALWAYS STOPS the run immediately after recording the
-#   failed step. The object state remains unchanged from the last valid state.
-#   The dataset text will include the full story, Q/A clarifications (if any),
-#   and per-step results including the failure reason.
-# Example:
-#   uv run sim simulate flashlight drain_battery turn_on turn_off \
-#     --history-name fail.yaml --dataset-name fail.txt --id fail
-#   # If 'turn_on' fails (empty battery), the run stops right there. The
-#   # dataset shows 'turn_on' FAILED and no further actions are executed.
-
-# 6) History inspection for any run
-uv run sim history outputs/histories/basic.yaml
-
-# 7) TV four-step sequence (no Q → Q → no Q → FAIL)
-# Object: tv (network.wifi_connected default = unknown)
-# Actions in a single simulate:
-#   1) turn_on         → no question (precondition doesn't use unknown) → PASS
-#   2) open_streaming  → asks for network.wifi_connected (unknown) → you answer 'on' → PASS
-#                        (If you answer anything else, this step FAILS and the run stops.)
-#   3) adjust_volume   → no question (requires power on) → PASS
-#   4) factory_reset   → FAIL (requires screen.power == off; it's on) → STOP
-uv run sim simulate tv turn_on open_streaming adjust_volume factory_reset \
-  --history-name tv_advanced.yaml --dataset-name tv_advanced.txt --id tv_adv
-uv run sim history outputs/histories/tv_advanced.yaml
-
-# 8) TV flow without unknown-triggered action (no question asked)
-# Here we skip open_streaming, so no unknown is needed.
-uv run sim simulate tv turn_on adjust_volume \
-  --history-name tv_simple.yaml --dataset-name tv_simple.txt --id tv_simple
-uv run sim history outputs/histories/tv_simple.yaml
-
-# =====
-"""
-
-
-@app.command()
-def minimal():
-    """Deprecated: minimal is now built into 'simulate' via dataset output generation."""
-    console.print("[yellow]The 'minimal' command is deprecated. Use 'sim simulate ... --dataset-name <name>'.[/yellow]")
-@app.command()
-def dataset():
-    """Deprecated: dataset generation is now part of 'simulate'."""
-    console.print("[yellow]The 'dataset' command is deprecated. Use 'sim simulate ... --dataset-name <name>'.[/yellow]")
