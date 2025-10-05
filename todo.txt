@@ -5,7 +5,14 @@ fix the date format - done
 remove the duration - done
 remove the the deprecated form the --help - done
 remove the precondition from drain action - done
-weird current empty target empty
+weird current empty target empty - done
 fix the format of the precondition fail - done
 trace after each action when we have sim simulate command - done
 be able to do the params option like in this command uv run sim simluate kettle --actions pour_water --params to_level=overflow - done
+add the current action before the question
+for parameters alwyes do it with to 
+add logic of OR in the preconditions
+modify the history files to include the delta
+add logic of unknown in post condition
+think about logic of action that makes unknown
+combine uknown logic regrading with trend

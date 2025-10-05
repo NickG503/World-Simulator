@@ -56,7 +56,7 @@ Result text is automatically saved for each simulate run to `outputs/results/`.
 Interactive simulate is the default; unknowns should be defined in YAML defaults.
 
 ```bash
-uv run sim simulate --obj flashlight --actions turn_on --name turn_on_interactive
+uv run sim simulate --obj flashlight --actions turn_on --name turn_on_interactive # don't show
 ```
 
 ## Failure Handling Semantics
@@ -68,7 +68,7 @@ uv run sim simulate --obj flashlight --actions turn_on --name turn_on_interactiv
 ### Example:
 
 ```bash
-uv run sim simulate --obj flashlight --actions drain_battery turn_on turn_off --name fail_example
+uv run sim simulate --obj flashlight --actions drain_battery turn_on turn_off --name fail_example # don't show
 ```
 
 If `turn_on` fails (empty battery), the run stops right there. The result shows `turn_on` FAILED and no further actions are executed.
@@ -77,7 +77,7 @@ If `turn_on` fails (empty battery), the run stops right there. The result shows 
 
 ```bash
 # View any saved history file
-uv run sim history outputs/histories/basic.yaml
+uv run sim history outputs/histories/basic.yaml # don't show
 ```
 
 ## 7) TV Four-Step Sequence (No Q → Q → No Q → FAIL)

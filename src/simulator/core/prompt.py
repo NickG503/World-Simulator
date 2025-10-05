@@ -100,20 +100,24 @@ class UnknownValueResolver:
         
         return True
     
-    def prompt_for_value(self, attribute_path: str, space_id: str) -> Optional[str]:
+    def prompt_for_value(self, attribute_path: str, space_id: str, action_name: Optional[str] = None) -> Optional[str]:
         """
         Prompt for a single attribute value.
         
         Args:
             attribute_path: Full path to the attribute (e.g., "battery.level")
             space_id: ID of the qualitative space
+            action_name: Optional name of the action that requires this value
             
         Returns:
             Selected value or None if cancelled
         """
         space = self.registries.spaces.get(space_id)
         
-        self.console.print(f"\n[bold]Select value for {attribute_path}:[/bold]")
+        if action_name:
+            self.console.print(f"[yellow]Trying to run '{action_name}' action but {attribute_path} is unknown.[/yellow]\n")
+        
+        self.console.print(f"[bold]Select value for {attribute_path}:[/bold]")
         
         # Show options
         for i, level in enumerate(space.levels, 1):

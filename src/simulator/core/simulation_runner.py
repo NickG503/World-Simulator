@@ -230,7 +230,7 @@ class SimulationRunner:
                             ai = _AT.from_string(attr_ref).resolve(current_instance)
                             space = self.registry_manager.spaces.get(ai.spec.space_id)
                             if resolver is not None:
-                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id)
+                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id, action_name=action_name)
                             else:
                                 picked = None
                             if picked is None:
