@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict, Iterable
+from typing import Dict
 
 import typer
 from rich.console import Console
@@ -41,7 +41,6 @@ app = typer.Typer(help="Simulator CLI: validate knowledge base, inspect objects,
 console = Console()
 
 
-_ACTIONS_OPTION_NAMES = {"--actions"}
 _ATTR_PATH_PATTERN = re.compile(r"([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")
 
 
@@ -56,48 +55,93 @@ def _humanize_attr_paths(text: str | None) -> str:
     return _ATTR_PATH_PATTERN.sub(_repl, text)
 
 
-def _expand_actions_args(raw_args: list[str]) -> list[str]:
-    """Allow passing multiple actions with a single --actions flag."""
-    expanded: list[str] = []
-    i = 0
+_KNOWN_VALUE_OPTIONS = {"--obj", "--name", "--objs-path", "--acts-path"}
+_KNOWN_BOOL_OPTIONS = {"--verbose-load"}
+
+
+def _normalize_action_tokens(raw_args: list[str]) -> list[str]:
+    """Allow positional actions while remaining compatible with legacy --actions usage."""
+    option_tokens: list[str] = []
+    action_tokens: list[str] = []
+
     length = len(raw_args)
+    i = 0
     while i < length:
         token = raw_args[i]
-        if token in _ACTIONS_OPTION_NAMES or any(
-            token.startswith(f"{name}=") for name in _ACTIONS_OPTION_NAMES
-        ):
-            option_name, _, inline_value = token.partition("=")
-            if option_name not in _ACTIONS_OPTION_NAMES:
-                option_name = token
-            values_found = 0
-            if inline_value:
-                expanded.extend([option_name, inline_value])
-                values_found += 1
-            i += 1
-            while i < length:
-                next_token = raw_args[i]
-                if next_token == "--":
-                    break
-                if next_token.startswith("-"):
-                    break
-                expanded.extend([option_name, next_token])
-                values_found += 1
-                i += 1
-            if values_found == 0:
-                expanded.append(option_name)
-            continue
+
         if token == "--":
-            expanded.append(token)
-            expanded.extend(raw_args[i + 1 :])
+            option_tokens.extend(raw_args[i:])
             break
-        expanded.append(token)
+
+        if token == "--actions":
+            i += 1
+            continue
+
+        if token.startswith("--actions="):
+            _, value = token.split("=", 1)
+            if value:
+                action_tokens.append(value)
+            i += 1
+            continue
+
+        opt_name, eq, opt_value = token.partition("=")
+        if opt_name in _KNOWN_VALUE_OPTIONS:
+            if eq:
+                option_tokens.append(token)
+            else:
+                option_tokens.append(token)
+                if i + 1 < length:
+                    option_tokens.append(raw_args[i + 1])
+                    i += 1
+            i += 1
+            continue
+
+        if opt_name in _KNOWN_BOOL_OPTIONS:
+            option_tokens.append(opt_name)
+            i += 1
+            continue
+
+        action_tokens.append(token)
         i += 1
-    return expanded
+
+    return option_tokens + action_tokens
+
+
+def _infer_inline_param_name(rm: RegistryManager, object_name: str, action_name: str) -> tuple[str | None, str | None]:
+    """Infer which parameter should receive an inline value for an action.
+
+    Returns (parameter_name, error_message).
+    """
+
+    try:
+        action_spec = rm.find_action_for_object(object_name, action_name)
+    except Exception:  # pragma: no cover - defensive guard
+        action_spec = None
+
+    if not action_spec:
+        return None, f"[red]Unknown action[/red]: {action_name}"
+
+    params = getattr(action_spec, "parameters", {}) or {}
+    if not params:
+        return None, f"[red]Action '{action_name}' does not accept parameters[/red]"
+
+    required = [name for name, spec in params.items() if getattr(spec, "required", False)]
+
+    if len(params) == 1:
+        return next(iter(params.keys())), None
+
+    if len(required) == 1:
+        return required[0], None
+
+    return None, (
+        f"[red]Action '{action_name}' has multiple parameters[/red]. "
+        "Use the explicit syntax 'action:param=value'."
+    )
 
 
 class _SimulateCommand(TyperCommand):
     def parse_args(self, ctx, args):
-        return super().parse_args(ctx, _expand_actions_args(list(args)))
+        return super().parse_args(ctx, _normalize_action_tokens(list(args)))
 
 
 def _load_registries(
@@ -303,45 +347,68 @@ def apply(
 @app.command(cls=_SimulateCommand)
 def simulate(
     obj: str = typer.Option(..., "--obj", help="Object type to simulate"),
-    actions: list[str] = typer.Option(..., "--actions", help="Actions to execute (name or name:param=value pairs)"),
-    name: str | None = typer.Option(None, "--name", help="Name for history and result files (auto-generated if not provided)"),
-    params: list[str] = typer.Option([], "--params", help="Global key=value pairs to apply to all actions"),
+    actions: list[str] = typer.Argument(..., help="Actions to execute (use action=value for inline parameters)"),
+    run_name: str | None = typer.Option(None, "--name", help="Name for history and result files (auto-generated if not provided)"),
     objs: str | None = typer.Option(None, "--objs-path", help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, "--acts-path", help="Path to kb/actions folder"),
     verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
 ) -> None:
     rm = _load_registries(objs, acts, verbose_load=verbose_load)
 
-    # Parse global params from --params flag
-    global_params: Dict[str, str] = {}
-    for item in params:
-        if "=" not in item:
-            console.print(f"[red]Bad --params[/red] (expected key=value): {item}")
-            raise typer.Exit(code=2)
-        key, value = item.split("=", 1)
-        global_params[key.strip()] = value.strip()
-
     action_specs: list[dict] = []
     for action_str in actions:
         if ":" in action_str:
-            name, params_str = action_str.split(":", 1)
-            action_params: Dict[str, str] = {}
-            for pair in params_str.split(","):
-                if "=" in pair:
-                    key, value = pair.split("=", 1)
-                    action_params[key.strip()] = value.strip()
-            # Merge global params with action-specific params (action-specific takes precedence)
-            merged_params = {**global_params, **action_params}
-            action_specs.append({"name": name.strip(), "parameters": merged_params})
+            console.print(
+                "[red]Colon syntax is no longer supported.[/red] "
+                "Use 'action=value' for inline parameters."
+            )
+            raise typer.Exit(code=2)
+
+        if "=" in action_str:
+            action_name_raw, inline_value = action_str.split("=", 1)
+            action_name = action_name_raw.strip()
+            value = inline_value.strip()
+            if not value:
+                console.print(f"[red]Bad action value[/red]: expected 'action=value', got '{action_str}'")
+                raise typer.Exit(code=2)
+
+            param_name, error_message = _infer_inline_param_name(rm, obj, action_name)
+            if error_message:
+                console.print(error_message)
+                raise typer.Exit(code=2)
+
+            action_specs.append({"name": action_name, "parameters": {param_name: value}})
         else:
-            # Use global params if no action-specific params
-            action_specs.append({"name": action_str.strip(), "parameters": global_params.copy()})
+            action_specs.append({"name": action_str.strip(), "parameters": {}})
+
+    def _resolve_parameter(action_name: str, param_name: str, param_spec) -> str:
+        choices = getattr(param_spec, "choices", None) or []
+        if choices:
+            console.print(
+                f"\n[yellow]Select value for {action_name} ({param_name}):[/yellow]"
+            )
+            for idx, choice in enumerate(choices, start=1):
+                console.print(f"  {idx}. {choice}")
+            while True:
+                user_input = console.input(f"Enter choice (1-{len(choices)}): ").strip()
+                if user_input.isdigit():
+                    idx = int(user_input)
+                    if 1 <= idx <= len(choices):
+                        return choices[idx - 1]
+                console.print("[red]Invalid selection. Try again.[/red]")
+
+        prompt_label = f"Enter value for {action_name} ({param_name}): "
+        while True:
+            value = console.input(prompt_label).strip()
+            if value:
+                return value
+            console.print("[red]Value cannot be empty.[/red]")
 
     # Always enable verbose output to show real-time progress
     logging.basicConfig(level=logging.INFO, format="%(message)s")
 
     # Use provided name or auto-generate
-    simulation_name = name if name else None
+    simulation_name = run_name if run_name else None
     
     history, runner = run_simulation(
         rm,
@@ -351,6 +418,7 @@ def simulate(
         verbose=True,
         interactive=True,
         unknown_paths=None,
+        parameter_resolver=_resolve_parameter,
     )
 
     # Save history under outputs/histories

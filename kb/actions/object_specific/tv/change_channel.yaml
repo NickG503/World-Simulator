@@ -2,7 +2,7 @@ action: change_channel
 object_type: tv
 
 parameters:
-  to_channel:
+  to:
     type: choice
     choices: [low, medium, high]
     required: true
@@ -22,7 +22,7 @@ effects:
     target: audio.channel
     value:
       type: parameter_ref
-      name: to_channel
+      name: to
   - type: conditional
     condition:
       type: attribute_check

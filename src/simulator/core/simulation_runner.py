@@ -117,6 +117,7 @@ class SimulationRunner:
         *,
         interactive: bool = False,
         unknown_paths: Optional[List[str]] = None,
+        parameter_resolver=None,
     ) -> SimulationHistory:
         """
         Run a simulation with multiple actions.
@@ -182,13 +183,13 @@ class SimulationRunner:
         for step_num, request in enumerate(action_requests):
             action_name = request.name
             parameters = request.parameters
-            
+
             # Capture state before action
             state_before = self._capture_object_state(current_instance)
-            
+
             # Get and execute action
             action = self.registry_manager.create_behavior_enhanced_action(object_type, action_name)
-            
+
             if not action:
                 # Handle missing action
                 step = SimulationStep(
@@ -208,6 +209,17 @@ class SimulationRunner:
                 continue
             
             # Execute action (with optional interactive clarification loop)
+            if parameter_resolver:
+                param_defs = getattr(action, "parameters", {}) or {}
+                for param_name, param_spec in param_defs.items():
+                    if not getattr(param_spec, "required", False):
+                        continue
+                    if param_name in parameters:
+                        continue
+                    value = parameter_resolver(action_name, param_name, param_spec)
+                    parameters[param_name] = value
+                    request.parameters[param_name] = value
+
             result = self.engine.apply_action(current_instance, action, parameters)
             if interactive:
                 # If preconditions failed due to unknowns, ask and retry

@@ -2,7 +2,7 @@ action: replace_battery
 object_type: flashlight
 
 parameters:
-  new_level:
+  to:
     type: choice
     choices: [low, medium, high, full]
     required: true
@@ -18,7 +18,7 @@ effects:
     target: battery.level
     value:
       type: parameter_ref
-      name: new_level
+      name: to
   - type: set_trend
     target: battery.level
     direction: none

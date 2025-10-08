@@ -6,49 +6,76 @@ from unittest.mock import MagicMock
 
 from typer.testing import CliRunner
 
-from simulator.cli.app import _expand_actions_args, app
+from simulator.cli.app import app
 
 
-def test_expand_actions_args_single_flag_multiple_values():
-    raw = ["--obj", "flashlight", "--actions", "turn_on", "turn_off", "--name", "demo"]
-    expanded = _expand_actions_args(raw)
-    assert expanded == [
-        "--obj",
-        "flashlight",
-        "--actions",
-        "turn_on",
-        "--actions",
-        "turn_off",
-        "--name",
-        "demo",
-    ]
+def _make_fake_rm(param_map: dict[str, dict[str, bool]] | None = None):
+    param_map = param_map or {}
+
+    def _find_action(obj_name: str, action_name: str):
+        specs = param_map.get(action_name)
+        if specs is None:
+            return SimpleNamespace(parameters={})
+        parameters = {}
+        for name, spec in specs.items():
+            if isinstance(spec, dict):
+                parameters[name] = SimpleNamespace(**spec)
+            else:
+                parameters[name] = SimpleNamespace(required=spec)
+        return SimpleNamespace(parameters=parameters)
+
+    fake_rm = SimpleNamespace(find_action_for_object=_find_action)
+    fake_rm._param_defs = {
+        action: {
+            name: (
+                SimpleNamespace(**spec)
+                if isinstance(spec, dict)
+                else SimpleNamespace(required=spec)
+            )
+            for name, spec in mapping.items()
+        }
+        for action, mapping in param_map.items()
+    }
+    return fake_rm
 
 
-def test_simulate_accepts_single_flag_multi_actions(monkeypatch, tmp_path):
-    runner = CliRunner()
-
-    fake_rm = object()
+def _mock_cli_environment(monkeypatch, tmp_path: Path, fake_rm, history: SimpleNamespace | None = None):
     monkeypatch.setattr("simulator.cli.app._load_registries", lambda *args, **kwargs: fake_rm)
 
-    fake_history = SimpleNamespace(
-        simulation_id="test-run",
-        get_successful_steps=lambda: [],
-        get_failed_steps=lambda: [],
-    )
+    if history is None:
+        history = SimpleNamespace(
+            simulation_id="test-run",
+            get_successful_steps=lambda: [],
+            get_failed_steps=lambda: [],
+        )
 
     class FakeRunner:
-        saved_history_path: str | None = None
-
         @staticmethod
-        def save_history_to_yaml(history, path: str) -> None:
-            FakeRunner.saved_history_path = path
+        def save_history_to_yaml(history_obj, path: str) -> None:
             p = Path(path)
             p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text("history", encoding="utf-8")
 
     fake_runner = FakeRunner()
 
-    run_sim_mock = MagicMock(return_value=(fake_history, fake_runner))
+    def _fake_run_simulation(*args, **kwargs):
+        parameter_resolver = kwargs.get("parameter_resolver")
+        actions = kwargs.get("actions")
+        if actions is None and len(args) > 2:
+            actions = args[2]
+        if actions is None:
+            actions = []
+        if parameter_resolver:
+            for spec in actions:
+                action_name = spec.get("name")
+                param_defs = getattr(fake_rm, "_param_defs", {}).get(action_name, {})
+                for param_name, param_spec in param_defs.items():
+                    if getattr(param_spec, "required", False) and param_name not in spec.get("parameters", {}):
+                        value = parameter_resolver(action_name, param_name, param_spec)
+                        spec.setdefault("parameters", {})[param_name] = value
+        return history, fake_runner
+
+    run_sim_mock = MagicMock(side_effect=_fake_run_simulation)
     monkeypatch.setattr("simulator.cli.app.run_simulation", run_sim_mock)
     monkeypatch.setattr(
         "simulator.cli.app.resolve_history_path",
@@ -60,9 +87,18 @@ def test_simulate_accepts_single_flag_multi_actions(monkeypatch, tmp_path):
     )
     monkeypatch.setattr("simulator.cli.app.build_interactive_dataset_text", lambda history: "dataset text")
 
+    return run_sim_mock
+
+
+def test_simulate_accepts_actions_without_flag(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm()
+    run_sim_mock = _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
+
     result = runner.invoke(
         app,
-        ["simulate", "--obj", "flashlight", "--actions", "turn_on", "turn_off"],
+        ["simulate", "--obj", "flashlight", "turn_on", "turn_off"],
     )
 
     assert result.exit_code == 0, result.stdout
@@ -80,43 +116,51 @@ def test_simulate_accepts_single_flag_multi_actions(monkeypatch, tmp_path):
     assert result_path.read_text(encoding="utf-8") == "dataset text"
 
 
-def test_simulate_reports_failed_actions(monkeypatch, tmp_path):
+def test_simulate_accepts_legacy_actions_flag(monkeypatch, tmp_path):
     runner = CliRunner()
 
-    fake_rm = object()
-    monkeypatch.setattr("simulator.cli.app._load_registries", lambda *args, **kwargs: fake_rm)
+    fake_rm = _make_fake_rm()
+    run_sim_mock = _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
 
-    failure_step = SimpleNamespace(
-        action_name="adjust_volume",
-        error_message="Precondition failed: screen.power should be off, but got on",
+    result = runner.invoke(
+        app,
+        ["simulate", "--obj", "flashlight", "--actions", "turn_on", "turn_off"],
     )
 
-    fake_history = SimpleNamespace(
-        simulation_id="failed-run",
-        get_successful_steps=lambda: [],
-        get_failed_steps=lambda: [failure_step],
+    assert result.exit_code == 0, result.stdout
+    args = run_sim_mock.call_args.args
+    assert args[3] is None
+    action_specs = args[2]
+    assert [action["name"] for action in action_specs] == ["turn_on", "turn_off"]
+
+
+def test_simulate_prompts_for_missing_required_parameter(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm({"adjust_volume": {"to": {"required": True, "choices": ["mute", "low"]}}})
+    run_sim_mock = _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
+
+    result = runner.invoke(
+        app,
+        ["simulate", "--obj", "tv", "adjust_volume"],
+        input="2\n",
     )
 
-    class FakeRunner:
-        @staticmethod
-        def save_history_to_yaml(history, path: str) -> None:
-            p = Path(path)
-            p.parent.mkdir(parents=True, exist_ok=True)
-            p.write_text("history", encoding="utf-8")
+    assert result.exit_code == 0, result.stdout
+    action_specs = run_sim_mock.call_args.args[2]
+    assert action_specs[0]["parameters"].get("to") == "low"
 
-    fake_runner = FakeRunner()
 
-    run_sim_mock = MagicMock(return_value=(fake_history, fake_runner))
-    monkeypatch.setattr("simulator.cli.app.run_simulation", run_sim_mock)
-    monkeypatch.setattr(
-        "simulator.cli.app.resolve_history_path",
-        lambda simulation_id: str(tmp_path / f"{simulation_id}.yaml"),
+def test_simulate_inline_equals_assigns_parameter(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm(
+        {
+            "adjust_volume": {"to": True},
+            "change_channel": {"to": True},
+        }
     )
-    monkeypatch.setattr(
-        "simulator.cli.app.resolve_result_path",
-        lambda simulation_id: str(tmp_path / f"{simulation_id}.txt"),
-    )
-    monkeypatch.setattr("simulator.cli.app.build_interactive_dataset_text", lambda history: "dataset text")
+    run_sim_mock = _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
 
     result = runner.invoke(
         app,
@@ -124,12 +168,69 @@ def test_simulate_reports_failed_actions(monkeypatch, tmp_path):
             "simulate",
             "--obj",
             "tv",
-            "--actions",
-            "adjust_volume",
+            "turn_on",
+            "adjust_volume=high",
+            "change_channel=medium",
         ],
     )
 
     assert result.exit_code == 0, result.stdout
-    assert "Failed actions detected" in result.stdout
-    assert "adjust volume" in result.stdout
-    assert "screen power should be off" in result.stdout
+
+    action_specs = run_sim_mock.call_args.args[2]
+    assert action_specs[1]["name"] == "adjust_volume"
+    assert action_specs[1]["parameters"].get("to") == "high"
+    assert action_specs[2]["name"] == "change_channel"
+    assert action_specs[2]["parameters"].get("to") == "medium"
+
+
+def test_simulate_honours_name_option_after_actions(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm()
+    run_sim_mock = _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
+
+    result = runner.invoke(
+        app,
+        [
+            "simulate",
+            "--obj",
+            "flashlight",
+            "turn_on",
+            "--name",
+            "custom_run",
+        ],
+    )
+
+    assert result.exit_code == 0, result.stdout
+    args = run_sim_mock.call_args.args
+    assert args[3] == "custom_run"
+
+
+def test_simulate_rejects_params_option(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm()
+    _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
+
+    result = runner.invoke(
+        app,
+        ["simulate", "--obj", "kettle", "pour_water", "--params", "to=medium"],
+    )
+
+    assert result.exit_code != 0
+    assert "--params" in result.output
+
+
+def test_simulate_rejects_colon_syntax(monkeypatch, tmp_path):
+    runner = CliRunner()
+
+    fake_rm = _make_fake_rm()
+    _mock_cli_environment(monkeypatch, tmp_path, fake_rm)
+
+    result = runner.invoke(
+        app,
+        ["simulate", "--obj", "tv", "adjust_volume:to=high"],
+    )
+
+    assert result.exit_code != 0
+    assert "Colon syntax" in result.output

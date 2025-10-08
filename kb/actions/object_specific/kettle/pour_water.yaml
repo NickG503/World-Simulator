@@ -2,7 +2,7 @@ action: pour_water
 object_type: kettle
 
 parameters:
-  to_level:
+  to:
     type: choice
     choices: [low, medium, full]
     required: true
@@ -18,7 +18,7 @@ preconditions:
     operator: lt
     value:
       type: parameter_ref
-      name: to_level
+      name: to
 
 
 effects:
@@ -26,4 +26,4 @@ effects:
     target: tank.level
     value:
       type: parameter_ref
-      name: to_level
+      name: to

@@ -51,6 +51,7 @@ def run_simulation(
     *,
     interactive: bool = False,
     unknown_paths: list[str] | None = None,
+    parameter_resolver=None,
 ):
     from simulator.core.simulation_runner import create_simulation_runner
 
@@ -62,6 +63,7 @@ def run_simulation(
         verbose=verbose,
         interactive=interactive,
         unknown_paths=unknown_paths,
+        parameter_resolver=parameter_resolver,
     )
     return history, runner
 

@@ -2,7 +2,7 @@ action: adjust_volume
 object_type: tv
 
 parameters:
-  to_level:
+  to:
     type: choice
     choices: [mute, low, medium, high]
     required: true
@@ -18,4 +18,7 @@ effects:
     target: audio.volume
     value:
       type: parameter_ref
-      name: to_level
+      name: to
+  - type: set_trend
+    target: cooling.temperature
+    direction: up
