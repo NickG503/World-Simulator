@@ -63,6 +63,7 @@ uv run sim simulate --obj flashlight turn_on --name turn_on_interactive # don't 
 
 - **Unknown-driven failure**: If a precondition depends on an unknown value (e.g., `battery.level == unknown`), the CLI will ASK a clarification, set your answer, and RETRY the same action immediately. If it then succeeds, the step is recorded as OK and the state advances.
 
+
 - **True precondition failure**: If a precondition is not met and no clarification applies, the simulator ALWAYS STOPS the run immediately after recording the failed step. The object state remains unchanged from the last valid state. The dataset text will include the full story, Q/A clarifications (if any), and per-step results including the failure reason.
 
 ### Example:
@@ -78,7 +79,12 @@ If `turn_on` fails (empty battery), the run stops right there. The result shows 
 ```bash
 # View any saved history file
 uv run sim history outputs/histories/basic.yaml # don't show
+
+# Inspect only the third step (0-based) with a detailed change table
+uv run sim history outputs/histories/tv_reset_forced.yaml --step=2
 ```
+
+History files now store only per-step deltas plus a single initial state snapshot, keeping them concise while preserving enough data for detailed step inspection.
 
 ## 7) TV Four-Step Sequence (No Q → Q → No Q → FAIL)
 
@@ -210,3 +216,33 @@ uv run sim simulate --obj tv \
 3. Second `adjust_volume` → Sets to low volume
 4. Third `adjust_volume` → Sets to high volume
 5. `turn_off` → Powers off
+
+### Forced Factory Reset (OR Preconditions)
+
+`factory_reset` now supports a forced override using the optional `force` parameter. The action's YAML uses the new `preconditions.any_of` syntax so that either the TV is already off, **or** the parameter `force=force` allows the reset.
+
+```yaml
+preconditions:
+  OR:
+    - AND:
+        - type: attribute_check
+          target: screen.power
+          operator: equals
+          value: off
+        - type: attribute_check
+          target: button.state
+          operator: equals
+          value: off
+    - type: parameter_equals
+      parameter: force
+      value: force
+```
+
+Try both flows to see the OR logic in action:
+
+```bash
+uv run sim simulate --obj tv turn_on factory_reset --name tv_reset_blocked
+uv run sim simulate --obj tv turn_on factory_reset=force --name tv_reset_forced
+```
+
+The first run stops because the screen is still on; the second succeeds thanks to the forced branch. You can mix and match `and`/`or` blocks however you like, nesting them to express complex logic such as `(cond1 AND cond2) OR (cond3 AND cond4)`.

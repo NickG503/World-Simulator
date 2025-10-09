@@ -25,6 +25,7 @@ def _make_history(object_type: str, steps: list[SimulationStep]) -> SimulationHi
         started_at="2025-10-04",
         total_steps=len(steps),
         steps=steps,
+        initial_state=steps[0].object_state_before if steps else None,
         interactions=[
             {
                 "step": steps[0].step_number + 1,
@@ -96,3 +97,51 @@ def test_history_yaml_omits_completed_at(tmp_path: Path):
     content = file_path.read_text(encoding="utf-8")
     assert "started_at" in content
     assert "completed_at" not in content
+    assert "history_version: 3" in content
+    assert "initial_state:" in content
+    assert "object_state_before" not in content
+    assert "object_state_after" not in content
+
+
+def test_load_history_v3_reconstructs_states(tmp_path: Path):
+    yaml_content = """
+history_version: 3
+simulation_id: sample
+object_type: tv
+object_name: tv
+started_at: '2025-10-01'
+total_steps: 1
+initial_state:
+  type: tv
+  parts:
+    screen:
+      attributes:
+        power:
+          value: off
+          trend: none
+          confidence: 1.0
+  global_attributes: {}
+steps:
+  - step: 0
+    action: turn_on
+    status: ok
+    changes:
+      - attribute: screen.power
+        before: off
+        after: on
+        kind: value
+"""
+
+    file_path = tmp_path / "history.yaml"
+    file_path.write_text(yaml_content, encoding="utf-8")
+
+    runner = SimulationRunner(RegistryManager())
+    history = runner.load_history_from_yaml(str(file_path))
+
+    assert history.initial_state is not None
+    initial_screen = history.initial_state.parts["screen"].attributes["power"].value
+    assert initial_screen == "off"
+
+    state_after = history.get_state_at_step(0)
+    assert state_after is not None
+    assert state_after.parts["screen"].attributes["power"].value == "on"

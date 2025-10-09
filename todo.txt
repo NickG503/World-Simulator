@@ -9,10 +9,12 @@ weird current empty target empty - done
 fix the format of the precondition fail - done
 trace after each action when we have sim simulate command - done
 be able to do the params option like in this command uv run sim simluate kettle --actions pour_water --params to_level=overflow - done
+
+# tasks after the talking to Nir 5/10/25
 add the current action before the question - done
-for parameters alwyes do it with to 
-add logic of OR in the preconditions
-modify the history files to include the delta
+for parameters alwyes do it with to - done
+add logic of OR in the preconditions - done
+modify the history files to include the delta - done
 add logic of unknown in post condition
 think about logic of action that makes unknown
 combine uknown logic regrading with trend

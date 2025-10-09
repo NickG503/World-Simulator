@@ -1,13 +1,26 @@
 action: factory_reset
 object_type: tv
 
-parameters: {}
+parameters:
+  force:
+    type: choice
+    choices: [force]
+    required: false
 
 preconditions:
-  - type: attribute_check
-    target: screen.power
-    operator: equals
-    value: off
+  OR:
+    - AND:
+        - type: attribute_check
+          target: screen.power
+          operator: equals
+          value: off
+        - type: attribute_check
+          target: button.state
+          operator: equals
+          value: off
+    - type: parameter_equals
+      parameter: force
+      value: force
 
 effects:
   # Placeholder: real reset would wipe settings; here it's a no-op guarded by precondition

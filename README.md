@@ -93,7 +93,7 @@ Conditions share a unified dictionary format supporting logical operators (`and`
 | `sim show behaviors NAME` | List behaviour overrides bound to an object. |
 | `sim apply OBJECT ACTION [--param key=value] [--verbose-load]` | Instantiate the default object, resolve unknowns, apply an action, and print the resulting diff. |
 | `sim simulate OBJECT ACTION... [--history-name NAME] [--dataset-name NAME] [--id] [--verbose-load] [--verbose-run]` | Execute action sequences interactively (clarify unknowns), save a compact history and a dataset text. |
-| `sim history FILE` | Show a step summary table and inline errors for a saved history. |
+| `sim history FILE [--step N]` | Show a step summary table and inline errors for a saved history (use `--step` for a detailed change table at a specific step). |
 
 Use `--verbose-load` whenever you need the full validation trace for malformed YAML; otherwise, loader errors remain short and user friendly.
 

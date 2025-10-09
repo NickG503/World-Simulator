@@ -11,7 +11,7 @@ from simulator.core.actions.specs import (
     EffectSpec,
     build_condition,
     build_effect,
-    parse_condition_spec,
+    parse_preconditions_field,
     parse_effect_spec,
 )
 from simulator.core.constraints.specs import ConstraintSpec, parse_constraint_spec
@@ -51,9 +51,7 @@ class BehaviorDefinitionSpec(BaseModel):
     @field_validator("preconditions", mode="before")
     @classmethod
     def _parse_preconditions(cls, value):
-        if value is None:
-            return []
-        return [parse_condition_spec(item) for item in value]
+        return parse_preconditions_field(value)
 
     @field_validator("effects", mode="before")
     @classmethod

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Dict
+from typing import Dict, Optional
 
 import typer
 from rich.console import Console
@@ -457,6 +457,7 @@ def simulate(
 @app.command()
 def history(
     file_path: str = typer.Argument(..., help="Path to simulation history YAML file"),
+    step: Optional[int] = typer.Option(None, "--step", "-s", help="Show detailed table for a specific step"),
 ) -> None:
     from simulator.core.simulation_runner import SimulationRunner
 
@@ -492,6 +493,48 @@ def history(
     for step_obj in history_obj.steps:
         if step_obj.status != "ok" and step_obj.error_message:
             console.print(f"[red]Step {step_obj.step_number} '{step_obj.action_name}' failed:[/red] {step_obj.error_message}")
+
+    if step is not None:
+        target = next((st for st in history_obj.steps if st.step_number == step), None)
+        if target is None:
+            console.print(f"[red]Step {step} not found in history.[/red]")
+            return
+
+        console.print("")
+        console.print(f"[bold]Step {step} Detail[/bold]: {target.action_name}")
+        status_color = "green" if target.status == "ok" else "red"
+        console.print(f"Status: [{status_color}]{target.status}[/{status_color}]")
+        if target.error_message:
+            console.print(f"Error: {target.error_message}")
+
+        if target.changes:
+            detail_table = Table(title=f"Step {step} Changes")
+            detail_table.add_column("Attribute")
+            detail_table.add_column("Before")
+            detail_table.add_column("After")
+            detail_table.add_column("Kind")
+            for change in target.changes:
+                before_val = "—" if change.before is None else str(change.before)
+                after_val = "—" if change.after is None else str(change.after)
+                detail_table.add_row(change.attribute or "", before_val, after_val, change.kind)
+            console.print(detail_table)
+        else:
+            console.print("No recorded changes for this step.")
+
+        state_after = history_obj.get_state_at_step(step)
+        if state_after:
+            console.print("State after step (tracked attributes):")
+            state_table = Table(show_header=True)
+            state_table.add_column("Location")
+            state_table.add_column("Value")
+            state_table.add_column("Trend")
+            for part_name, part in (state_after.parts or {}).items():
+                for attr_name, attr in part.attributes.items():
+                    state_table.add_row(f"{part_name}.{attr_name}", str(attr.value), str(attr.trend))
+            for attr_name, attr in (state_after.global_attributes or {}).items():
+                state_table.add_row(attr_name, str(attr.value), str(attr.trend))
+            if state_table.row_count:
+                console.print(state_table)
 
 
 __all__ = ["app"]

@@ -51,8 +51,8 @@ class SimulationStep(BaseModel):
     parameters: Dict[str, str] = Field(default_factory=dict)
     status: str  # "ok", "rejected", "error"
     error_message: Optional[str] = None
-    object_state_before: ObjectStateSnapshot
-    object_state_after: ObjectStateSnapshot
+    object_state_before: Optional[ObjectStateSnapshot] = None
+    object_state_after: Optional[ObjectStateSnapshot] = None
     changes: List[DiffEntry] = Field(default_factory=list)
 
 
@@ -65,6 +65,7 @@ class SimulationHistory(BaseModel):
     started_at: str
     total_steps: int = 0
     steps: List[SimulationStep] = Field(default_factory=list)
+    initial_state: Optional[ObjectStateSnapshot] = None
     # Interactive clarification events captured during run
     # Stored separately from steps for simple presentation
     interactions: List[Dict[str, Any]] = Field(default_factory=list)
@@ -73,10 +74,13 @@ class SimulationHistory(BaseModel):
         """Get object state after a specific step (0-based)."""
         if step_number < 0 or step_number >= len(self.steps):
             return None
+        self.ensure_state_cache()
         return self.steps[step_number].object_state_after
 
     def get_initial_state(self) -> Optional[ObjectStateSnapshot]:
         """Get the initial object state (before any actions)."""
+        if self.initial_state is not None:
+            return self.initial_state
         if not self.steps:
             return None
         return self.steps[0].object_state_before
@@ -85,6 +89,7 @@ class SimulationHistory(BaseModel):
         """Get the final object state (after all actions)."""
         if not self.steps:
             return None
+        self.ensure_state_cache()
         return self.steps[-1].object_state_after
     
     def find_step_by_action(self, action_name: str) -> List[SimulationStep]:
@@ -98,6 +103,70 @@ class SimulationHistory(BaseModel):
     def get_failed_steps(self) -> List[SimulationStep]:
         """Get all steps that failed."""
         return [step for step in self.steps if step.status != "ok"]
+
+    def ensure_state_cache(self) -> None:
+        """Ensure before/after snapshots are populated using initial_state and deltas."""
+        if not self.steps:
+            return
+        base_state = self.initial_state
+        if base_state is None and self.steps[0].object_state_before is not None:
+            base_state = self.steps[0].object_state_before.model_copy(deep=True)
+        if base_state is None:
+            return
+
+        cursor = base_state.model_copy(deep=True)
+        for step in self.steps:
+            if step.object_state_before is None:
+                step.object_state_before = cursor.model_copy(deep=True)
+            cursor = _apply_changes_to_snapshot(cursor, step.changes)
+            step.object_state_after = cursor.model_copy(deep=True)
+
+
+def _ensure_attr_snapshot(state: ObjectStateSnapshot, part: Optional[str], attr: str) -> AttributeSnapshot:
+    """Ensure an AttributeSnapshot exists for the given path on a state snapshot."""
+    if part:
+        if part not in state.parts:
+            state.parts[part] = PartStateSnapshot()
+        part_state = state.parts[part]
+        if attr not in part_state.attributes:
+            part_state.attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+        return part_state.attributes[attr]
+
+    if attr not in state.global_attributes:
+        state.global_attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+    return state.global_attributes[attr]
+
+
+def _apply_changes_to_snapshot(state: ObjectStateSnapshot, changes: List[DiffEntry]) -> ObjectStateSnapshot:
+    """Produce a new snapshot by applying a list of DiffEntry changes."""
+    new_state = state.model_copy(deep=True)
+    for change in changes:
+        attr_path = change.attribute or ""
+        parts = attr_path.split(".")
+        is_trend = change.kind == "trend" or (parts and parts[-1] == "trend")
+        if is_trend and parts:
+            parts = parts[:-1]
+
+        part_name: Optional[str] = None
+        attr_name: Optional[str] = None
+
+        if not parts:
+            continue
+        if len(parts) == 1:
+            attr_name = parts[0]
+        else:
+            part_name = parts[0]
+            attr_name = parts[1]
+
+        if attr_name is None:
+            continue
+
+        attr_snapshot = _ensure_attr_snapshot(new_state, part_name, attr_name)
+        if is_trend:
+            attr_snapshot.trend = change.after
+        else:
+            attr_snapshot.value = change.after
+    return new_state
 
 
 class SimulationRunner:
@@ -186,6 +255,8 @@ class SimulationRunner:
 
             # Capture state before action
             state_before = self._capture_object_state(current_instance)
+            if history.initial_state is None:
+                history.initial_state = state_before.model_copy(deep=True)
 
             # Get and execute action
             action = self.registry_manager.create_behavior_enhanced_action(object_type, action_name)
@@ -365,7 +436,7 @@ class SimulationRunner:
 
         # Build a compact v2 format to improve readability and avoid redundant fields
         data: Dict[str, Any] = {
-            "history_version": 2,
+            "history_version": 3,
             "simulation_id": history.simulation_id,
             "object_type": history.object_type,
             "object_name": history.object_name,
@@ -373,6 +444,11 @@ class SimulationRunner:
             "total_steps": history.total_steps,
             "steps": [],
         }
+        history.ensure_state_cache()
+        if history.initial_state is None and history.steps and history.steps[0].object_state_before is not None:
+            history.initial_state = history.steps[0].object_state_before.model_copy(deep=True)
+        if history.initial_state is not None:
+            data["initial_state"] = history.initial_state.model_dump()
         if history.interactions:
             data["interactions"] = history.interactions
 
@@ -389,8 +465,6 @@ class SimulationRunner:
                     {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind}
                     for c in s.changes
                 ]
-            step_entry["object_state_before"] = s.object_state_before.model_dump()
-            step_entry["object_state_after"] = s.object_state_after.model_dump()
             data["steps"].append(step_entry)
 
         with open(file_path, 'w') as f:
@@ -400,6 +474,72 @@ class SimulationRunner:
         """Load simulation history from YAML file (supports v1 and compact v2 formats)."""
         with open(file_path, 'r') as f:
             data = yaml.safe_load(f)
+
+        # v3 delta format
+        if isinstance(data, dict) and data.get("history_version") == 3 and "steps" in data:
+            sim_id = data.get("simulation_id", "unknown")
+            obj_type = data.get("object_type", "unknown")
+            obj_name = data.get("object_name", obj_type)
+            started = data.get("started_at")
+            total = data.get("total_steps", len(data.get("steps") or []))
+
+            initial_state_raw = data.get("initial_state")
+            initial_state: Optional[ObjectStateSnapshot] = None
+            if initial_state_raw:
+                try:
+                    initial_state = ObjectStateSnapshot.model_validate(initial_state_raw)
+                except Exception as exc:
+                    raise ValueError(f"Invalid initial_state in history file: {exc}") from exc
+
+            steps: List[SimulationStep] = []
+            cursor = initial_state.model_copy(deep=True) if initial_state is not None else None
+
+            for entry in data.get("steps", []):
+                step_num = entry.get("step") if entry.get("step") is not None else entry.get("step_number", 0)
+                action = entry.get("action") or entry.get("action_name")
+                status = entry.get("status", "ok")
+                error = entry.get("error") or entry.get("error_message")
+
+                changes_raw = entry.get("changes", []) or []
+                changes: List[DiffEntry] = []
+                for cr in changes_raw:
+                    try:
+                        changes.append(DiffEntry(**cr))
+                    except Exception:
+                        continue
+
+                before_snapshot: Optional[ObjectStateSnapshot] = cursor.model_copy(deep=True) if cursor is not None else None
+                after_snapshot: Optional[ObjectStateSnapshot] = None
+                if cursor is not None:
+                    after_snapshot = _apply_changes_to_snapshot(cursor, changes)
+                    cursor = after_snapshot.model_copy(deep=True)
+
+                steps.append(
+                    SimulationStep(
+                        step_number=int(step_num),
+                        action_name=str(action),
+                        object_name=str(obj_name),
+                        parameters={},
+                        status=str(status),
+                        error_message=error,
+                        object_state_before=before_snapshot,
+                        object_state_after=after_snapshot,
+                        changes=changes,
+                    )
+                )
+
+            history = SimulationHistory(
+                simulation_id=str(sim_id),
+                object_type=str(obj_type),
+                object_name=str(obj_name),
+                started_at=str(started),
+                total_steps=int(total),
+                steps=steps,
+                initial_state=initial_state,
+                interactions=list(data.get("interactions") or []),
+            )
+            history.ensure_state_cache()
+            return history
 
         # v2 compact format
         if isinstance(data, dict) and data.get("history_version") == 2 and "steps" in data:
@@ -454,6 +594,7 @@ class SimulationRunner:
                 started_at=str(started),
                 total_steps=int(total),
                 steps=steps,
+                initial_state=steps[0].object_state_before if steps else None,
                 interactions=list(data.get("interactions") or []),
             )
 
