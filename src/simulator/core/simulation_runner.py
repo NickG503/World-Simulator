@@ -308,9 +308,15 @@ class SimulationRunner:
                     return None
 
                 retry_guard = 0
+                clarification_header_shown = False
                 while result.status == "rejected" and getattr(result, "clarifications", None) and retry_guard < 5:
                     retry_guard += 1
                     asked_any = False
+                    if resolver is not None and not clarification_header_shown:
+                        has_user_questions = any(not clar.startswith("[INFO]") for clar in result.clarifications)
+                        if has_user_questions:
+                            resolver.console.print(f"[cyan]Processing action '{action_name}'[/cyan]\n")
+                            clarification_header_shown = True
                     for q in result.clarifications:
                         # Handle informational messages (structure descriptions)
                         if q.startswith("[INFO]"):
