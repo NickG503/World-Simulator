@@ -30,9 +30,14 @@ class AttributeCondition(Condition):
         # Read current value
         lhs = context.read_attribute(self.target)
 
-        # Unknown values should not satisfy preconditions; force clarification path.
+        # Unknown values should not satisfy preconditions or postconditions
+        # during action execution (context.action is set), to force
+        # clarification. For post-action validation (e.g., constraints) the
+        # operator check below should run so we can reason about the last
+        # known value.
         if isinstance(lhs, str) and lhs == "unknown":
-            return False
+            if context.action is not None:
+                return False
 
         if self.operator == "equals":
             return lhs == rhs

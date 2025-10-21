@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict
 from pydantic import BaseModel
 from simulator.core.objects import AttributeTarget, ObjectInstance
+from simulator.core.attributes import AttributeInstance
 from simulator.core.registries.registry_manager import RegistryManager
 
 
@@ -55,6 +56,9 @@ class ApplicationContext(EvaluationContext):
         # Record before and apply
         self._last_before = ai.current_value if isinstance(ai.current_value, str) else None
         ai.current_value = value
+        ai.last_known_value = value
+        ai.confidence = 1.0
+        ai.last_trend_direction = None
         return target.attribute if target.part is None else f"{target.part}.{target.attribute}"
 
     def write_trend(self, target: AttributeTarget, direction: str, instance: ObjectInstance) -> str:
@@ -66,6 +70,7 @@ class ApplicationContext(EvaluationContext):
             before = ai.trend or "none"
             self._last_before = before
             ai.trend = direction  # type: ignore
+            self._handle_trend_side_effects(ai, direction)
             return f"{target.attribute}.trend"
         if target.part not in instance.parts:
             raise KeyError(f"Part not found: {target.part}")
@@ -76,4 +81,17 @@ class ApplicationContext(EvaluationContext):
         before = ai.trend or "none"
         self._last_before = before
         ai.trend = direction  # type: ignore
+        self._handle_trend_side_effects(ai, direction)
         return f"{target.part}.{target.attribute}.trend"
+
+    def _handle_trend_side_effects(self, ai: AttributeInstance, direction: str) -> None:
+        """Adjust attribute metadata when trend implies movement away from known value."""
+        if direction not in ("up", "down"):
+            return
+        # Preserve last known value if we have a concrete reading
+        if isinstance(ai.current_value, str) and ai.current_value != "unknown":
+            ai.last_known_value = ai.current_value
+        # Mark value unknown to signal follow-up clarification
+        ai.current_value = "unknown"
+        ai.confidence = 0.0
+        ai.last_trend_direction = direction  # remember most recent direction

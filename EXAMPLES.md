@@ -595,6 +595,18 @@ uv run sim simulate --obj flashlight \
 4. `turn_on` → Turns on with new battery
 5. `turn_off` → Powers off
 
+### Flashlight Trend Clarification
+
+Check the filtered clarification options after the battery drains from repeated use:
+
+```bash
+uv run sim simulate --obj flashlight replace_battery=high turn_on turn_off turn_on --name flashlight_battery_trend_high
+uv run sim simulate --obj flashlight replace_battery=medium turn_on turn_off turn_on --name flashlight_battery_trend_medium
+uv run sim simulate --obj flashlight replace_battery=low turn_on turn_off turn_on --name flashlight_battery_trend_low
+```
+
+During the final `turn_on` you'll be prompted for `battery.level`; the previous level is excluded from the menu, so pick any of the lower options when the clarification appears.
+
 ### Kettle Refill Sequence
 
 Multiple actions with the same action name but different parameters:

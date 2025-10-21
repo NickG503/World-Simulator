@@ -11,4 +11,5 @@ class AttributeInstance(BaseModel):
     current_value: Union[str, Literal["unknown"]]
     trend: Optional[Literal["up", "down", "none"]] = None
     confidence: float = 1.0
-
+    last_known_value: Optional[str] = None
+    last_trend_direction: Optional[Literal["up", "down"]] = None

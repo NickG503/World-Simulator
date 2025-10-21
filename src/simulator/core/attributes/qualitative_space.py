@@ -1,5 +1,5 @@
 from __future__ import annotations
-from typing import List, Literal
+from typing import List, Literal, Optional
 from pydantic import BaseModel, field_validator
 
 
@@ -45,3 +45,18 @@ class QualitativeSpace(BaseModel):
             raise ValueError(f"Invalid direction: {direction}")
         return self.levels[idx]
 
+    def constrained_levels(
+        self,
+        *,
+        last_known_value: Optional[str],
+        trend: Optional[Literal["up", "down", "none"]],
+    ) -> List[str]:
+        """Return ordered levels consistent with a known trend direction."""
+        if trend not in ("up", "down") or not last_known_value or last_known_value not in self.levels:
+            return list(self.levels)
+        idx = self.levels.index(last_known_value)
+        if trend == "down":
+            allowed = self.levels[:idx + 1]
+        else:  # trend == "up"
+            allowed = self.levels[idx :]
+        return list(allowed) if allowed else list(self.levels)

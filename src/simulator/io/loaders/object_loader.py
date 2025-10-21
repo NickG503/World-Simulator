@@ -48,15 +48,21 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
             if a_spec.default_value == "unknown":
                 default = "unknown"
                 confidence = 0.0  # Unknown values have no confidence
+                last_known = None
+                last_trend = None
             else:
                 default = a_spec.default_value if a_spec.default_value is not None else space.levels[0]
                 confidence = 1.0
+                last_known = default
+                last_trend = None
             
             attrs[a_name] = AttributeInstance(
                 spec=a_spec, 
                 current_value=default, 
                 trend="none",
-                confidence=confidence
+                confidence=confidence,
+                last_known_value=last_known,
+                last_trend_direction=last_trend,
             )
         parts[p_name] = PartInstance(spec=p_spec, attributes=attrs)
 
@@ -67,15 +73,21 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
         if g_spec.default_value == "unknown":
             default = "unknown"
             confidence = 0.0  # Unknown values have no confidence
+            last_known = None
+            last_trend = None
         else:
             default = g_spec.default_value if g_spec.default_value is not None else space.levels[0]
             confidence = 1.0
+            last_known = default
+            last_trend = None
             
         g_attrs[g_name] = AttributeInstance(
             spec=g_spec, 
             current_value=default, 
             trend="none",
-            confidence=confidence
+            confidence=confidence,
+            last_known_value=last_known,
+            last_trend_direction=last_trend,
         )
 
     return ObjectInstance(type=obj_type, parts=parts, global_attributes=g_attrs)

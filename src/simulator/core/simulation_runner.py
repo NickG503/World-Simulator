@@ -222,6 +222,7 @@ class SimulationRunner:
                     ai = AttributeTarget.from_string(ref).resolve(obj_instance)
                     ai.current_value = "unknown"  # type: ignore
                     ai.confidence = 0.0
+                    ai.last_trend_direction = None
                 except Exception:
                     # ignore invalid unknown paths
                     pass
@@ -334,7 +335,13 @@ class SimulationRunner:
                             ai = _AT.from_string(attr_ref).resolve(current_instance)
                             space = self.registry_manager.spaces.get(ai.spec.space_id)
                             if resolver is not None:
-                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id, action_name=action_name, question=q)
+                                picked = resolver.prompt_for_value(
+                                    attr_ref,
+                                    ai.spec.space_id,
+                                    action_name=action_name,
+                                    question=q,
+                                    attribute_instance=ai,
+                                )
                             else:
                                 picked = None
                             if picked is None:
@@ -345,6 +352,8 @@ class SimulationRunner:
                                 continue
                             ai.current_value = picked
                             ai.confidence = 1.0
+                            ai.last_known_value = picked
+                            ai.last_trend_direction = None
                             
                             # Show what was set
                             if resolver is not None:

@@ -12,9 +12,14 @@ be able to do the params option like in this command uv run sim simluate kettle 
 
 # tasks after the talking to Nir 5/10/25
 add the current action before the question - done
-for parameters alwyes do it with to - done
+for parameters alwayes do it with to - done
 add logic of OR in the preconditions - done
 modify the history files to include the delta - done
-add logic of unknown in post condition
-think about logic of action that makes unknown
-combine uknown logic regrading with trend
+add logic of unknown in post condition - done
+add the logic of multiple precondtions/postcondtin unknown attributes  - done
+handle any depth of nested conditions with unknown - done
+write which action we currenly in - done
+think about logic of action that makes unknown (combine uknown logic regrading with trend)
+imporve the message of failing in both post and pre condtions
+think what to with that else branch with dafna
+check everthing works
