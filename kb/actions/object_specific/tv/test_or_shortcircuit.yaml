@@ -1,0 +1,35 @@
+action: test_or_shortcircuit
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  # OR condition: voltage is high OR wifi is on
+  # If voltage is high, should NOT ask about wifi (short-circuit)
+  - type: conditional
+    condition:
+      type: or
+      conditions:
+        - type: attribute_check
+          target: power_source.voltage
+          operator: equals
+          value: high
+        - type: attribute_check
+          target: network.wifi_connected
+          operator: equals
+          value: on
+    then:
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+    else:
+      - type: set_attribute
+        target: screen.brightness
+        value: low
+

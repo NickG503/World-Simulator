@@ -51,7 +51,7 @@ parts:
     attributes:
       temperature:
         space: temperature_level
-        default: cold
+        default: unknown
         mutable: true
 
 constraints:

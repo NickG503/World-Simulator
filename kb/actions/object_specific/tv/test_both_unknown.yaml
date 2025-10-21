@@ -1,0 +1,34 @@
+action: test_both_unknown_postcond
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  # AND condition checking TWO unknown attributes
+  - type: conditional
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: power_source.voltage
+          operator: equals
+          value: high
+        - type: attribute_check
+          target: network.wifi_connected
+          operator: equals
+          value: on
+    then:
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+      - type: set_attribute
+        target: audio.volume
+        value: high
+    # No else - must satisfy BOTH conditions
+

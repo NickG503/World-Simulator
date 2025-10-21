@@ -293,9 +293,16 @@ class SimulationRunner:
 
             result = self.engine.apply_action(current_instance, action, parameters)
             if interactive:
-                # If preconditions failed due to unknowns, ask and retry
+                # If preconditions or postconditions failed due to unknowns, ask and retry
                 def _extract_attr_from_question(q: str) -> Optional[str]:
                     qs = q.strip()
+                    # Handle "Precondition: what is X?" format
+                    if qs.lower().startswith("precondition: what is ") and qs.endswith("?"):
+                        return qs[len("Precondition: what is "):-1].strip()
+                    # Handle "Postcondition: what is X?" format
+                    if qs.lower().startswith("postcondition: what is ") and qs.endswith("?"):
+                        return qs[len("Postcondition: what is "):-1].strip()
+                    # Legacy format for backward compatibility
                     if qs.lower().startswith("what is ") and qs.endswith("?"):
                         return qs[len("What is "):-1].strip()
                     return None
@@ -305,6 +312,14 @@ class SimulationRunner:
                     retry_guard += 1
                     asked_any = False
                     for q in result.clarifications:
+                        # Handle informational messages (structure descriptions)
+                        if q.startswith("[INFO]"):
+                            # Display informational message without asking for input
+                            if resolver is not None:
+                                info_msg = q.replace("[INFO] ", "")
+                                resolver.console.print(f"[cyan]{info_msg}[/cyan]\n")
+                            continue
+                        
                         attr_ref = _extract_attr_from_question(q)
                         if not attr_ref:
                             continue
@@ -313,7 +328,7 @@ class SimulationRunner:
                             ai = _AT.from_string(attr_ref).resolve(current_instance)
                             space = self.registry_manager.spaces.get(ai.spec.space_id)
                             if resolver is not None:
-                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id, action_name=action_name)
+                                picked = resolver.prompt_for_value(attr_ref, ai.spec.space_id, action_name=action_name, question=q)
                             else:
                                 picked = None
                             if picked is None:
@@ -324,6 +339,11 @@ class SimulationRunner:
                                 continue
                             ai.current_value = picked
                             ai.confidence = 1.0
+                            
+                            # Show what was set
+                            if resolver is not None:
+                                resolver.console.print(f"[green]→ Set {attr_ref} = {picked}[/green]\n")
+                            
                             # record interaction for dataset/history
                             self_log_entry = {
                                 "step": step_index,
@@ -395,6 +415,27 @@ class SimulationRunner:
             if verbose:
                 if result.status == "ok":
                     logger.info("✅ %s ran successfully", action_name)
+                    # Show what effects were applied
+                    if resolver is not None and result.changes:
+                        # Check for conditional evaluation info first
+                        for change in result.changes:
+                            if change.kind == "info" and change.attribute == "[CONDITIONAL_EVAL]":
+                                # Show postcondition evaluation result
+                                if "FALSE" in change.after:
+                                    resolver.console.print(f"[yellow]⚠ Postcondition evaluated: {change.after}[/yellow]\n")
+                                else:
+                                    resolver.console.print(f"[cyan]✓ Postcondition evaluated: {change.after}[/cyan]\n")
+                        
+                        # Show actual effects applied
+                        value_changes = [c for c in result.changes if c.kind in ("value", "trend")]
+                        if value_changes:
+                            resolver.console.print(f"[dim cyan]Effects applied:[/dim cyan]")
+                            for change in value_changes:
+                                if change.kind == "value":
+                                    resolver.console.print(f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]")
+                                elif change.kind == "trend":
+                                    resolver.console.print(f"[dim]  • {change.attribute}.trend: {change.before} → {change.after}[/dim]")
+                            resolver.console.print("")  # Empty line
                 else:
                     logger.warning("Action failed: %s", result.reason)
 

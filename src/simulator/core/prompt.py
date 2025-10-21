@@ -100,7 +100,7 @@ class UnknownValueResolver:
         
         return True
     
-    def prompt_for_value(self, attribute_path: str, space_id: str, action_name: Optional[str] = None) -> Optional[str]:
+    def prompt_for_value(self, attribute_path: str, space_id: str, action_name: Optional[str] = None, question: Optional[str] = None) -> Optional[str]:
         """
         Prompt for a single attribute value.
         
@@ -108,13 +108,17 @@ class UnknownValueResolver:
             attribute_path: Full path to the attribute (e.g., "battery.level")
             space_id: ID of the qualitative space
             action_name: Optional name of the action that requires this value
+            question: Optional clarification question to display (e.g., "Precondition: what is X?")
             
         Returns:
             Selected value or None if cancelled
         """
         space = self.registries.spaces.get(space_id)
         
-        if action_name:
+        if question:
+            # Display the clarification question (includes Pre/Postcondition prefix)
+            self.console.print(f"[yellow]{question}[/yellow]\n")
+        elif action_name:
             self.console.print(f"[yellow]Trying to run '{action_name}' action but {attribute_path} is unknown.[/yellow]\n")
         
         self.console.print(f"[bold]Select value for {attribute_path}:[/bold]")

@@ -1,0 +1,41 @@
+action: test_nested_logic
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  # Nested condition: (voltage==high OR wifi==on) AND channel!=low
+  # Smart logic will optimize the evaluation order
+  - type: conditional
+    condition:
+      type: and
+      conditions:
+        - type: or
+          conditions:
+            - type: attribute_check
+              target: power_source.voltage
+              operator: equals
+              value: high
+            - type: attribute_check
+              target: network.wifi_connected
+              operator: equals
+              value: on
+        - type: attribute_check
+          target: audio.channel
+          operator: not_equals
+          value: low
+    then:
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+    else:
+      - type: set_attribute
+        target: screen.brightness
+        value: low
+

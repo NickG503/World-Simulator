@@ -1,0 +1,32 @@
+action: test_required_postcondition
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  # Conditional effect WITHOUT else branch
+  # This means the condition is REQUIRED (must be TRUE)
+  - type: conditional
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: power_source.voltage
+          operator: equals
+          value: high
+        - type: attribute_check
+          target: network.wifi_connected
+          operator: equals
+          value: on
+    then:
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+    # NO else branch - if condition is FALSE, action should FAIL
+

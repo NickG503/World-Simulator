@@ -1,0 +1,44 @@
+action: smart_adjust
+object_type: tv
+
+parameters: {}
+
+preconditions:
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: on
+
+effects:
+  # First conditional effect checks network
+  - type: conditional
+    condition:
+      type: attribute_check
+      target: network.wifi_connected
+      operator: equals
+      value: on
+    then:
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+    else:
+      - type: set_attribute
+        target: screen.brightness
+        value: medium
+  
+  # Second conditional effect checks voltage
+  - type: conditional
+    condition:
+      type: attribute_check
+      target: power_source.voltage
+      operator: equals
+      value: high
+    then:
+      - type: set_attribute
+        target: audio.volume
+        value: high
+    else:
+      - type: set_attribute
+        target: audio.volume
+        value: medium
+
