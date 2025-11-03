@@ -38,4 +38,3 @@ effects:
       - type: set_attribute
         target: screen.brightness
         value: low
-

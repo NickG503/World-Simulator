@@ -1,6 +1,9 @@
 from __future__ import annotations
+
 from typing import Literal, Optional, Union
+
 from pydantic import BaseModel
+
 from .attribute_spec import AttributeSpec
 
 

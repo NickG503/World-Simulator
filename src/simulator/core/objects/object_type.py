@@ -1,13 +1,16 @@
 from __future__ import annotations
-from typing import Dict, List, TYPE_CHECKING, Any
+
+from typing import TYPE_CHECKING, Any, Dict, List
+
 from pydantic import BaseModel, Field
-from .part import PartSpec
-from simulator.core.attributes import AttributeSpec
+
 from simulator.core.actions.conditions.base import Condition
 from simulator.core.actions.effects.base import Effect
+from simulator.core.attributes import AttributeSpec
+
+from .part import PartSpec
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
-    from simulator.core.constraints.constraint import Constraint
     from simulator.core.actions.specs import ConditionSpec as _ConditionSpec
 else:  # pragma: no cover - runtime alias
     _ConditionSpec = Any

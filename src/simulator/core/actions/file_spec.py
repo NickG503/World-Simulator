@@ -12,8 +12,8 @@ from simulator.core.actions.specs import (
     EffectSpec,
     build_condition,
     build_effect,
-    parse_preconditions_field,
     parse_effect_spec,
+    parse_preconditions_field,
 )
 
 

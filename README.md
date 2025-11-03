@@ -1,38 +1,63 @@
 # World Simulator
 
-Robust, deterministic simulator for everyday objects. YAML knowledge bases are parsed into typed models, validated for consistency, and executed to produce canonical state transitions.
+A robust, deterministic simulator for everyday objects with qualitative reasoning. YAML knowledge bases are parsed into typed models, validated for consistency, and executed to produce canonical state transitions.
+
+[![Tests](https://img.shields.io/badge/tests-passing-brightgreen)]()
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
+[![Code style: ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
 
 ---
 
 ## Overview
 
-- **Knowledge driven** – qualitative spaces, object definitions, and actions live in `kb/` and are loaded through strict schemas.
-- **Explicit runtime** – `TransitionEngine` applies validated actions to object instances while enforcing constraints and recording diffs.
-- **Composed outputs** – simulations produce compact YAML histories and minimal dataset text for downstream evaluation.
-- **CLI oriented** – the `sim` command gives high-level entry points (validate, show, apply, simulate, history) with clear error reporting.
+- **Knowledge driven** – Qualitative spaces, object definitions, and actions live in `kb/` and are loaded through strict schemas
+- **Explicit runtime** – `TransitionEngine` applies validated actions to object instances while enforcing constraints and recording diffs
+- **Composed outputs** – Simulations produce compact YAML histories and minimal dataset text for downstream evaluation
+- **CLI oriented** – The `sim` command gives high-level entry points (validate, show, apply, simulate, history) with clear error reporting
+- **Interactive clarifications** – Handles unknown attribute values by asking clarification questions with smart short-circuit logic
 
 ---
 
 ## Quick Start
 
+### Installation
+
 ```bash
-# Install dependencies
+# Clone the repository
+git clone <repository-url>
+cd World-Simulator
+
+# Install dependencies using uv
 uv sync
 
+# Verify installation
+uv run sim --help
+```
+
+### Basic Usage
+
+```bash
 # Validate the bundled knowledge base
 uv run sim validate
 
 # Inspect an object definition
 uv run sim show object flashlight
 
-# Apply an action
-uv run sim apply flashlight turn_on
+# See available actions for an object
+uv run sim show behaviors flashlight
 
-# Run a short simulation and save history + dataset
-uv run sim simulate flashlight "turn_on" "drain_battery" --history-name run.yaml --dataset-name run.txt
+# Run a simulation (interactive)
+uv run sim simulate --obj flashlight turn_on turn_off --name basic_test
+
+# View the simulation history
+uv run sim history outputs/histories/basic_test.yaml
 ```
 
-Add `--verbose-load` to any command to see full loader validation traces, and `--verbose-run` during simulations for step-by-step logs.
+**Note**: Simulations are interactive and will prompt you for clarification when encountering unknown attribute values.
+
+### Examples
+
+For comprehensive CLI examples including parameters, clarifications, and advanced features, see **[EXAMPLES.md](EXAMPLES.md)**.
 
 ---
 
@@ -109,19 +134,155 @@ Use `--verbose-load` whenever you need the full validation trace for malformed Y
 
 ---
 
-## Development Notes
+## Testing
 
-- Install tooling with `uv sync`; run tests via `PYTHONPATH=src pytest`.
-- Knowledge base additions under `kb/` are validated automatically—use `--verbose-load` while authoring.
-- Simulations emit typed histories and dataset text blocks for downstream evaluation or LLM testing.
-- Constraint and behaviour checks run during validation, catching immutable writes or unknown targets before runtime.
+### Run All Tests
+
+The test runner performs three checks in sequence:
+1. **Code Formatting** - Verifies code is properly formatted
+2. **Linting** - Runs ruff linter checks
+3. **Tests** - Runs the complete test suite
+
+```bash
+# Run complete test suite with formatting and linting checks
+./scripts/run_all_tests.sh
+
+# Run with verbose output
+./scripts/run_all_tests.sh -v
+
+# Run with coverage report
+./scripts/run_all_tests.sh --coverage
+```
+
+If formatting or linting fails, the script will exit early with helpful messages on how to fix the issues.
+
+### Run Specific Tests
+
+```bash
+# Run specific test file
+uv run pytest tests/test_flashlight_turn_off.py
+
+# Run specific test function
+uv run pytest tests/test_flashlight_turn_off.py::test_behavior_turn_off_ok -v
+```
+
+**Current Status**: All 29 tests passing ✓
 
 ---
 
-## Change Log Highlights
+## Development
 
-- CLI gained `--verbose-load` and `--verbose-run` options for detailed loader traces and simulation logging.
-- Core modules now emit logs via Python’s logging framework instead of unguarded prints.
-- Simulation and narration utilities operate on typed snapshot models, deprecating the previous ad-hoc helpers.
+### Setting Up Development Environment
+
+```bash
+# Install dependencies including dev tools
+uv sync
+
+# Install pre-commit hooks
+uv run pre-commit install
+
+# Run pre-commit checks manually
+uv run pre-commit run --all-files
+```
+
+### Pre-commit Hooks
+
+This project uses pre-commit hooks to ensure code quality:
+
+- **ruff format** - Automatic code formatting
+- **ruff check** - Linting and code quality checks
+- **YAML validation** - Ensures valid YAML syntax
+- **File cleanup** - Removes trailing whitespace, ensures newlines at EOF
+
+Hooks run automatically on `git commit`. To bypass (not recommended): `git commit --no-verify`
+
+### Code Style
+
+We use [Ruff](https://github.com/astral-sh/ruff) for both formatting and linting:
+
+```bash
+# Format code
+uv run ruff format src/ tests/
+
+# Check linting
+uv run ruff check src/ tests/
+
+# Auto-fix linting issues
+uv run ruff check --fix src/ tests/
+```
+
+### Knowledge Base Development
+
+- Knowledge base files live in `kb/` (spaces, objects, actions)
+- All YAML is validated automatically - use `--verbose-load` while authoring
+- Run `uv run sim validate` after making changes
+- See [EXAMPLES.md](EXAMPLES.md) for detailed action/behavior examples
+
+### Adding New Objects or Actions
+
+1. Create YAML definition in appropriate `kb/` subdirectory
+2. Run validation: `uv run sim validate --verbose-load`
+3. Test manually: `uv run sim show object <name>`
+4. Add unit tests if adding new behavior patterns
+5. Update EXAMPLES.md with usage examples
+
+---
+
+## Continuous Integration
+
+This project uses GitHub Actions for CI/CD:
+
+- **Formatting Check** - Ensures code is properly formatted
+- **Linting** - Runs ruff linter on all Python code
+- **Tests** - Runs complete test suite on Python 3.10 and 3.11
+
+CI runs automatically on:
+- Every push to `master`
+- Every pull request
+
+---
+
+## Project Structure
+
+```
+World-Simulator/
+├── src/simulator/       # Core simulator code
+│   ├── cli/            # Typer-based CLI commands
+│   ├── core/           # Engine, actions, objects, registries
+│   ├── io/             # YAML loaders
+│   └── utils/          # Utilities
+├── kb/                 # Knowledge base
+│   ├── spaces/         # Qualitative space definitions
+│   ├── objects/        # Object type definitions
+│   └── actions/        # Action definitions (generic & object-specific)
+├── tests/              # Test suite
+├── scripts/            # Utility scripts
+├── outputs/            # Simulation outputs (histories, results)
+└── docs/              # Documentation
+```
+
+---
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch: `git checkout -b feature-name`
+3. Make your changes
+4. Ensure tests pass: `./scripts/run_all_tests.sh`
+5. Ensure formatting is correct: `uv run ruff format . && uv run ruff check .`
+6. Commit your changes (pre-commit hooks will run automatically)
+7. Push and create a pull request
+
+**Note**: All PRs must pass CI checks (formatting, linting, tests) before merging.
+
+---
+
+## License
+
+[Add your license information here]
+
+---
+
+## Acknowledgments
 
 World Simulator keeps the codebase lean: strong schemas, explicit registries, and a clear runtime pipeline so you can expand the knowledge base or integrate new evaluators with confidence.

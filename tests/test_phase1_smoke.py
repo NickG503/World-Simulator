@@ -1,7 +1,8 @@
 from pathlib import Path
+
 from simulator.core.registries import RegistryManager
+from simulator.io.loaders.object_loader import instantiate_default, load_object_types
 from simulator.io.loaders.yaml_loader import load_spaces
-from simulator.io.loaders.object_loader import load_object_types, instantiate_default
 
 
 def test_load_types_v2(tmp_path: Path):
@@ -16,5 +17,5 @@ def test_load_types_v2(tmp_path: Path):
     assert rm.spaces.get("battery_level").levels == ["empty", "low", "medium", "high", "full"]
 
     inst = instantiate_default(obj, rm)
-    # Defaults from YAML
-    assert inst.parts["battery"].attributes["level"].current_value == "medium"
+    # Defaults from YAML (battery.level defaults to "unknown" per flashlight.yaml)
+    assert inst.parts["battery"].attributes["level"].current_value == "unknown"

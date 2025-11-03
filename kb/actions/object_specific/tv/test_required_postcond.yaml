@@ -29,4 +29,3 @@ effects:
         target: screen.brightness
         value: high
     # NO else branch - if condition is FALSE, action should FAIL
-

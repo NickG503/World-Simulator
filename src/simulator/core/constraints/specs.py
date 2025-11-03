@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Dict, Literal, Type
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 from simulator.core.actions.specs import ConditionSpec, parse_condition_spec
 
@@ -50,4 +50,3 @@ __all__ = [
     "DependencyConstraintSpec",
     "parse_constraint_spec",
 ]
-

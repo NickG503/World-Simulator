@@ -1,13 +1,16 @@
 from __future__ import annotations
+
 import glob
 import os
 from typing import Any, Dict
+
 import yaml
-from simulator.core.actions.action import Action, ActionMetadata
-from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.actions.file_spec import ActionFileSpec
-from simulator.io.loaders.errors import LoaderError
 from pydantic import ValidationError
+
+from simulator.core.actions.action import Action, ActionMetadata
+from simulator.core.actions.file_spec import ActionFileSpec
+from simulator.core.registries.registry_manager import RegistryManager
+from simulator.io.loaders.errors import LoaderError
 
 
 def _read_yaml(path: str) -> Dict[str, Any]:
@@ -40,7 +43,7 @@ def load_actions(path: str, registries: RegistryManager) -> None:
             effects=effects,
             metadata=metadata,
         )
-        
+
         # Register with object_type/name key
         key = f"{action.object_type}/{action.name}"
         try:

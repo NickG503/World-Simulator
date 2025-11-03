@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
+
 from pydantic import BaseModel
 
 
@@ -12,4 +14,3 @@ class Condition(BaseModel, ABC):
 
     def describe(self) -> str:
         return self.__class__.__name__
-

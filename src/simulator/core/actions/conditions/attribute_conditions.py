@@ -1,9 +1,10 @@
 from __future__ import annotations
+
 from typing import Literal, Union
-from pydantic import BaseModel
-from .base import Condition
+
 from simulator.core.objects import AttributeTarget
 
+from .base import Condition
 
 ComparisonOperator = Literal["equals", "not_equals", "lt", "lte", "gt", "gte"]
 
@@ -16,8 +17,8 @@ class AttributeCondition(Condition):
     value: Union[str, "ParameterReference"]  # noqa: F821
 
     def evaluate(self, context: "EvaluationContext") -> bool:  # noqa: F821
-        from simulator.core.engine.context import EvaluationContext  # local import
         from simulator.core.actions.parameter import ParameterReference
+        from simulator.core.engine.context import EvaluationContext  # local import
 
         assert isinstance(context, EvaluationContext)
 
@@ -64,17 +65,26 @@ class AttributeCondition(Condition):
             return False
         else:
             raise ValueError(f"Unknown operator: {self.operator}")
-    
+
     def describe(self) -> str:
         """Human-readable description of this condition."""
-        op_map = {"equals": "==", "not_equals": "!=", "lt": "<", "lte": "<=", "gt": ">", "gte": ">="}
+        op_map = {
+            "equals": "==",
+            "not_equals": "!=",
+            "lt": "<",
+            "lte": "<=",
+            "gt": ">",
+            "gte": ">=",
+        }
         op_symbol = op_map.get(self.operator, self.operator)
-        value_str = self.value.name if hasattr(self.value, 'name') else str(self.value)
+        value_str = self.value.name if hasattr(self.value, "name") else str(self.value)
         return f"{self.target.to_string()} {op_symbol} {value_str}"
 
 
 def _rebuild_models():
     from simulator.core.actions.parameter import ParameterReference  # noqa: F401
+
     AttributeCondition.model_rebuild()
+
 
 _rebuild_models()

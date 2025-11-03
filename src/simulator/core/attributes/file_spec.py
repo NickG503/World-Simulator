@@ -23,4 +23,3 @@ class QualitativeSpaceFileSpec(BaseModel):
 
 
 __all__ = ["QualitativeSpaceFileSpec", "QualitativeSpaceEntrySpec"]
-

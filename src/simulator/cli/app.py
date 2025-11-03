@@ -7,35 +7,30 @@ from typing import Dict, Optional
 import typer
 from rich.console import Console
 from rich.table import Table
-
 from typer.core import TyperCommand
 
 from simulator.cli.formatters import (
-    format_constraint,
-    build_object_definition_table,
     build_changes_table,
+    build_object_definition_table,
+    format_constraint,
 )
 from simulator.cli.load_helpers import load_or_exit
 from simulator.cli.paths import (
     kb_actions_path,
     kb_objects_path,
     kb_spaces_path,
-    default_history_path,
-    default_result_path,
     resolve_history_path,
     resolve_result_path,
 )
 from simulator.cli.services import apply_action, run_simulation
+from simulator.core.dataset.sequential_dataset import build_interactive_dataset_text
 from simulator.core.engine.transition_engine import TransitionResult
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries import RegistryManager
 from simulator.core.registries.validators import RegistryValidator
 from simulator.io.loaders.action_loader import load_actions
-from simulator.io.loaders.object_loader import load_object_types, instantiate_default
+from simulator.io.loaders.object_loader import load_object_types
 from simulator.io.loaders.yaml_loader import load_spaces
-from simulator.core.objects.part import AttributeTarget
-from simulator.core.dataset.sequential_dataset import build_interactive_dataset_text
-
 
 app = typer.Typer(help="Simulator CLI: validate knowledge base, inspect objects, and run actions.")
 console = Console()
@@ -134,8 +129,7 @@ def _infer_inline_param_name(rm: RegistryManager, object_name: str, action_name:
         return required[0], None
 
     return None, (
-        f"[red]Action '{action_name}' has multiple parameters[/red]. "
-        "Use the explicit syntax 'action:param=value'."
+        f"[red]Action '{action_name}' has multiple parameters[/red]. Use the explicit syntax 'action:param=value'."
     )
 
 
@@ -348,7 +342,9 @@ def apply(
 def simulate(
     obj: str = typer.Option(..., "--obj", help="Object type to simulate"),
     actions: list[str] = typer.Argument(..., help="Actions to execute (use action=value for inline parameters)"),
-    run_name: str | None = typer.Option(None, "--name", help="Name for history and result files (auto-generated if not provided)"),
+    run_name: str | None = typer.Option(
+        None, "--name", help="Name for history and result files (auto-generated if not provided)"
+    ),
     objs: str | None = typer.Option(None, "--objs-path", help="Path to kb/objects folder"),
     acts: str | None = typer.Option(None, "--acts-path", help="Path to kb/actions folder"),
     verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
@@ -358,10 +354,7 @@ def simulate(
     action_specs: list[dict] = []
     for action_str in actions:
         if ":" in action_str:
-            console.print(
-                "[red]Colon syntax is no longer supported.[/red] "
-                "Use 'action=value' for inline parameters."
-            )
+            console.print("[red]Colon syntax is no longer supported.[/red] Use 'action=value' for inline parameters.")
             raise typer.Exit(code=2)
 
         if "=" in action_str:
@@ -384,9 +377,7 @@ def simulate(
     def _resolve_parameter(action_name: str, param_name: str, param_spec) -> str:
         choices = getattr(param_spec, "choices", None) or []
         if choices:
-            console.print(
-                f"\n[yellow]Select value for {action_name} ({param_name}):[/yellow]"
-            )
+            console.print(f"\n[yellow]Select value for {action_name} ({param_name}):[/yellow]")
             for idx, choice in enumerate(choices, start=1):
                 console.print(f"  {idx}. {choice}")
             while True:
@@ -409,7 +400,7 @@ def simulate(
 
     # Use provided name or auto-generate
     simulation_name = run_name if run_name else None
-    
+
     history, runner = run_simulation(
         rm,
         obj,
@@ -429,6 +420,7 @@ def simulate(
     result_path = resolve_result_path(history.simulation_id)
     text = build_interactive_dataset_text(history)
     from pathlib import Path as _P
+
     _p = _P(result_path)
     _p.parent.mkdir(parents=True, exist_ok=True)
     _p.write_text(text, encoding="utf-8")
@@ -492,7 +484,9 @@ def history(
     # Print inline errors for any failed steps
     for step_obj in history_obj.steps:
         if step_obj.status != "ok" and step_obj.error_message:
-            console.print(f"[red]Step {step_obj.step_number} '{step_obj.action_name}' failed:[/red] {step_obj.error_message}")
+            console.print(
+                f"[red]Step {step_obj.step_number} '{step_obj.action_name}' failed:[/red] {step_obj.error_message}"
+            )
 
     if step is not None:
         target = next((st for st in history_obj.steps if st.step_number == step), None)

@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import Dict, Generic, Iterable, Tuple, TypeVar
+
 from pydantic import BaseModel, Field
 
 T = TypeVar("T")

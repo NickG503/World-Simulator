@@ -1,6 +1,8 @@
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
 from typing import List
+
 from pydantic import BaseModel
 
 
@@ -19,4 +21,3 @@ class Effect(BaseModel, ABC):
     @abstractmethod
     def apply(self, context: "ApplicationContext", instance: "ObjectInstance") -> List[StateChange]:  # noqa: F821
         raise NotImplementedError
-

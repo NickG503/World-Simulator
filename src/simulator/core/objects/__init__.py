@@ -1,6 +1,6 @@
-from .part import PartSpec, PartInstance, AttributeTarget
-from .object_type import ObjectType
 from .object_instance import ObjectInstance
+from .object_type import ObjectType
+from .part import AttributeTarget, PartInstance, PartSpec
 
 __all__ = [
     "PartSpec",
@@ -9,4 +9,3 @@ __all__ = [
     "ObjectType",
     "ObjectInstance",
 ]
-

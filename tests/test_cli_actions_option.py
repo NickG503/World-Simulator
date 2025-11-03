@@ -27,11 +27,7 @@ def _make_fake_rm(param_map: dict[str, dict[str, bool]] | None = None):
     fake_rm = SimpleNamespace(find_action_for_object=_find_action)
     fake_rm._param_defs = {
         action: {
-            name: (
-                SimpleNamespace(**spec)
-                if isinstance(spec, dict)
-                else SimpleNamespace(required=spec)
-            )
+            name: (SimpleNamespace(**spec) if isinstance(spec, dict) else SimpleNamespace(required=spec))
             for name, spec in mapping.items()
         }
         for action, mapping in param_map.items()

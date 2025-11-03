@@ -9,15 +9,17 @@ This module provides functionality to:
 """
 
 from __future__ import annotations
-from typing import Dict, List, Optional, Union, Any
+
+import logging
 from datetime import datetime
 from pathlib import Path
-from pydantic import BaseModel, Field
-import yaml
+from typing import Any, Dict, List, Optional, Union
 
+import yaml
+from pydantic import BaseModel, Field
+
+from simulator.core.engine.transition_engine import DiffEntry, TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
-from simulator.core.engine.transition_engine import TransitionEngine, DiffEntry
-import logging
 from simulator.core.registries.registry_manager import RegistryManager
 
 
@@ -69,7 +71,7 @@ class SimulationHistory(BaseModel):
     # Interactive clarification events captured during run
     # Stored separately from steps for simple presentation
     interactions: List[Dict[str, Any]] = Field(default_factory=list)
-    
+
     def get_state_at_step(self, step_number: int) -> Optional[ObjectStateSnapshot]:
         """Get object state after a specific step (0-based)."""
         if step_number < 0 or step_number >= len(self.steps):
@@ -91,15 +93,15 @@ class SimulationHistory(BaseModel):
             return None
         self.ensure_state_cache()
         return self.steps[-1].object_state_after
-    
+
     def find_step_by_action(self, action_name: str) -> List[SimulationStep]:
         """Find all steps that executed a specific action."""
         return [step for step in self.steps if step.action_name == action_name]
-    
+
     def get_successful_steps(self) -> List[SimulationStep]:
         """Get all steps that completed successfully."""
         return [step for step in self.steps if step.status == "ok"]
-    
+
     def get_failed_steps(self) -> List[SimulationStep]:
         """Get all steps that failed."""
         return [step for step in self.steps if step.status != "ok"]
@@ -171,13 +173,13 @@ def _apply_changes_to_snapshot(state: ObjectStateSnapshot, changes: List[DiffEnt
 
 class SimulationRunner:
     """Runs multiple actions in sequence and tracks state history."""
-    
+
     def __init__(self, registry_manager: RegistryManager):
         self.registry_manager = registry_manager
         self.engine = TransitionEngine(registry_manager)
-    
+
     def run_simulation(
-        self, 
+        self,
         object_type: str,
         actions: List[Union[ActionRequest, Dict[str, str], Dict[str, Dict[str, str]]]],
         simulation_id: Optional[str] = None,
@@ -190,16 +192,16 @@ class SimulationRunner:
     ) -> SimulationHistory:
         """
         Run a simulation with multiple actions.
-        
+
         Args:
             object_type: Type of object to simulate
             actions: List of actions to execute, each with 'name' and optional 'parameters'
             simulation_id: Optional ID for the simulation (auto-generated if not provided)
             resolve_unknowns: Whether to resolve unknown attribute values (uses defaults if False)
-        
+
         Returns:
             SimulationHistory with complete timeline
-        
+
         Example:
             actions = [
                 {"name": "turn_on"},
@@ -209,11 +211,12 @@ class SimulationRunner:
         """
         if not simulation_id:
             simulation_id = f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
+
         # Create object instance
         obj_type = self.registry_manager.objects.get(object_type)
-        from simulator.io.loaders.object_loader import instantiate_default
         from simulator.core.objects.part import AttributeTarget
+        from simulator.io.loaders.object_loader import instantiate_default
+
         obj_instance = instantiate_default(obj_type, self.registry_manager)
         # Apply unknown injections if requested
         if unknown_paths:
@@ -226,27 +229,28 @@ class SimulationRunner:
                 except Exception:
                     # ignore invalid unknown paths
                     pass
-        
+
         # Initialize simulation history
         history = SimulationHistory(
             simulation_id=simulation_id,
             object_type=object_type,
             object_name=object_type,  # Could be parameterized later
             started_at=datetime.now().date().isoformat(),
-            total_steps=len(actions)
+            total_steps=len(actions),
         )
-        
+
         logger = logging.getLogger(__name__)
-        
+
         current_instance = obj_instance
         action_requests = [
-            action if isinstance(action, ActionRequest) else ActionRequest.model_validate(action)
-            for action in actions
+            action if isinstance(action, ActionRequest) else ActionRequest.model_validate(action) for action in actions
         ]
 
         # Lazy import to avoid console hard-dependency
-        from simulator.core.prompt import UnknownValueResolver
         from rich.console import Console
+
+        from simulator.core.prompt import UnknownValueResolver
+
         resolver = UnknownValueResolver(self.registry_manager, Console()) if interactive else None
 
         step_index = 0
@@ -279,7 +283,7 @@ class SimulationRunner:
                 if verbose:
                     logger.warning("Action '%s' not found for object '%s'", action_name, object_type)
                 continue
-            
+
             # Execute action (with optional interactive clarification loop)
             if parameter_resolver:
                 param_defs = getattr(action, "parameters", {}) or {}
@@ -299,13 +303,13 @@ class SimulationRunner:
                     qs = q.strip()
                     # Handle "Precondition: what is X?" format
                     if qs.lower().startswith("precondition: what is ") and qs.endswith("?"):
-                        return qs[len("Precondition: what is "):-1].strip()
+                        return qs[len("Precondition: what is ") : -1].strip()
                     # Handle "Postcondition: what is X?" format
                     if qs.lower().startswith("postcondition: what is ") and qs.endswith("?"):
-                        return qs[len("Postcondition: what is "):-1].strip()
+                        return qs[len("Postcondition: what is ") : -1].strip()
                     # Legacy format for backward compatibility
                     if qs.lower().startswith("what is ") and qs.endswith("?"):
-                        return qs[len("What is "):-1].strip()
+                        return qs[len("What is ") : -1].strip()
                     return None
 
                 retry_guard = 0
@@ -326,12 +330,13 @@ class SimulationRunner:
                                 info_msg = q.replace("[INFO] ", "")
                                 resolver.console.print(f"[cyan]{info_msg}[/cyan]\n")
                             continue
-                        
+
                         attr_ref = _extract_attr_from_question(q)
                         if not attr_ref:
                             continue
                         try:
                             from simulator.core.objects.part import AttributeTarget as _AT
+
                             ai = _AT.from_string(attr_ref).resolve(current_instance)
                             space = self.registry_manager.spaces.get(ai.spec.space_id)
                             if resolver is not None:
@@ -354,11 +359,11 @@ class SimulationRunner:
                             ai.confidence = 1.0
                             ai.last_known_value = picked
                             ai.last_trend_direction = None
-                            
+
                             # Show what was set
                             if resolver is not None:
                                 resolver.console.print(f"[green]→ Set {attr_ref} = {picked}[/green]\n")
-                            
+
                             # record interaction for dataset/history
                             self_log_entry = {
                                 "step": step_index,
@@ -403,10 +408,10 @@ class SimulationRunner:
                     history.steps.append(step)
                     step_index += 1
                     return history
-            
+
             # Capture state after action
             state_after = self._capture_object_state(result.after if result.after else current_instance)
-            
+
             # Create simulation step
             step = SimulationStep(
                 step_number=step_index,
@@ -419,14 +424,14 @@ class SimulationRunner:
                 object_state_after=state_after,
                 changes=result.changes,
             )
-            
+
             history.steps.append(step)
             step_index += 1
-            
+
             # Update current instance for next iteration
             if result.after:
                 current_instance = result.after
-            
+
             if verbose:
                 if result.status == "ok":
                     logger.info("✅ %s ran successfully", action_name)
@@ -437,26 +442,33 @@ class SimulationRunner:
                             if change.kind == "info" and change.attribute == "[CONDITIONAL_EVAL]":
                                 # Show postcondition evaluation result
                                 if "FALSE" in change.after:
-                                    resolver.console.print(f"[yellow]⚠ Postcondition evaluated: {change.after}[/yellow]\n")
+                                    resolver.console.print(
+                                        f"[yellow]⚠ Postcondition evaluated: {change.after}[/yellow]\n"
+                                    )
                                 else:
                                     resolver.console.print(f"[cyan]✓ Postcondition evaluated: {change.after}[/cyan]\n")
-                        
+
                         # Show actual effects applied
                         value_changes = [c for c in result.changes if c.kind in ("value", "trend")]
                         if value_changes:
-                            resolver.console.print(f"[dim cyan]Effects applied:[/dim cyan]")
+                            resolver.console.print("[dim cyan]Effects applied:[/dim cyan]")
                             for change in value_changes:
                                 if change.kind == "value":
-                                    resolver.console.print(f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]")
+                                    resolver.console.print(
+                                        f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
+                                    )
                                 elif change.kind == "trend":
-                                    resolver.console.print(f"[dim]  • {change.attribute}.trend: {change.before} → {change.after}[/dim]")
+                                    # Note: change.attribute already contains .trend suffix from context.write_trend()
+                                    resolver.console.print(
+                                        f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
+                                    )
                             resolver.console.print("")  # Empty line
                 else:
                     logger.warning("Action failed: %s", result.reason)
 
         # Complete simulation
         return history
-    
+
     def _capture_object_state(self, obj_instance: ObjectInstance) -> ObjectStateSnapshot:
         """Capture the complete state of an object instance."""
 
@@ -484,7 +496,7 @@ class SimulationRunner:
             parts=parts,
             global_attributes=global_attrs,
         )
-    
+
     def save_history_to_yaml(self, history: SimulationHistory, file_path: str) -> None:
         """Save simulation history to YAML file (compact, readable format)."""
         # Ensure parent directory exists
@@ -518,17 +530,16 @@ class SimulationRunner:
                 step_entry["error"] = s.error_message
             if s.changes:
                 step_entry["changes"] = [
-                    {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind}
-                    for c in s.changes
+                    {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind} for c in s.changes
                 ]
             data["steps"].append(step_entry)
 
-        with open(file_path, 'w') as f:
+        with open(file_path, "w") as f:
             yaml.dump(data, f, default_flow_style=False, indent=2, sort_keys=False)
-    
+
     def load_history_from_yaml(self, file_path: str) -> SimulationHistory:
         """Load simulation history from YAML file (supports v1 and compact v2 formats)."""
-        with open(file_path, 'r') as f:
+        with open(file_path, "r") as f:
             data = yaml.safe_load(f)
 
         # v3 delta format
@@ -564,7 +575,9 @@ class SimulationRunner:
                     except Exception:
                         continue
 
-                before_snapshot: Optional[ObjectStateSnapshot] = cursor.model_copy(deep=True) if cursor is not None else None
+                before_snapshot: Optional[ObjectStateSnapshot] = (
+                    cursor.model_copy(deep=True) if cursor is not None else None
+                )
                 after_snapshot: Optional[ObjectStateSnapshot] = None
                 if cursor is not None:
                     after_snapshot = _apply_changes_to_snapshot(cursor, changes)

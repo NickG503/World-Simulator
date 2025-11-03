@@ -42,4 +42,3 @@ effects:
         target: audio.volume
         value: high
     # No else branch - both conditions must be TRUE
-

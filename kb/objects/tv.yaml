@@ -21,6 +21,10 @@ parts:
         space: volume_level
         default: medium
         mutable: true
+      channel:
+        space: channel_number
+        default: unknown  # This will trigger clarification!
+        mutable: true
   network:
     attributes:
       wifi_connected:
@@ -35,16 +39,6 @@ parts:
         mutable: true
       voltage:
         space: power_level
-        default: unknown  # This will trigger clarification!
-        mutable: true
-  audio:
-    attributes:
-      volume:
-        space: volume_level
-        default: medium
-        mutable: true
-      channel:
-        space: channel_number
         default: unknown  # This will trigger clarification!
         mutable: true
   cooling:
@@ -102,7 +96,7 @@ behaviors:
       - type: set_trend
         target: cooling.temperature
         direction: up
-  
+
   overheat:
     preconditions:
       - type: attribute_check

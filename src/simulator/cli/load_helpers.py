@@ -3,10 +3,10 @@ from __future__ import annotations
 """Shared helpers for loading knowledge-base components with CLI-friendly errors."""
 
 from pathlib import Path
-from typing import Callable, Any
+from typing import Any, Callable
 
-from rich.console import Console
 import typer
+from rich.console import Console
 
 from simulator.io.loaders import LoaderError
 

@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from typing import Dict
+
 from pydantic import BaseModel, Field
-from .qualitative_space import QualitativeSpace
+
 from .attribute_spec import AttributeSpec
+from .qualitative_space import QualitativeSpace
 
 
 class QualitativeSpaceRegistry(BaseModel):

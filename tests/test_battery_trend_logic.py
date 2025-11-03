@@ -1,8 +1,8 @@
 from pathlib import Path
 
+from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.prompt import UnknownValueResolver
 from simulator.core.registries import RegistryManager
-from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.io.loaders.action_loader import load_actions
 from simulator.io.loaders.object_loader import instantiate_default, load_object_types
 from simulator.io.loaders.yaml_loader import load_spaces

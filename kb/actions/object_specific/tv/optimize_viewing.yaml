@@ -34,7 +34,7 @@ effects:
       - type: set_attribute
         target: screen.brightness
         value: medium
-  
+
   - type: conditional
     condition:
       type: attribute_check
@@ -49,4 +49,3 @@ effects:
       - type: set_attribute
         target: audio.volume
         value: medium
-

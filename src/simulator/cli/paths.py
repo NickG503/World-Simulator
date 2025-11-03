@@ -48,7 +48,7 @@ def default_result_path(simulation_id: str) -> str:
 
 def resolve_history_path(name: str) -> str:
     """Resolve a history filename under outputs/histories.
-    
+
     The name is used directly without any prefixing.
     If name has no .yaml extension, it will be added.
     """

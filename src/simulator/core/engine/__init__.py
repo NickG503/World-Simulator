@@ -1,4 +1,4 @@
-from .context import EvaluationContext, ApplicationContext
+from .context import ApplicationContext, EvaluationContext
 
 __all__ = [
     "EvaluationContext",

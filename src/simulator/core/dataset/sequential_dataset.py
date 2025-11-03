@@ -11,13 +11,12 @@ Builds a single text block that:
 import re
 from typing import Dict, List, Optional, Tuple
 
+from simulator.core.actions.action import Action
+from simulator.core.dataset.minimal_context import _format_changes, _nl_action
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
-from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.actions.action import Action
-from simulator.core.dataset.minimal_context import _nl_action, _format_changes
 from simulator.core.objects.part import AttributeTarget
-
+from simulator.core.registries.registry_manager import RegistryManager
 
 _ATTR_PATH_PATTERN = re.compile(r"([A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)+)")
 
@@ -37,11 +36,13 @@ def _humanize_attribute_paths(text: Optional[str]) -> str:
 def _extract_attr_from_question(q: str) -> Optional[str]:
     qs = q.strip()
     if qs.lower().startswith("what is ") and qs.endswith("?"):
-        return qs[len("What is "):-1].strip()
+        return qs[len("What is ") : -1].strip()
     return None
 
 
-def _apply_action(engine: TransitionEngine, inst: ObjectInstance, act: Action) -> Tuple[ObjectInstance, str, Optional[List[str]]]:
+def _apply_action(
+    engine: TransitionEngine, inst: ObjectInstance, act: Action
+) -> Tuple[ObjectInstance, str, Optional[List[str]]]:
     res = engine.apply_action(inst, act, {})
     clar = getattr(res, "clarifications", None)
     return (res.after if res.after else inst, res.status, clar)
@@ -103,9 +104,9 @@ def build_sequential_dataset_text(
         space = registries.spaces.get(ai.spec.space_id)
         nice_attr = _humanize_attribute_paths(failing_attr)
         lines.append("")
-        lines.append(f"QUESTION: \"Given the story, what will happen?\"")
-        lines.append(f"CLARIFICATION_NEEDED: \"What is {nice_attr}?\"")
-        quoted_options = ", ".join([f'\"{o}\"' for o in space.levels])
+        lines.append('QUESTION: "Given the story, what will happen?"')
+        lines.append(f'CLARIFICATION_NEEDED: "What is {nice_attr}?"')
+        quoted_options = ", ".join([f'"{o}"' for o in space.levels])
         lines.append(f"OPTIONS: [{quoted_options}]")
 
         # For each option, simulate from the start up to failing action with that value injected
@@ -130,12 +131,12 @@ def build_sequential_dataset_text(
             a_fail = registries.create_behavior_enhanced_action(object_type, actions[failing_index].get("name"))
             rf = engine.apply_action(cur2, a_fail, actions[failing_index].get("parameters") or {})
             desc = _format_changes(rf)
-            lines.append(f"{opt}: \"{desc}\"")
+            lines.append(f'{opt}: "{desc}"')
     else:
         # No clarifications needed across the sequence
         lines.append("")
-        lines.append(f"QUESTION: \"Given the story, what will happen?\"")
-        lines.append("EXPECTED: \"The action sequence completes without clarifications.\"")
+        lines.append('QUESTION: "Given the story, what will happen?"')
+        lines.append('EXPECTED: "The action sequence completes without clarifications."')
 
     return "\n".join(lines) + "\n"
 
@@ -173,7 +174,7 @@ def build_interactive_dataset_text(history) -> str:
             a = ev.get("answer")
             step = ev.get("step")
             act = _nl_action(ev.get("action", ""))
-            lines.append(f"- step {step} ({act}): Q: \"{q}\" A: \"{a}\"")
+            lines.append(f'- step {step} ({act}): Q: "{q}" A: "{a}"')
 
     # Summarize per-step results
     lines.append("")
@@ -189,6 +190,7 @@ def build_interactive_dataset_text(history) -> str:
                 changes = st.changes
                 status = st.status
                 reason = st.error_message
+
             lines.append(f"- {human_action}: {_format_changes(_Tmp)}")
         else:
             lines.append(f"- {human_action}: no visible changes")

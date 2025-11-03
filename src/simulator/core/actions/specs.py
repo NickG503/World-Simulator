@@ -7,7 +7,7 @@ structures used across actions, object behaviors, and constraints into the
 runtime `Condition` and `Effect` instances consumed by the simulator.
 """
 
-from typing import Any, Dict, Iterable, List, Literal, Sequence, Union, Mapping
+from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
@@ -31,7 +31,6 @@ from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 from simulator.core.actions.effects.trend_effects import TrendEffect
 from simulator.core.actions.parameter import ParameterReference
 from simulator.core.objects import AttributeTarget
-
 
 # ---------------------------------------------------------------------------
 # Pydantic specs

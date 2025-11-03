@@ -20,7 +20,7 @@ def _setup_spaces(tmp_path):
           - id: binary_state
             name: Binary
             levels: ["off", "on"]
-        """
+        """,
     )
     return spaces_dir
 
@@ -44,7 +44,7 @@ def test_behavior_mutates_immutable_attribute(tmp_path):
               - type: set_attribute
                 target: state
                 value: on
-        """
+        """,
     )
 
     rm = RegistryManager()
@@ -75,7 +75,7 @@ def test_behavior_unknown_attribute(tmp_path):
               - type: set_attribute
                 target: panel.switch
                 value: on
-        """
+        """,
     )
 
     rm = RegistryManager()

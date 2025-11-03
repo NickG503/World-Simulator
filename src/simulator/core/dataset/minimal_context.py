@@ -10,20 +10,23 @@ Produces a compact, natural-language serialized case with:
 - Expected outcomes per option by simulating the action with each option value
 """
 
-from typing import Iterable, List, Optional, Set, Tuple
+from typing import Iterable, List, Optional, Set
 
+from simulator.core.actions.action import Action
+from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+from simulator.core.actions.conditions.base import Condition
+from simulator.core.actions.conditions.logical_conditions import (
+    ImplicationCondition,
+    LogicalCondition,
+)
+from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+from simulator.core.actions.effects.base import Effect
+from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+from simulator.core.actions.effects.trend_effects import TrendEffect
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
-from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.actions.action import Action
-from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-from simulator.core.actions.effects.base import Effect
-from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-from simulator.core.actions.effects.trend_effects import TrendEffect
-from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 from simulator.core.objects.part import AttributeTarget
+from simulator.core.registries.registry_manager import RegistryManager
 
 
 def _walk_conditions(cond: Condition) -> Iterable[Condition]:
@@ -82,6 +85,10 @@ def _format_changes(result) -> str:
 
     phrases: List[str] = []
     for ch in result.changes:
+        # Skip internal debug markers (e.g., [CONDITIONAL_EVAL])
+        if ch.attribute and ch.attribute.startswith("["):
+            continue
+
         attr = (ch.attribute or "").replace("_", " ").replace(".", " ")
         if ch.kind == "trend":
             if ch.after == "down":
@@ -150,15 +157,15 @@ def generate_minimal_case_text(
     lines: List[str] = []
     lines.append("=== BENCHMARK TEST CASE ===")
     lines.append(f"ID: {case_id or f'{object_type}_{action_name}_minimal'}")
-    lines.append(f"PROMPT: \"{prompt}\"")
+    lines.append(f'PROMPT: "{prompt}"')
 
     if clarify_attr:
         # Determine options from the attribute's qualitative space
         ai = AttributeTarget.from_string(clarify_attr).resolve(instance)
         space = registries.spaces.get(ai.spec.space_id)
         nice_attr = clarify_attr.replace(".", " ")
-        lines.append(f"CLARIFICATION_NEEDED: \"What is {nice_attr}?\"")
-        quoted_options = ", ".join([f'\"{o}\"' for o in space.levels])
+        lines.append(f'CLARIFICATION_NEEDED: "What is {nice_attr}?"')
+        quoted_options = ", ".join([f'"{o}"' for o in space.levels])
         lines.append(f"OPTIONS: [{quoted_options}]")
 
         # Simulate each option
@@ -172,18 +179,18 @@ def generate_minimal_case_text(
             tai.confidence = 1.0
             r = engine.apply_action(test_inst, action, {})
             desc = _format_changes(r)
-            lines.append(f"{opt}: \"{desc}\"")
+            lines.append(f'{opt}: "{desc}"')
 
         # LLM test: what do you need to know?
         lines.append("")
         lines.append("=== LLM TEST ===")
-        lines.append(f"QUESTION: \"{prompt} What will happen?\"")
-        lines.append(f"CLARIFICATION_NEEDED: \"What is {nice_attr}?\"")
+        lines.append(f'QUESTION: "{prompt} What will happen?"')
+        lines.append(f'CLARIFICATION_NEEDED: "What is {nice_attr}?"')
     else:
         # No clarification needed; describe expected outcome directly
         desc = _format_changes(result)
         lines.append("")
         lines.append("EXPECTED:")
-        lines.append(f"\"{desc}\"")
+        lines.append(f'"{desc}"')
 
     return "\n".join(lines) + "\n"

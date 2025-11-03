@@ -1,7 +1,7 @@
-from .constraint import Constraint, DependencyConstraint, ConstraintViolation
+from .constraint import Constraint, ConstraintViolation, DependencyConstraint
 
 __all__ = [
     "Constraint",
-    "DependencyConstraint", 
+    "DependencyConstraint",
     "ConstraintViolation",
 ]

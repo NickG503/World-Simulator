@@ -1,0 +1,44 @@
+# Pre-commit hooks configuration
+# See https://pre-commit.com for more information
+
+repos:
+  # Ruff - Fast Python linter and formatter
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      # Run the formatter
+      - id: ruff-format
+        args: [--config=pyproject.toml]
+      # Run the linter
+      - id: ruff
+        args: [--fix, --config=pyproject.toml]
+
+  # General file checks
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      # Remove trailing whitespace
+      - id: trailing-whitespace
+        exclude: ^(.*\.md|.*\.txt)$
+      # Ensure files end with newline
+      - id: end-of-file-fixer
+        exclude: ^(.*\.txt)$
+      # Check YAML syntax
+      - id: check-yaml
+        exclude: ^kb/
+      # Check for large files
+      - id: check-added-large-files
+        args: [--maxkb=1000]
+      # Check for merge conflicts
+      - id: check-merge-conflict
+      # Check for case conflicts
+      - id: check-case-conflict
+
+  # Knowledge base YAML validation (separate, less strict)
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+        name: check-yaml-kb
+        args: [--allow-multiple-documents]
+        files: ^kb/.*\.ya?ml$

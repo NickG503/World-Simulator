@@ -1,7 +1,13 @@
 from __future__ import annotations
-from typing import Dict, List, Optional
-from pydantic import BaseModel, Field
-from simulator.core.attributes import AttributeSpec, AttributeInstance
+
+from typing import TYPE_CHECKING, Dict, Optional
+
+from pydantic import BaseModel
+
+from simulator.core.attributes import AttributeInstance, AttributeSpec
+
+if TYPE_CHECKING:
+    from simulator.core.objects.object_instance import ObjectInstance
 
 
 class PartSpec(BaseModel):
@@ -49,10 +55,9 @@ class AttributeTarget(BaseModel):
             return f"{self.part}.{self.attribute}"
         return self.attribute
 
-    def resolve(self, instance: "ObjectInstance") -> AttributeInstance:  # type: ignore[name-defined]
+    def resolve(self, instance: "ObjectInstance") -> AttributeInstance:
         """Resolve this target to an AttributeInstance on the given object instance."""
         from simulator.core.objects.object_instance import ObjectInstance  # local import to avoid cycle
-        from simulator.core.attributes import AttributeInstance as _AttrInst  # alias to satisfy type checker
 
         if not isinstance(instance, ObjectInstance):  # defensive
             raise TypeError("resolve() expects an ObjectInstance")
@@ -60,20 +65,14 @@ class AttributeTarget(BaseModel):
         if self.part is None:
             if self.attribute not in instance.global_attributes:
                 available = ", ".join(sorted(instance.global_attributes.keys()))
-                raise KeyError(
-                    f"Global attribute not found: '{self.attribute}'. Available: {available}"
-                )
+                raise KeyError(f"Global attribute not found: '{self.attribute}'. Available: {available}")
             return instance.global_attributes[self.attribute]
 
         if self.part not in instance.parts:
             available_parts = ", ".join(sorted(instance.parts.keys()))
-            raise KeyError(
-                f"Part not found: '{self.part}'. Available parts: {available_parts}"
-            )
+            raise KeyError(f"Part not found: '{self.part}'. Available parts: {available_parts}")
         part = instance.parts[self.part]
         if self.attribute not in part.attributes:
             available_attrs = ", ".join(sorted(part.attributes.keys()))
-            raise KeyError(
-                f"Attribute not found: '{self.part}.{self.attribute}'. Available: {available_attrs}"
-            )
+            raise KeyError(f"Attribute not found: '{self.part}.{self.attribute}'. Available: {available_attrs}")
         return part.attributes[self.attribute]

@@ -12,12 +12,25 @@ dependencies = [
     "pytest>=8.4.1",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pre-commit>=3.5.0",
+    "ruff>=0.6.0",
+    "pytest-cov>=4.1.0",
+]
+
 [project.scripts]
 sim = "simulator.cli.app:app"
 
 [tool.ruff]
-select = ["E","F","I"]
-line-length = 100
+line-length = 120
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = [
+    "E402",  # Module level import not at top of file (common with docstrings)
+    "E731",  # Do not assign a lambda expression
+]
 
 [tool.mypy]
 python_version = "3.10"

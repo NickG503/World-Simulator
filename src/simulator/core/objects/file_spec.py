@@ -11,11 +11,11 @@ from simulator.core.actions.specs import (
     EffectSpec,
     build_condition,
     build_effect,
-    parse_preconditions_field,
     parse_effect_spec,
+    parse_preconditions_field,
 )
-from simulator.core.constraints.specs import ConstraintSpec, parse_constraint_spec
 from simulator.core.attributes import AttributeSpec
+from simulator.core.constraints.specs import ConstraintSpec, parse_constraint_spec
 from simulator.core.objects import PartSpec
 from simulator.core.objects.object_type import ObjectBehavior, ObjectConstraint, ObjectType
 

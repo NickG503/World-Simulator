@@ -1,20 +1,24 @@
 from __future__ import annotations
+
 from typing import Callable, Iterable, List
 
-from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.objects.object_type import ObjectType
-from simulator.core.objects.part import AttributeTarget
-from simulator.core.attributes.attribute_spec import AttributeSpec
-from simulator.core.actions.conditions.base import Condition
 from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
+from simulator.core.actions.conditions.base import Condition
+from simulator.core.actions.conditions.logical_conditions import (
+    ImplicationCondition,
+    LogicalCondition,
+)
 from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
-from simulator.core.actions.effects.base import Effect
 from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-from simulator.core.actions.effects.trend_effects import TrendEffect
+from simulator.core.actions.effects.base import Effect
 from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+from simulator.core.actions.effects.trend_effects import TrendEffect
 from simulator.core.actions.parameter import ParameterReference
 from simulator.core.actions.specs import build_condition
+from simulator.core.attributes.attribute_spec import AttributeSpec
+from simulator.core.objects.object_type import ObjectType
+from simulator.core.objects.part import AttributeTarget
+from simulator.core.registries.registry_manager import RegistryManager
 
 
 class RegistryValidator:
@@ -41,22 +45,20 @@ class RegistryValidator:
                         self.registries.spaces.get(attr_spec.space_id)
                     except KeyError:
                         errors.append(
-                            f"Object {obj_type.name}.{part_name}.{attr_name} references unknown space: {attr_spec.space_id}"
+                            f"Object {obj_type.name}.{part_name}.{attr_name} references unknown space: {attr_spec.space_id}"  # noqa: E501
                         )
             # globals
             for g_name, g_spec in obj_type.global_attributes.items():
                 try:
                     self.registries.spaces.get(g_spec.space_id)
                 except KeyError:
-                    errors.append(
-                        f"Object {obj_type.name}.{g_name} references unknown space: {g_spec.space_id}"
-                    )
+                    errors.append(f"Object {obj_type.name}.{g_name} references unknown space: {g_spec.space_id}")
         return errors
 
     def _validate_action_references(self) -> List[str]:
         """Ensure action targets and parameter references are valid for target objects."""
         errors: List[str] = []
-        for (name, action) in self.registries.actions.items.items():
+        for name, action in self.registries.actions.items.items():
             obj_name = action.object_type
             if obj_name.lower() == "generic":
                 continue
@@ -74,9 +76,7 @@ class RegistryValidator:
                     self._validate_condition_tree(condition, obj_type, param_exists, f"{context} precondition")
                 )
             for effect in action.effects:
-                errors.extend(
-                    self._validate_effect_tree(effect, obj_type, param_exists, f"{context} effect")
-                )
+                errors.extend(self._validate_effect_tree(effect, obj_type, param_exists, f"{context} effect"))
         return errors
 
     def _validate_object_constraints(self) -> List[str]:
@@ -84,7 +84,10 @@ class RegistryValidator:
         for obj_type in self.registries.objects.all():
             for idx, constraint in enumerate(obj_type.constraints, start=1):
                 context = f"Object {obj_type.name} constraint[{idx}] ({constraint.type})"
-                for label, spec in ("condition", constraint.condition), ("requires", constraint.requires):
+                for label, spec in (
+                    ("condition", constraint.condition),
+                    ("requires", constraint.requires),
+                ):
                     if spec is None:
                         continue
                     try:
@@ -186,9 +189,7 @@ class RegistryValidator:
             attr_errors, attr_spec = self._resolve_attribute_spec(obj_type, effect.target, context)
             errors.extend(attr_errors)
             if attr_spec is not None and not attr_spec.mutable:
-                errors.append(
-                    f"{context}: attribute '{effect.target.to_string()}' is immutable"
-                )
+                errors.append(f"{context}: attribute '{effect.target.to_string()}' is immutable")
             if isinstance(effect.value, ParameterReference) and not param_exists(effect.value.name):
                 errors.append(f"{context}: unknown parameter reference '{effect.value.name}'")
         elif isinstance(effect, TrendEffect):
@@ -237,30 +238,22 @@ class RegistryValidator:
         target: AttributeTarget,
         context: str,
     ) -> tuple[List[str], AttributeSpec | None]:
-        from simulator.core.objects.part import PartSpec
-
         if target.part is None:
             if target.attribute not in obj_type.global_attributes:
                 return (
-                    [
-                        f"{context}: unknown global attribute '{target.attribute}' on object '{obj_type.name}'"
-                    ],
+                    [f"{context}: unknown global attribute '{target.attribute}' on object '{obj_type.name}'"],
                     None,
                 )
             return ([], obj_type.global_attributes[target.attribute])
         if target.part not in obj_type.parts:
             return (
-                [
-                    f"{context}: unknown part '{target.part}' on object '{obj_type.name}'"
-                ],
+                [f"{context}: unknown part '{target.part}' on object '{obj_type.name}'"],
                 None,
             )
         part_spec = obj_type.parts[target.part]
         if target.attribute not in part_spec.attributes:
             return (
-                [
-                    f"{context}: unknown attribute '{target.attribute}' on part '{target.part}' of '{obj_type.name}'"
-                ],
+                [f"{context}: unknown attribute '{target.attribute}' on part '{target.part}' of '{obj_type.name}'"],
                 None,
             )
         return ([], part_spec.attributes[target.attribute])

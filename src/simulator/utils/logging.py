@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import logging
 from functools import wraps
 from typing import Any, Callable
@@ -25,4 +26,3 @@ def log_calls(logger_name: str | None = None) -> Callable[[Callable[..., Any]], 
         return _wrapper
 
     return _decorator
-

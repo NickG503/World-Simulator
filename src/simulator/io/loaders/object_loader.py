@@ -1,16 +1,19 @@
 from __future__ import annotations
+
 import glob
 import os
 from typing import Any, Dict
+
 import yaml
+from pydantic import ValidationError
+
 from simulator.core.attributes import AttributeInstance
 from simulator.core.objects import PartInstance
-from simulator.core.objects.object_type import ObjectType
-from simulator.core.objects.object_instance import ObjectInstance
-from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.objects.file_spec import ObjectFileSpec
+from simulator.core.objects.object_instance import ObjectInstance
+from simulator.core.objects.object_type import ObjectType
+from simulator.core.registries.registry_manager import RegistryManager
 from simulator.io.loaders.errors import LoaderError
-from pydantic import ValidationError
 
 
 def _read_yaml(path: str) -> Dict[str, Any]:
@@ -55,10 +58,10 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
                 confidence = 1.0
                 last_known = default
                 last_trend = None
-            
+
             attrs[a_name] = AttributeInstance(
-                spec=a_spec, 
-                current_value=default, 
+                spec=a_spec,
+                current_value=default,
                 trend="none",
                 confidence=confidence,
                 last_known_value=last_known,
@@ -80,10 +83,10 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
             confidence = 1.0
             last_known = default
             last_trend = None
-            
+
         g_attrs[g_name] = AttributeInstance(
-            spec=g_spec, 
-            current_value=default, 
+            spec=g_spec,
+            current_value=default,
             trend="none",
             confidence=confidence,
             last_known_value=last_known,

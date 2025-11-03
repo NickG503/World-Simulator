@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import List, Literal, Optional
+
 from pydantic import BaseModel, field_validator
 
 
@@ -56,7 +58,7 @@ class QualitativeSpace(BaseModel):
             return list(self.levels)
         idx = self.levels.index(last_known_value)
         if trend == "down":
-            allowed = self.levels[:idx + 1]
+            allowed = self.levels[: idx + 1]
         else:  # trend == "up"
-            allowed = self.levels[idx :]
+            allowed = self.levels[idx:]
         return list(allowed) if allowed else list(self.levels)

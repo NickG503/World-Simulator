@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from pydantic import BaseModel, Field
-from simulator.core.attributes import QualitativeSpace, QualitativeSpaceRegistry, AttributeRegistry
-from simulator.core.objects.object_type import ObjectType, ObjectBehavior
+
 from simulator.core.actions.action import Action
+from simulator.core.attributes import AttributeRegistry, QualitativeSpace, QualitativeSpaceRegistry
+from simulator.core.objects.object_type import ObjectBehavior, ObjectType
+
 from .registry_base import NameRegistry
 
 
@@ -34,22 +37,38 @@ class RegistryManager(BaseModel):
         # Battery level
         if "battery_level" not in self.spaces.spaces:
             self.spaces.register(
-                QualitativeSpace(id="battery_level", name="Battery Level", levels=["empty", "low", "medium", "high", "full"])  # type: ignore[arg-type]
+                QualitativeSpace(
+                    id="battery_level",
+                    name="Battery Level",
+                    levels=["empty", "low", "medium", "high", "full"],
+                )  # type: ignore[arg-type]
             )
         # Brightness level
         if "brightness_level" not in self.spaces.spaces:
             self.spaces.register(
-                QualitativeSpace(id="brightness_level", name="Brightness Level", levels=["none", "low", "medium", "high"])  # type: ignore[arg-type]
+                QualitativeSpace(
+                    id="brightness_level",
+                    name="Brightness Level",
+                    levels=["none", "low", "medium", "high"],
+                )  # type: ignore[arg-type]
             )
         # Temperature level
         if "temperature_level" not in self.spaces.spaces:
             self.spaces.register(
-                QualitativeSpace(id="temperature_level", name="Temperature Level", levels=["cold", "warm", "hot", "very_hot"])  # type: ignore[arg-type]
+                QualitativeSpace(
+                    id="temperature_level",
+                    name="Temperature Level",
+                    levels=["cold", "warm", "hot", "very_hot"],
+                )  # type: ignore[arg-type]
             )
         # Water level
         if "water_level" not in self.spaces.spaces:
             self.spaces.register(
-                QualitativeSpace(id="water_level", name="Water Level", levels=["empty", "low", "medium", "high", "full"])  # type: ignore[arg-type]
+                QualitativeSpace(
+                    id="water_level",
+                    name="Water Level",
+                    levels=["empty", "low", "medium", "high", "full"],
+                )  # type: ignore[arg-type]
             )
 
     def find_action_for_object(self, object_name: str, action_name: str):
@@ -61,17 +80,17 @@ class RegistryManager(BaseModel):
             generic_key = f"generic/{action_name}"
             if generic_key in self.actions.items:
                 return self.actions.get(generic_key)
-        
+
         # 2. Direct object-specific action (legacy support)
         specific_key = f"{object_name}/{action_name}"
         if specific_key in self.actions.items:
             return self.actions.get(specific_key)
-        
+
         # 3. Generic action without behavior
         generic_key = f"generic/{action_name}"
         if generic_key in self.actions.items:
             return self.actions.get(generic_key)
-            
+
         return None
 
     def create_behavior_enhanced_action(self, object_name: str, action_name: str):
@@ -79,7 +98,7 @@ class RegistryManager(BaseModel):
         base_action = self.find_action_for_object(object_name, action_name)
         if not base_action:
             return None
-        
+
         # Check if object has custom behavior for this action
         obj_type = self.objects.get(object_name)
         if action_name in obj_type.behaviors:
@@ -87,29 +106,30 @@ class RegistryManager(BaseModel):
             behavior = obj_type.behaviors[action_name]
             enhanced_action = self._merge_action_with_behavior(base_action, behavior)
             return enhanced_action
-        
+
         return base_action
-    
+
     def _merge_action_with_behavior(self, base_action: Action, behavior: ObjectBehavior):
         """Merge object behavior with base action."""
         # Import here to avoid circular imports
         from simulator.core.actions.action import Action
+
         # Behavior preconditions/effects are already parsed at load time
         behavior_preconditions = behavior.preconditions
         behavior_effects = behavior.effects
-        
-        # Create new action combining base + behavior  
+
+        # Create new action combining base + behavior
         # Priority: behavior preconditions/effects override base ones
         merged_preconditions = behavior_preconditions if behavior_preconditions else base_action.preconditions
         merged_effects = behavior_effects if behavior_effects else base_action.effects
-        
+
         return Action(
             name=base_action.name,
             object_type=base_action.object_type,
             parameters=base_action.parameters,
             preconditions=merged_preconditions,
             effects=merged_effects,
-            metadata=base_action.metadata
+            metadata=base_action.metadata,
         )
 
     def validate_references(self) -> None:
@@ -125,6 +145,7 @@ class RegistryManager(BaseModel):
 
         # Run structured validator over objects/actions
         from .validators import RegistryValidator  # local import to avoid cycles
+
         errors = RegistryValidator(self).validate_all()
         if errors:
             msg = "Registry validation failed:\n" + "\n".join(f"  - {e}" for e in errors)

@@ -1,8 +1,11 @@
 from __future__ import annotations
+
 from typing import Any, Dict
+
 from pydantic import BaseModel
-from simulator.core.objects import AttributeTarget, ObjectInstance
+
 from simulator.core.attributes import AttributeInstance
+from simulator.core.objects import AttributeTarget, ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
 
 
@@ -49,9 +52,7 @@ class ApplicationContext(EvaluationContext):
         # Validate value belongs to the attribute's space
         space = self.registries.spaces.get(ai.spec.space_id)
         if value not in space.levels:
-            raise ValueError(
-                f"Invalid value '{value}' for {target.to_string()}. Valid values: {space.levels}"
-            )
+            raise ValueError(f"Invalid value '{value}' for {target.to_string()}. Valid values: {space.levels}")
 
         # Record before and apply
         self._last_before = ai.current_value if isinstance(ai.current_value, str) else None

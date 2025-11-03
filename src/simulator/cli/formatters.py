@@ -1,29 +1,31 @@
-from __future__ import annotations
-
 """Formatting helpers for CLI presentation."""
 
-from typing import Any, Iterable, Mapping, TYPE_CHECKING
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any, Mapping
 
 from rich.table import Table
 
 from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.specs import build_condition_from_raw, build_condition, ConditionSpec
+from simulator.core.actions.specs import ConditionSpec, build_condition, build_condition_from_raw
 from simulator.core.engine.transition_engine import TransitionResult
 
 if TYPE_CHECKING:  # pragma: no cover - import for type hints only
     from simulator.core.objects.object_type import ObjectType
     from simulator.core.registries.registry_manager import RegistryManager
-    from simulator.core.actions.parameter import ParameterReference
-    from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-    from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-    from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
 
 
 def format_condition(condition: Condition | Mapping[str, Any] | None) -> str:
-    from simulator.core.actions.parameter import ParameterReference
     from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-    from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-    from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
+    from simulator.core.actions.conditions.logical_conditions import (
+        ImplicationCondition,
+        LogicalCondition,
+    )
+    from simulator.core.actions.conditions.parameter_conditions import (
+        ParameterEquals,
+        ParameterValid,
+    )
+    from simulator.core.actions.parameter import ParameterReference
 
     if condition is None:
         return "<missing>"
@@ -66,13 +68,7 @@ def format_condition(condition: Condition | Mapping[str, Any] | None) -> str:
         return f"({joiner.join(rendered)})"
 
     if isinstance(condition, ImplicationCondition):
-        return (
-            "IF ("
-            f"{format_condition(condition.if_condition)}"
-            ") THEN ("
-            f"{format_condition(condition.then_condition)}"
-            ")"
-        )
+        return f"IF ({format_condition(condition.if_condition)}) THEN ({format_condition(condition.then_condition)})"
 
     if isinstance(condition, ParameterEquals):
         return f"{condition.parameter} == {condition.value}"
@@ -126,6 +122,9 @@ def build_changes_table(result: TransitionResult) -> Table:
     table.add_column("After")
     table.add_column("Kind")
     for change in result.changes:
+        # Skip internal debug markers (e.g., [CONDITIONAL_EVAL])
+        if change.attribute and change.attribute.startswith("["):
+            continue
         table.add_row(change.attribute or "", str(change.before), str(change.after), change.kind)
     return table
 

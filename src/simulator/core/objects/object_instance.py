@@ -1,9 +1,13 @@
 from __future__ import annotations
+
 from typing import Any, Dict
+
 from pydantic import BaseModel, Field
+
+from simulator.core.attributes import AttributeInstance
+
 from .object_type import ObjectType
 from .part import PartInstance
-from simulator.core.attributes import AttributeInstance, AttributeSpec
 
 
 class ObjectInstance(BaseModel):
@@ -17,4 +21,3 @@ class ObjectInstance(BaseModel):
     def deep_copy(self) -> "ObjectInstance":
         # Pydantic's model_copy(deep=True) for deep clone
         return self.model_copy(deep=True)
-

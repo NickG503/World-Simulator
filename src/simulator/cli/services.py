@@ -5,10 +5,9 @@ from __future__ import annotations
 from typing import Dict, Iterable
 
 from simulator.core.engine.transition_engine import TransitionEngine
-from simulator.core.objects.object_type import ObjectType
 from simulator.core.prompt import UnknownValueResolver
-from simulator.io.loaders.object_loader import instantiate_default
 from simulator.core.registries.registry_manager import RegistryManager
+from simulator.io.loaders.object_loader import instantiate_default
 
 
 def resolve_action(

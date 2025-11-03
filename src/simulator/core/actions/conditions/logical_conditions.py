@@ -1,7 +1,8 @@
 from __future__ import annotations
-from typing import List, Literal
-from .base import Condition
 
+from typing import List, Literal
+
+from .base import Condition
 
 LogicalOperator = Literal["and", "or", "not"]
 
@@ -37,7 +38,6 @@ class ImplicationCondition(Condition):
     def evaluate(self, context: "EvaluationContext") -> bool:  # noqa: F821
         # (not A) or B
         return (not self.if_condition.evaluate(context)) or self.then_condition.evaluate(context)
-    
+
     def describe(self) -> str:
         return f"IF ({self.if_condition.describe()}) THEN ({self.then_condition.describe()})"
-

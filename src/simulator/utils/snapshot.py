@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Dict, List, Tuple
+
 from simulator.core.objects.object_instance import ObjectInstance
 
 
@@ -38,4 +40,3 @@ class ImmutableStateSnapshot:
                 if value != prev:
                     differences.setdefault(part, []).append((name, prev, value))
         return differences
-

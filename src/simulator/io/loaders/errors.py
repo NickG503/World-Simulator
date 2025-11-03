@@ -3,7 +3,7 @@ from __future__ import annotations
 """Shared loader error utilities."""
 
 import os
-from typing import Iterable, Optional
+from typing import Iterable
 
 from pydantic import ValidationError
 

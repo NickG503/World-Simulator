@@ -1,5 +1,7 @@
 from __future__ import annotations
+
 from typing import List, Optional
+
 from pydantic import BaseModel, field_validator
 
 
@@ -20,4 +22,3 @@ class ParameterSpec(BaseModel):
 class ParameterReference(BaseModel):
     type: str = "parameter_ref"
     name: str
-

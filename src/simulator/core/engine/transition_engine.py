@@ -1,13 +1,17 @@
 from __future__ import annotations
+
 from typing import Any, Dict, List, Optional
+
 from pydantic import BaseModel, Field
-from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.objects import ObjectInstance
+
 from simulator.core.actions.action import Action
-from simulator.core.constraints.constraint import ConstraintEngine, ConstraintViolation, Constraint
+from simulator.core.constraints.constraint import Constraint, ConstraintEngine
+from simulator.core.objects import ObjectInstance
+from simulator.core.registries.registry_manager import RegistryManager
+
 from .condition_evaluator import ConditionEvaluator
+from .context import ApplicationContext, EvaluationContext
 from .effect_applier import EffectApplier
-from .context import EvaluationContext, ApplicationContext
 
 
 class DiffEntry(BaseModel):
@@ -46,10 +50,22 @@ class TransitionResult(BaseModel):
     @classmethod
     def success(cls, before: ObjectInstance, after: ObjectInstance, changes: List[DiffEntry]) -> "TransitionResult":
         return cls(before=before, after=after, status="ok", changes=changes)
-    
+
     @classmethod
-    def constraint_violated(cls, before: ObjectInstance, after: ObjectInstance, changes: List[DiffEntry], violations: List[str]) -> "TransitionResult":
-        return cls(before=before, after=after, status="constraint_violated", changes=changes, violations=violations)
+    def constraint_violated(
+        cls,
+        before: ObjectInstance,
+        after: ObjectInstance,
+        changes: List[DiffEntry],
+        violations: List[str],
+    ) -> "TransitionResult":
+        return cls(
+            before=before,
+            after=after,
+            status="constraint_violated",
+            changes=changes,
+            violations=violations,
+        )
 
 
 class TransitionEngine:
@@ -116,7 +132,7 @@ class TransitionEngine:
             except Exception:
                 # If evaluation crashed due to unknown value in ordered comparison, treat as not ok
                 ok = False
-            
+
             if not ok:
                 # Check if this failure is due to an unknown value (using smart evaluation)
                 clars = self._clarify_if_unknown(condition, eval_ctx)
@@ -124,11 +140,11 @@ class TransitionEngine:
                     # Add structure message
                     structure = self._describe_condition_structure(condition)
                     clars.insert(0, f"[INFO] Precondition structure: {structure}")
-                    
+
                     return TransitionResult.rejected(
-                        f"Precondition requires clarification",
+                        "Precondition requires clarification",
                         before=instance,
-                        clarifications=clars
+                        clarifications=clars,
                     )
                 else:
                     # True failure (not due to unknown)
@@ -143,7 +159,7 @@ class TransitionEngine:
             return TransitionResult.rejected(
                 f"Postcondition requires clarification ({len(effect_clarifications)} attribute(s))",
                 before=instance,
-                clarifications=effect_clarifications
+                clarifications=effect_clarifications,
             )
 
         # Phase 4: Apply effects
@@ -161,44 +177,44 @@ class TransitionEngine:
             for c in sc:
                 # Check for conditional effect failure (no else branch)
                 if c.kind == "error" and c.attribute == "[CONDITIONAL_EVAL_FAILED]":
-                    return TransitionResult.rejected(
-                        f"Postcondition failed: {c.after}",
-                        before=instance
-                    )
+                    return TransitionResult.rejected(f"Postcondition failed: {c.after}", before=instance)
                 changes.append(DiffEntry(attribute=c.attribute, before=c.before, after=c.after, kind=c.kind))
 
         # Phase 5: Check constraints on the new state (cached)
         constraints = self._get_constraints(new_instance.type.name)
-        
+
         violations = self.constraint_engine.validate_instance(new_instance, constraints, registries=self.registries)
         if violations:
             violation_messages = [str(v) for v in violations]
             return TransitionResult.constraint_violated(
-                before=instance, 
-                after=new_instance, 
-                changes=changes, 
-                violations=violation_messages
+                before=instance, after=new_instance, changes=changes, violations=violation_messages
             )
 
         return TransitionResult.success(before=instance, after=new_instance, changes=changes)
-    
+
     def _create_failure_message(self, condition, eval_ctx) -> str:
         """Create detailed failure message with resolved parameter values."""
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
-        from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-        
+        from simulator.core.actions.conditions.logical_conditions import (
+            ImplicationCondition,
+            LogicalCondition,
+        )
+        from simulator.core.actions.conditions.parameter_conditions import (
+            ParameterEquals,
+            ParameterValid,
+        )
+
         try:
             if isinstance(condition, AttributeCondition):
                 # Get actual and expected values with parameter resolution
                 actual_value = eval_ctx.read_attribute(condition.target)
-                if hasattr(condition.value, 'name'):  # Parameter reference
+                if hasattr(condition.value, "name"):  # Parameter reference
                     expected_value = eval_ctx.parameters.get(condition.value.name)
                     resolved_value_str = str(expected_value)
                 else:
                     expected_value = condition.value
                     resolved_value_str = str(condition.value)
-                
+
                 # Create human-readable description
                 op_map = {
                     "equals": ("should be", "but got"),
@@ -213,27 +229,27 @@ class TransitionEngine:
                     return f"{condition.target.to_string()} {should_be} {resolved_value_str}, {but_got} {actual_value}"
                 else:
                     # Fallback for unknown operators
-                    return f"{condition.target.to_string()} {condition.operator} {resolved_value_str} (current: '{actual_value}', target: '{expected_value}')"
-            
+                    return f"{condition.target.to_string()} {condition.operator} {resolved_value_str} (current: '{actual_value}', target: '{expected_value}')"  # noqa: E501
+
             elif isinstance(condition, ParameterEquals):
                 actual_value = eval_ctx.parameters.get(condition.parameter)
-                return f"parameter '{condition.parameter}' == '{condition.value}' (current: '{actual_value}', target: '{condition.value}')"
-            
+                return f"parameter '{condition.parameter}' == '{condition.value}' (current: '{actual_value}', target: '{condition.value}')"  # noqa: E501
+
             elif isinstance(condition, ParameterValid):
                 actual_value = eval_ctx.parameters.get(condition.parameter)
-                return f"parameter '{condition.parameter}' in {condition.valid_values} (current: '{actual_value}', valid: {condition.valid_values})"
-            
+                return f"parameter '{condition.parameter}' in {condition.valid_values} (current: '{actual_value}', valid: {condition.valid_values})"  # noqa: E501
+
             elif isinstance(condition, LogicalCondition):
                 # For logical conditions, just use the describe method (complex to resolve all nested conditions)
                 return condition.describe()
-            
+
             elif isinstance(condition, ImplicationCondition):
                 return condition.describe()
-            
+
         except Exception as e:
             # Fallback to basic description
             return f"{condition.describe()} (error resolving details: {e})"
-        
+
         # Fallback
         return condition.describe()
 
@@ -244,7 +260,7 @@ class TransitionEngine:
         """
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
         from simulator.core.actions.conditions.logical_conditions import LogicalCondition
-        
+
         # If it's a simple AttributeCondition, use simple check
         if isinstance(condition, AttributeCondition):
             try:
@@ -254,24 +270,27 @@ class TransitionEngine:
             except Exception:
                 pass
             return []
-        
+
         # If it's a LogicalCondition, use smart evaluation
         if isinstance(condition, LogicalCondition):
             # Use smart evaluation but with "Precondition" prefix
             result, clarifications = self._smart_evaluate_condition_for_precond(condition, eval_ctx)
             return clarifications
-        
+
         # Default: no clarifications
         return []
-    
+
     def _describe_condition_structure(self, condition) -> str:
         """
         Create human-readable description of condition structure.
         Shows the logical structure in a simple form.
         """
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-        
+        from simulator.core.actions.conditions.logical_conditions import (
+            ImplicationCondition,
+            LogicalCondition,
+        )
+
         # Base case: Atomic AttributeCondition
         if isinstance(condition, AttributeCondition):
             target = condition.target.to_string()
@@ -286,7 +305,7 @@ class TransitionEngine:
             op_symbol = op_map.get(condition.operator, condition.operator)
             value = condition.value
             return f"{target}{op_symbol}{value}"
-        
+
         # Recursive case: LogicalCondition
         if isinstance(condition, LogicalCondition):
             if condition.operator == "or":
@@ -298,28 +317,33 @@ class TransitionEngine:
             elif condition.operator == "not":
                 inner = self._describe_condition_structure(condition.conditions[0])
                 return f"NOT({inner})"
-        
+
         # ImplicationCondition
         if isinstance(condition, ImplicationCondition):
             if_part = self._describe_condition_structure(condition.if_condition)
             then_part = self._describe_condition_structure(condition.then_condition)
             return f"IF {if_part} THEN {then_part}"
-        
+
         return "complex condition"
-    
-    def _smart_evaluate_condition_for_precond(self, condition, eval_ctx: EvaluationContext) -> tuple[Optional[bool], List[str]]:
+
+    def _smart_evaluate_condition_for_precond(
+        self, condition, eval_ctx: EvaluationContext
+    ) -> tuple[Optional[bool], List[str]]:
         """
         Smart evaluation for preconditions with short-circuit logic.
         Same as _smart_evaluate_condition but uses "Precondition:" prefix.
         """
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-        
+        from simulator.core.actions.conditions.logical_conditions import (
+            ImplicationCondition,
+            LogicalCondition,
+        )
+
         # Base case: Atomic AttributeCondition
         if isinstance(condition, AttributeCondition):
             try:
                 attr_value = eval_ctx.read_attribute(condition.target)
-                
+
                 if isinstance(attr_value, str) and attr_value == "unknown":
                     question = f"Precondition: what is {condition.target.to_string()}?"
                     return (None, [question])
@@ -329,12 +353,12 @@ class TransitionEngine:
             except Exception:
                 question = f"Precondition: what is {condition.target.to_string()}?"
                 return (None, [question])
-        
+
         # Recursive case: LogicalCondition with OR
         if isinstance(condition, LogicalCondition) and condition.operator == "or":
             for sub_cond in condition.conditions:
                 result, clarifications = self._smart_evaluate_condition_for_precond(sub_cond, eval_ctx)
-                
+
                 if result is True:
                     return (True, [])
                 elif result is False:
@@ -342,12 +366,12 @@ class TransitionEngine:
                 else:
                     return (None, clarifications)
             return (False, [])
-        
+
         # Recursive case: LogicalCondition with AND
         if isinstance(condition, LogicalCondition) and condition.operator == "and":
             for sub_cond in condition.conditions:
                 result, clarifications = self._smart_evaluate_condition_for_precond(sub_cond, eval_ctx)
-                
+
                 if result is False:
                     return (False, [])
                 elif result is True:
@@ -355,7 +379,7 @@ class TransitionEngine:
                 else:
                     return (None, clarifications)
             return (True, [])
-        
+
         # Recursive case: NOT
         if isinstance(condition, LogicalCondition) and condition.operator == "not":
             if len(condition.conditions) != 1:
@@ -365,7 +389,7 @@ class TransitionEngine:
                 return (not result, [])
             else:
                 return (None, clarifications)
-        
+
         # Implication
         if isinstance(condition, ImplicationCondition):
             if_result, if_clarifications = self._smart_evaluate_condition_for_precond(condition.if_condition, eval_ctx)
@@ -374,33 +398,38 @@ class TransitionEngine:
             elif if_result is None:
                 return (None, if_clarifications)
             else:
-                then_result, then_clarifications = self._smart_evaluate_condition_for_precond(condition.then_condition, eval_ctx)
+                then_result, then_clarifications = self._smart_evaluate_condition_for_precond(
+                    condition.then_condition, eval_ctx
+                )
                 return (then_result, then_clarifications)
-        
+
         # Fallback
         try:
             result = self.condition_evaluator.evaluate(condition, eval_ctx)
             return (result, [])
         except Exception:
             return (None, [])
-    
+
     def _smart_evaluate_condition(self, condition, eval_ctx: EvaluationContext) -> tuple[Optional[bool], List[str]]:
         """
         Smart evaluation of conditions with short-circuit logic for unknowns.
-        
+
         Returns:
             (result, clarifications) where:
             - result: True/False if fully evaluated, None if needs clarification
             - clarifications: List of questions needed to proceed
         """
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import LogicalCondition, ImplicationCondition
-        
+        from simulator.core.actions.conditions.logical_conditions import (
+            ImplicationCondition,
+            LogicalCondition,
+        )
+
         # Base case: Atomic AttributeCondition
         if isinstance(condition, AttributeCondition):
             try:
                 attr_value = eval_ctx.read_attribute(condition.target)
-                
+
                 if isinstance(attr_value, str) and attr_value == "unknown":
                     # Need clarification
                     question = f"Postcondition: what is {condition.target.to_string()}?"
@@ -413,79 +442,79 @@ class TransitionEngine:
                 # If evaluation fails, treat as need clarification
                 question = f"Postcondition: what is {condition.target.to_string()}?"
                 return (None, [question])
-        
+
         # Recursive case: LogicalCondition with OR
         if isinstance(condition, LogicalCondition) and condition.operator == "or":
             for sub_cond in condition.conditions:
                 result, clarifications = self._smart_evaluate_condition(sub_cond, eval_ctx)
-                
+
                 if result is True:
                     # Short-circuit: Found TRUE in OR, we're done!
                     return (True, [])
-                
+
                 elif result is False:
                     # This sub-condition is FALSE, continue to next
                     continue
-                
+
                 else:  # result is None
                     # Need clarifications for THIS sub-condition
                     # Ask about it BEFORE checking other conditions
                     return (None, clarifications)
-            
+
             # All sub-conditions evaluated to FALSE
             return (False, [])
-        
+
         # Recursive case: LogicalCondition with AND
         if isinstance(condition, LogicalCondition) and condition.operator == "and":
             for sub_cond in condition.conditions:
                 result, clarifications = self._smart_evaluate_condition(sub_cond, eval_ctx)
-                
+
                 if result is False:
                     # Short-circuit: Found FALSE in AND, we're done!
                     return (False, [])
-                
+
                 elif result is True:
                     # This sub-condition is TRUE, continue to next
                     continue
-                
+
                 else:  # result is None
                     # Need clarifications for THIS sub-condition
                     # Ask about it BEFORE checking other conditions
                     return (None, clarifications)
-            
+
             # All sub-conditions evaluated to TRUE
             return (True, [])
-        
+
         # Recursive case: LogicalCondition with NOT
         if isinstance(condition, LogicalCondition) and condition.operator == "not":
             if len(condition.conditions) != 1:
                 return (None, [])  # Invalid, can't evaluate
-            
+
             result, clarifications = self._smart_evaluate_condition(condition.conditions[0], eval_ctx)
-            
+
             if result is not None:
                 return (not result, [])
             else:
                 return (None, clarifications)
-        
+
         # Recursive case: ImplicationCondition (IF A THEN B = (NOT A) OR B)
         if isinstance(condition, ImplicationCondition):
             # Evaluate the if part first
             if_result, if_clarifications = self._smart_evaluate_condition(condition.if_condition, eval_ctx)
-            
+
             if if_result is False:
                 # If condition is false, implication is true (short-circuit)
                 return (True, [])
-            
+
             elif if_result is None:
                 # Need to clarify the if part first
                 return (None, if_clarifications)
-            
+
             else:  # if_result is True
                 # If condition is true, check the then part
                 then_result, then_clarifications = self._smart_evaluate_condition(condition.then_condition, eval_ctx)
                 return (then_result, then_clarifications)
-        
+
         # Fallback: try to evaluate directly (may throw exception)
         try:
             result = self.condition_evaluator.evaluate(condition, eval_ctx)
@@ -493,21 +522,21 @@ class TransitionEngine:
         except Exception:
             # Can't evaluate, no clarifications available
             return (None, [])
-    
+
     def _clarify_effect_conditions(self, effects: List, eval_ctx: EvaluationContext) -> List[str]:
         """
         Smart scan of effects for conditions with unknown attributes.
         Uses short-circuit logic to only ask about unknowns that matter.
-        
+
         Returns list of clarification questions for Postconditions.
         First item will be a structure description if conditions exist.
         """
         from simulator.core.actions.effects.conditional_effects import ConditionalEffect
-        
+
         clarifications = []
         seen_attributes = set()  # Avoid duplicate questions for same attribute
         condition_structures = []  # Collect condition structures to show
-        
+
         def scan_effect(effect) -> None:
             """Recursively scan an effect for conditions with unknowns."""
             if isinstance(effect, ConditionalEffect):
@@ -515,10 +544,10 @@ class TransitionEngine:
                 structure = self._describe_condition_structure(effect.condition)
                 if structure not in condition_structures:
                     condition_structures.append(structure)
-                
+
                 # Use smart evaluation for the condition
                 result, clar = self._smart_evaluate_condition(effect.condition, eval_ctx)
-                
+
                 # If we need clarifications, collect them (avoiding duplicates)
                 for question in clar:
                     # Extract attribute from question to check for duplicates
@@ -527,7 +556,7 @@ class TransitionEngine:
                         if attr_part not in seen_attributes:
                             seen_attributes.add(attr_part)
                             clarifications.append(question)
-                
+
                 # Recursively scan then/else branches
                 # Note: We scan both branches because we don't know which will be taken
                 # until the condition is fully evaluated
@@ -538,14 +567,14 @@ class TransitionEngine:
             elif isinstance(effect, list):
                 for e in effect:
                     scan_effect(e)
-        
+
         # Scan all effects
         for effect in effects:
             scan_effect(effect)
-        
+
         # If we have clarifications, prepend the structure information
         if clarifications and condition_structures:
             structure_msg = "Postcondition structure: " + " AND ".join(condition_structures)
             clarifications.insert(0, f"[INFO] {structure_msg}")
-        
+
         return clarifications

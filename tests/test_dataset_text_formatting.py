@@ -57,7 +57,7 @@ def test_build_interactive_dataset_text_humanizes_actions_and_attributes():
     text = build_interactive_dataset_text(history)
 
     assert "- turn on: FAILED — Precondition failed: battery level should not be empty, but got empty" in text
-    assert "- step 1 (turn on): Q: \"What is battery level?\"" in text
+    assert '- step 1 (turn on): Q: "What is battery level?"' in text
     assert "battery.level" not in text
 
 
@@ -65,9 +65,7 @@ def test_history_yaml_omits_completed_at(tmp_path: Path):
     object_type = "flashlight"
     before = _empty_snapshot(object_type)
     after = _empty_snapshot(object_type)
-    changes = [
-        DiffEntry(attribute="battery.level", before="medium", after="empty", kind="value")
-    ]
+    changes = [DiffEntry(attribute="battery.level", before="medium", after="empty", kind="value")]
     step = SimulationStep(
         step_number=0,
         action_name="drain_battery",
@@ -117,8 +115,8 @@ initial_state:
     screen:
       attributes:
         power:
-          value: off
-          trend: none
+          value: 'off'
+          trend: 'none'
           confidence: 1.0
   global_attributes: {}
 steps:
@@ -127,8 +125,8 @@ steps:
     status: ok
     changes:
       - attribute: screen.power
-        before: off
-        after: on
+        before: 'off'
+        after: 'on'
         kind: value
 """
 
