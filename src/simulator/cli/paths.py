@@ -74,6 +74,51 @@ def resolve_result_path(name: str) -> str:
     return str(results_dir() / base)
 
 
+def find_history_file(name_or_path: str) -> str:
+    """
+    Find history file with smart resolution.
+
+    1. If path exists as-is, use it
+    2. If path exists with .yaml extension, use it
+    3. Otherwise, look in outputs/histories/ folder
+    4. Add .yaml extension if missing
+
+    Args:
+        name_or_path: Either full path or just filename (with or without .yaml)
+
+    Returns:
+        Resolved path to history file
+
+    Raises:
+        FileNotFoundError: If file cannot be found
+    """
+    p = Path(name_or_path)
+
+    # Check if it's an absolute or relative path that exists
+    if p.exists():
+        return str(p)
+
+    # Check if adding .yaml makes it exist
+    if not str(name_or_path).endswith(".yaml"):
+        p_with_yaml = Path(f"{name_or_path}.yaml")
+        if p_with_yaml.exists():
+            return str(p_with_yaml)
+
+    # Otherwise, look in histories folder
+    base_name = p.name
+    if not base_name.endswith(".yaml"):
+        base_name = f"{base_name}.yaml"
+
+    history_file = histories_dir() / base_name
+    if history_file.exists():
+        return str(history_file)
+
+    # File not found anywhere
+    raise FileNotFoundError(
+        f"History file not found: '{name_or_path}'\nLooked in:\n  - {name_or_path}\n  - {history_file}"
+    )
+
+
 __all__ = [
     "kb_spaces_path",
     "kb_objects_path",
@@ -84,4 +129,5 @@ __all__ = [
     "default_result_path",
     "resolve_history_path",
     "resolve_result_path",
+    "find_history_file",
 ]

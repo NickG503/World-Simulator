@@ -448,15 +448,23 @@ def simulate(
 
 @app.command()
 def history(
-    file_path: str = typer.Argument(..., help="Path to simulation history YAML file"),
+    file_path: str = typer.Argument(..., help="History filename or path (looks in outputs/histories/ by default)"),
     step: Optional[int] = typer.Option(None, "--step", "-s", help="Show detailed table for a specific step"),
 ) -> None:
+    from simulator.cli.paths import find_history_file
     from simulator.core.simulation_runner import SimulationRunner
+
+    # Smart path resolution: accepts full path or just filename
+    try:
+        resolved_path = find_history_file(file_path)
+    except FileNotFoundError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1)
 
     rm = RegistryManager()
     runner = SimulationRunner(rm)
     try:
-        history_obj = runner.load_history_from_yaml(file_path)
+        history_obj = runner.load_history_from_yaml(resolved_path)
     except Exception as exc:
         console.print(f"[red]Error loading history file[/red]: {exc}")
         raise typer.Exit(code=1)
