@@ -234,7 +234,7 @@ class SimulationRunner:
         history = SimulationHistory(
             simulation_id=simulation_id,
             object_type=object_type,
-            object_name=object_type,  # Could be parameterized later
+            object_name=object_type,
             started_at=datetime.now().date().isoformat(),
             total_steps=len(actions),
         )
@@ -314,6 +314,7 @@ class SimulationRunner:
 
                 retry_guard = 0
                 clarification_header_shown = False
+                clarification_changes = []  # Track changes made during clarification
                 while result.status == "rejected" and getattr(result, "clarifications", None) and retry_guard < 5:
                     retry_guard += 1
                     asked_any = False
@@ -355,16 +356,30 @@ class SimulationRunner:
                             # validate and set
                             if picked not in space.levels:
                                 continue
+
+                            # Record the previous value before setting
+                            previous_value = ai.current_value
+
                             ai.current_value = picked
                             ai.confidence = 1.0
                             ai.last_known_value = picked
                             ai.last_trend_direction = None
 
+                            # Record the change for the step
+                            clarification_changes.append(
+                                DiffEntry(
+                                    attribute=attr_ref,
+                                    before=previous_value if previous_value != "unknown" else "unknown",
+                                    after=picked,
+                                    kind="clarification",
+                                )
+                            )
+
                             # Show what was set
                             if resolver is not None:
                                 resolver.console.print(f"[green]→ Set {attr_ref} = {picked}[/green]\n")
 
-                            # record interaction for dataset/history
+                            # Record interaction for history
                             self_log_entry = {
                                 "step": step_index,
                                 "action": action_name,
@@ -373,21 +388,16 @@ class SimulationRunner:
                                 "answer": picked,
                                 "options": list(space.levels),
                             }
-                            # Make sure history object exists
-                            # (We can append to history here—it will be saved later)
-                            # history is available in outer scope
-                            # Add now; if step ultimately fails, it still records the asked Q/A
-                            try:
-                                # pylint: disable=protected-access
-                                pass
-                            finally:
-                                history.interactions.append(self_log_entry)
+                            history.interactions.append(self_log_entry)
                             asked_any = True
                         except Exception:
                             continue
                     # Retry if we asked at least one clarification
                     if asked_any:
                         result = self.engine.apply_action(current_instance, action, parameters)
+                        # Prepend clarification changes to the result changes
+                        if result.status == "ok" and clarification_changes:
+                            result.changes = clarification_changes + result.changes
                     else:
                         break
 
@@ -449,11 +459,11 @@ class SimulationRunner:
                                     resolver.console.print(f"[cyan]✓ Postcondition evaluated: {change.after}[/cyan]\n")
 
                         # Show actual effects applied
-                        value_changes = [c for c in result.changes if c.kind in ("value", "trend")]
+                        value_changes = [c for c in result.changes if c.kind in ("value", "trend", "clarification")]
                         if value_changes:
                             resolver.console.print("[dim cyan]Effects applied:[/dim cyan]")
                             for change in value_changes:
-                                if change.kind == "value":
+                                if change.kind in ("value", "clarification"):
                                     resolver.console.print(
                                         f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
                                     )
@@ -529,9 +539,13 @@ class SimulationRunner:
             if s.error_message:
                 step_entry["error"] = s.error_message
             if s.changes:
-                step_entry["changes"] = [
-                    {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind} for c in s.changes
-                ]
+                # Filter out internal debug markers (info kind and attributes starting with [)
+                filtered_changes = [c for c in s.changes if c.kind != "info" and not c.attribute.startswith("[")]
+                if filtered_changes:
+                    step_entry["changes"] = [
+                        {"attribute": c.attribute, "before": c.before, "after": c.after, "kind": c.kind}
+                        for c in filtered_changes
+                    ]
             data["steps"].append(step_entry)
 
         with open(file_path, "w") as f:

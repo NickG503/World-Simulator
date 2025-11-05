@@ -11,6 +11,7 @@ from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence, Union
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from simulator.core.actions.condition_registry import get_condition_registry
 from simulator.core.actions.conditions.attribute_conditions import (
     AttributeCondition,
     ComparisonOperator,
@@ -25,6 +26,7 @@ from simulator.core.actions.conditions.parameter_conditions import (
     ParameterEquals,
     ParameterValid,
 )
+from simulator.core.actions.effect_registry import get_effect_registry
 from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
 from simulator.core.actions.effects.base import Effect
 from simulator.core.actions.effects.conditional_effects import ConditionalEffect
@@ -149,22 +151,42 @@ class ConditionalEffectSpec(EffectSpec):
 ConditionalEffectSpec.model_rebuild()
 
 
-_CONDITION_SPEC_MAP: Dict[str, type[ConditionSpec]] = {
-    "parameter_valid": ParameterValidConditionSpec,
-    "parameter_equals": ParameterEqualsConditionSpec,
-    "attribute_check": AttributeCheckConditionSpec,
-    "and": LogicalConditionSpec,
-    "or": LogicalConditionSpec,
-    "not": LogicalConditionSpec,
-    "implication": ImplicationConditionSpec,
-}
+# ---------------------------------------------------------------------------
+# Registry initialization - register all built-in types
+# ---------------------------------------------------------------------------
 
 
-_EFFECT_SPEC_MAP: Dict[str, type[EffectSpec]] = {
-    "set_attribute": SetAttributeEffectSpec,
-    "set_trend": SetTrendEffectSpec,
-    "conditional": ConditionalEffectSpec,
-}
+def _register_builtin_types() -> None:
+    """Register all built-in condition and effect types."""
+    condition_registry = get_condition_registry()
+    effect_registry = get_effect_registry()
+
+    # Register condition types with their spec classes and builder names
+    # The builder functions are defined below in build_condition()
+    condition_registry.register(
+        "parameter_valid", ParameterValidConditionSpec, lambda spec: _build_parameter_valid(spec)
+    )
+    condition_registry.register(
+        "parameter_equals", ParameterEqualsConditionSpec, lambda spec: _build_parameter_equals(spec)
+    )
+    condition_registry.register(
+        "attribute_check", AttributeCheckConditionSpec, lambda spec: _build_attribute_condition(spec)
+    )
+    condition_registry.register("and", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
+    condition_registry.register("or", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
+    condition_registry.register("not", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
+    condition_registry.register(
+        "implication", ImplicationConditionSpec, lambda spec: _build_implication_condition(spec)
+    )
+
+    # Register effect types with their spec classes and builder functions
+    effect_registry.register("set_attribute", SetAttributeEffectSpec, lambda spec: _build_set_attribute_effect(spec))
+    effect_registry.register("set_trend", SetTrendEffectSpec, lambda spec: _build_set_trend_effect(spec))
+    effect_registry.register("conditional", ConditionalEffectSpec, lambda spec: _build_conditional_effect(spec))
+
+
+# Register built-in types on module load
+_register_builtin_types()
 
 
 # ---------------------------------------------------------------------------
@@ -199,65 +221,117 @@ def _normalize_attribute_value(raw: Any) -> Union[str, ParameterReference]:
 
 
 def parse_condition_spec(data: Any) -> ConditionSpec:
+    """Parse condition data using the condition registry."""
     if isinstance(data, ConditionSpec):
         return data
     mapping = _ensure_mapping(data, "condition")
-    ctype = mapping.get("type")
-    cls = _CONDITION_SPEC_MAP.get(ctype)
-    if cls is None:
-        raise ValueError(f"Unknown condition type: {ctype}")
-    return cls.model_validate(mapping)
+    condition_registry = get_condition_registry()
+    return condition_registry.parse_spec(mapping)
 
 
 def parse_effect_spec(data: Any) -> EffectSpec:
+    """Parse effect data using the effect registry."""
     if isinstance(data, EffectSpec):
         return data
     mapping = _ensure_mapping(data, "effect")
-    etype = mapping.get("type")
-    cls = _EFFECT_SPEC_MAP.get(etype)
-    if cls is None:
-        raise ValueError(f"Unknown effect type: {etype}")
-    return cls.model_validate(mapping)
+    effect_registry = get_effect_registry()
+    return effect_registry.parse_spec(mapping)
 
 
 # ---------------------------------------------------------------------------
-# Runtime builders
+# Runtime builders - Individual builder functions for each type
 # ---------------------------------------------------------------------------
+
+
+def _build_parameter_valid(spec: ParameterValidConditionSpec) -> Condition:
+    """Build ParameterValid condition from spec."""
+    return ParameterValid(parameter=spec.parameter, valid_values=list(spec.valid_values))
+
+
+def _build_parameter_equals(spec: ParameterEqualsConditionSpec) -> Condition:
+    """Build ParameterEquals condition from spec."""
+    return ParameterEquals(parameter=spec.parameter, value=str(spec.value))
+
+
+def _build_attribute_condition(spec: AttributeCheckConditionSpec) -> Condition:
+    """Build AttributeCondition from spec."""
+    target = AttributeTarget.from_string(spec.target)
+    value = _normalize_attribute_value(spec.value)
+    return AttributeCondition(target=target, operator=spec.operator, value=value)  # type: ignore[arg-type]
+
+
+def _build_logical_condition(spec: LogicalConditionSpec) -> Condition:
+    """Build LogicalCondition from spec."""
+    nested = [build_condition(c) for c in spec.conditions]
+    return LogicalCondition(operator=spec.type, conditions=nested)
+
+
+def _build_implication_condition(spec: ImplicationConditionSpec) -> Condition:
+    """Build ImplicationCondition from spec."""
+    return ImplicationCondition(
+        if_condition=build_condition(spec.if_condition),
+        then_condition=build_condition(spec.then_condition),
+    )
+
+
+def _build_set_attribute_effect(spec: SetAttributeEffectSpec) -> Effect:
+    """Build SetAttributeEffect from spec."""
+    target = AttributeTarget.from_string(spec.target)
+    value = _normalize_attribute_value(spec.value)
+    return SetAttributeEffect(target=target, value=value)  # type: ignore[arg-type]
+
+
+def _build_set_trend_effect(spec: SetTrendEffectSpec) -> Effect:
+    """Build TrendEffect from spec."""
+    target = AttributeTarget.from_string(spec.target)
+    return TrendEffect(target=target, direction=spec.direction)
+
+
+def _build_conditional_effect(spec: ConditionalEffectSpec) -> Effect:
+    """Build ConditionalEffect from spec."""
+    cond = build_condition(spec.condition)
+    then_effects = [build_effect(e) for e in spec.then_effects]
+    else_effects = [build_effect(e) for e in spec.else_effects]
+    return ConditionalEffect(condition=cond, then_effect=then_effects, else_effect=else_effects)
 
 
 def build_condition(spec: ConditionSpec) -> Condition:
+    """
+    Build runtime condition from spec using the condition registry.
+
+    This function delegates to the registry's builder functions, which were
+    registered during module initialization.
+    """
+    # For backward compatibility, handle direct isinstance checks
+    # The registry-based approach is preferred for new code
     if isinstance(spec, ParameterValidConditionSpec):
-        return ParameterValid(parameter=spec.parameter, valid_values=list(spec.valid_values))
+        return _build_parameter_valid(spec)
     if isinstance(spec, ParameterEqualsConditionSpec):
-        return ParameterEquals(parameter=spec.parameter, value=str(spec.value))
+        return _build_parameter_equals(spec)
     if isinstance(spec, AttributeCheckConditionSpec):
-        target = AttributeTarget.from_string(spec.target)
-        value = _normalize_attribute_value(spec.value)
-        return AttributeCondition(target=target, operator=spec.operator, value=value)  # type: ignore[arg-type]
+        return _build_attribute_condition(spec)
     if isinstance(spec, LogicalConditionSpec):
-        nested = [build_condition(c) for c in spec.conditions]
-        return LogicalCondition(operator=spec.type, conditions=nested)
+        return _build_logical_condition(spec)
     if isinstance(spec, ImplicationConditionSpec):
-        return ImplicationCondition(
-            if_condition=build_condition(spec.if_condition),
-            then_condition=build_condition(spec.then_condition),
-        )
+        return _build_implication_condition(spec)
     raise TypeError(f"Unsupported condition spec: {spec}")
 
 
 def build_effect(spec: EffectSpec) -> Effect:
+    """
+    Build runtime effect from spec using the effect registry.
+
+    This function delegates to the registry's builder functions, which were
+    registered during module initialization.
+    """
+    # For backward compatibility, handle direct isinstance checks
+    # The registry-based approach is preferred for new code
     if isinstance(spec, SetAttributeEffectSpec):
-        target = AttributeTarget.from_string(spec.target)
-        value = _normalize_attribute_value(spec.value)
-        return SetAttributeEffect(target=target, value=value)  # type: ignore[arg-type]
+        return _build_set_attribute_effect(spec)
     if isinstance(spec, SetTrendEffectSpec):
-        target = AttributeTarget.from_string(spec.target)
-        return TrendEffect(target=target, direction=spec.direction)
+        return _build_set_trend_effect(spec)
     if isinstance(spec, ConditionalEffectSpec):
-        cond = build_condition(spec.condition)
-        then_effects = [build_effect(e) for e in spec.then_effects]
-        else_effects = [build_effect(e) for e in spec.else_effects]
-        return ConditionalEffect(condition=cond, then_effect=then_effects, else_effect=else_effects)
+        return _build_conditional_effect(spec)
     raise TypeError(f"Unsupported effect spec: {spec}")
 
 

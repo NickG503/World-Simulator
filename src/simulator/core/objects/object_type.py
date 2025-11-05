@@ -22,7 +22,6 @@ class ObjectBehavior(BaseModel):
     preconditions: List[Condition] = Field(default_factory=list)
     effects: List[Effect] = Field(default_factory=list)
 
-    # Allow additional fields for future extensions while storing runtime models
     model_config = {"extra": "allow", "arbitrary_types_allowed": True}
 
 
@@ -33,7 +32,6 @@ class ObjectConstraint(BaseModel):
     condition: _ConditionSpec | Any | None = None
     requires: _ConditionSpec | Any | None = None
 
-    # Allow additional fields for different constraint types
     model_config = {"extra": "allow"}
 
 

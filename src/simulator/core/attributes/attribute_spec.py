@@ -1,15 +1,8 @@
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Optional
 
-from pydantic import BaseModel, Field, field_validator
-
-
-class AttributeConstraint(BaseModel):
-    """Placeholder for attribute-level constraints (future use)."""
-
-    type: str
-    # Additional fields depending on constraint type
+from pydantic import BaseModel, field_validator
 
 
 class AttributeSpec(BaseModel):
@@ -19,7 +12,6 @@ class AttributeSpec(BaseModel):
     space_id: str  # References a QualitativeSpace
     mutable: bool = True
     default_value: Optional[str] = None
-    constraints: List[AttributeConstraint] = Field(default_factory=list)
 
     @field_validator("name", "space_id")
     @classmethod

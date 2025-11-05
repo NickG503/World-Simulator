@@ -23,10 +23,6 @@ A robust, deterministic simulator for everyday objects with qualitative reasonin
 ### Installation
 
 ```bash
-# Clone the repository
-git clone <repository-url>
-cd World-Simulator
-
 # Install dependencies using uv
 uv sync
 
@@ -64,36 +60,38 @@ For comprehensive CLI examples including parameters, clarifications, and advance
 ## Project Layout
 
 ```
-src/
-  simulator/
-    cli/              # Typer-based CLI commands
-    io/loaders/       # YAML → typed specs → runtime models
-    core/
-      actions/        # Action, Condition, Effect types & specs
-      objects/        # ObjectType, ObjectInstance, AttributeTarget
-      registries/     # RegistryManager + cross-validation
-      engine/         # TransitionEngine, ConditionEvaluator, EffectApplier
-      simulation_runner.py  # High-level simulation utilities
-      dataset/              # Dataset text builders (minimal story + clarifications + results)
+src/simulator/
+  cli/              # Typer-based CLI commands
+  services/         # Business logic layer (simulation, validation, behavior resolution)
+  repositories/     # Data access layer (object, action, space repositories)
+  io/loaders/       # YAML → typed specs → runtime models
+  core/
+    actions/        # Action, Condition, Effect types, specs & registries
+    objects/        # ObjectType, ObjectInstance, AttributeTarget
+    registries/     # RegistryManager + cross-validation
+    engine/         # TransitionEngine, ConditionEvaluator, EffectApplier
+    simulation_runner.py  # Multi-step simulation execution
+    dataset/        # Dataset text builders
 kb/
-  spaces/            # Qualitative space definitions
-  objects/           # Object type YAML files
-  actions/           # Generic & object-specific actions
-tests/               # Pytest suite covering loaders, smoke tests, behaviour validation
+  spaces/           # Qualitative space definitions
+  objects/          # Object type YAML files
+  actions/          # Generic & object-specific actions
+tests/              # Pytest suite
 ```
 
 ---
 
 ## Core Components
 
-| Area        | Key Classes | Responsibilities |
+| Layer       | Key Classes | Responsibilities |
 |-------------|-------------|------------------|
-| Registries  | `RegistryManager`, `RegistryValidator` | Stores qualitative spaces, attributes, objects, and actions. Performs cross-registry validation on attribute references, behaviours, and constraints. |
-| Engine      | `TransitionEngine`, `ConditionEvaluator`, `EffectApplier`, `DiffEntry`, `TransitionResult` | Validates parameters, evaluates structured preconditions, applies effects, records diffs, and enforces object-level constraints. |
-| Actions     | `Action`, `ActionMetadata`, `ParameterSpec`, `Condition`/`Effect` subclasses | Encapsulate structured action definitions, parameter rules, conditional logic, and effect execution (attribute setters, trend updates, conditional branches). |
-| Objects     | `ObjectType`, `PartSpec`, `AttributeSpec`, `ObjectConstraint`, `ObjectBehavior`, `ObjectInstance`, `AttributeTarget` | Describe object structure, defaults, mutability, behaviours, and constraint definitions. Constraints use the same condition language as actions. |
-| Simulation  | `ActionRequest`, `AttributeSnapshot`, `ObjectStateSnapshot`, `SimulationStep`, `SimulationHistory`, `SimulationRunner` | Provide typed inputs/outputs for multi-step simulations and produce reusable history artefacts. |
-| Dataset     | `build_interactive_dataset_text` | Convert a simulation run into a minimal dataset block with story, clarifications, and per-step results. |
+| Services    | `SimulationService`, `ValidationService`, `BehaviorResolverService` | Business logic orchestration for simulations, validation, and action resolution. |
+| Repositories | `ObjectRepository`, `ActionRepository`, `SpaceRepository` | Clean data access abstractions over registries. |
+| Registries  | `RegistryManager`, `ConditionRegistry`, `EffectRegistry` | Central storage and extensible plugin system for types. |
+| Engine      | `TransitionEngine`, `ConditionEvaluator`, `EffectApplier` | Validates parameters, evaluates preconditions, applies effects, enforces constraints. |
+| Actions     | `Action`, `Condition`, `Effect`, `ParameterSpec` | Structured action definitions with conditional logic and state changes. |
+| Objects     | `ObjectType`, `ObjectInstance`, `ObjectBehavior`, `ObjectConstraint` | Object structure, runtime state, custom behaviors, and validation rules. |
+| Simulation  | `SimulationRunner`, `SimulationHistory`, `SimulationStep` | Multi-step execution with state tracking and history persistence. |
 
 Loaders rely on dedicated Pydantic specs (`ActionFileSpec`, `ObjectFileSpec`, `QualitativeSpaceFileSpec`). Validation failures raise `LoaderError`, which attaches the source path and concise error snippets for CLI display.
 
@@ -241,48 +239,5 @@ CI runs automatically on:
 - Every pull request
 
 ---
-
-## Project Structure
-
-```
-World-Simulator/
-├── src/simulator/       # Core simulator code
-│   ├── cli/            # Typer-based CLI commands
-│   ├── core/           # Engine, actions, objects, registries
-│   ├── io/             # YAML loaders
-│   └── utils/          # Utilities
-├── kb/                 # Knowledge base
-│   ├── spaces/         # Qualitative space definitions
-│   ├── objects/        # Object type definitions
-│   └── actions/        # Action definitions (generic & object-specific)
-├── tests/              # Test suite
-├── scripts/            # Utility scripts
-├── outputs/            # Simulation outputs (histories, results)
-└── docs/              # Documentation
-```
-
----
-
-## Contributing
-
-1. Fork the repository
-2. Create a feature branch: `git checkout -b feature-name`
-3. Make your changes
-4. Ensure tests pass: `./scripts/run_all_tests.sh`
-5. Ensure formatting is correct: `uv run ruff format . && uv run ruff check .`
-6. Commit your changes (pre-commit hooks will run automatically)
-7. Push and create a pull request
-
-**Note**: All PRs must pass CI checks (formatting, linting, tests) before merging.
-
----
-
-## License
-
-[Add your license information here]
-
----
-
-## Acknowledgments
 
 World Simulator keeps the codebase lean: strong schemas, explicit registries, and a clear runtime pipeline so you can expand the knowledge base or integrate new evaluators with confidence.
