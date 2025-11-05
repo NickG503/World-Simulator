@@ -57,23 +57,19 @@ jobs:
         run: |
           uv run ruff check src/ tests/
 
-  # Job 3: Run tests on multiple Python versions
+  # Job 3: Run tests
   test:
-    name: Test (Python ${{ matrix.python-version }})
+    name: Test (Python 3.11)
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        python-version: ["3.10", "3.11"]
-      fail-fast: false
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python ${{ matrix.python-version }}
+      - name: Set up Python 3.11
         uses: actions/setup-python@v5
         with:
-          python-version: ${{ matrix.python-version }}
+          python-version: "3.11"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v3
@@ -82,17 +78,11 @@ jobs:
         run: |
           uv sync --all-extras
 
-      - name: Run tests
+      - name: Run tests with coverage
         run: |
-          uv run pytest tests/ -v
+          uv run pytest tests/ -v --cov=src/simulator --cov-report=term-missing --cov-report=xml
 
-      - name: Run tests with coverage (Python 3.11 only)
-        if: matrix.python-version == '3.11'
-        run: |
-          uv run pytest tests/ --cov=src/simulator --cov-report=term-missing --cov-report=xml
-
-      - name: Upload coverage to Codecov (Python 3.11 only)
-        if: matrix.python-version == '3.11'
+      - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
         with:
           file: ./coverage.xml

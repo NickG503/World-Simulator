@@ -232,7 +232,7 @@ This project uses GitHub Actions for CI/CD:
 
 - **Formatting Check** - Ensures code is properly formatted
 - **Linting** - Runs ruff linter on all Python code
-- **Tests** - Runs complete test suite on Python 3.10 and 3.11
+- **Tests** - Runs complete test suite with coverage reporting
 
 CI runs automatically on:
 - Every push to `master`
