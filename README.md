@@ -45,7 +45,7 @@ uv run sim show behaviors flashlight
 # Run a simulation (interactive)
 uv run sim simulate --obj flashlight turn_on turn_off --name basic_test
 
-# View the simulation history (just use the name!)
+# View the simulation history 
 uv run sim history basic_test
 ```
 
