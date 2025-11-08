@@ -8,7 +8,6 @@ preconditions:
     target: screen.power
     operator: equals
     value: on
-  # Complex precondition with OR logic
   - type: or
     conditions:
       - type: attribute_check
@@ -21,7 +20,6 @@ preconditions:
         value: on
 
 effects:
-  # Complex postcondition with AND logic (no else = required)
   - type: conditional
     condition:
       type: and
@@ -41,4 +39,10 @@ effects:
       - type: set_attribute
         target: audio.volume
         value: high
-    # No else branch - both conditions must be TRUE
+    else:
+      - type: set_attribute
+        target: screen.brightness
+        value: medium
+      - type: set_attribute
+        target: audio.volume
+        value: medium

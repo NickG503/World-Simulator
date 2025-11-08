@@ -8,22 +8,32 @@ parameters:
     required: false
 
 preconditions:
-  OR:
-    - AND:
-        - type: attribute_check
-          target: screen.power
-          operator: equals
-          value: off
-        - type: attribute_check
-          target: button.state
-          operator: equals
-          value: off
-    - type: parameter_equals
-      parameter: force
-      value: force
+  - type: or
+    conditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: off
+      - type: parameter_equals
+        parameter: force
+        value: force
 
 effects:
-  # Placeholder: real reset would wipe settings; here it's a no-op guarded by precondition
   - type: set_attribute
     target: button.state
+    value: off
+  - type: set_attribute
+    target: screen.power
+    value: off
+  - type: set_attribute
+    target: screen.brightness
+    value: none
+  - type: set_attribute
+    target: audio.volume
+    value: medium
+  - type: set_attribute
+    target: audio.channel
+    value: low
+  - type: set_attribute
+    target: network.wifi_connected
     value: off

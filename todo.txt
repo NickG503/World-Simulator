@@ -37,6 +37,7 @@ remove this from the table : [CONDITIONAL_EVAL]  │ evaluating │ FALSE → 'e
 
 Needs to be done: 
 
-remove the failer and ask if we want to continue - 
+remove the failer and ask if we want to continue - Done
+show better structure in both pre and post condition - Done
 remove the unknown and add the options (maybe change the logic itself) -
 show in the table - if else if ... - 

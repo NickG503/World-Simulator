@@ -401,23 +401,52 @@ class SimulationRunner:
                     else:
                         break
 
-                # If still failing without clarifications, record and stop the run
+                # If still failing without clarifications, offer to continue or stop the run
                 if result.status != "ok" and not getattr(result, "clarifications", None):
-                    state_after = self._capture_object_state(current_instance)
+                    keep_running = False
+                    if resolver is not None:
+                        from rich.prompt import Confirm
+
+                        failure_msg = result.reason or f"Action '{action_name}' failed ({result.status})"
+                        resolver.console.print(
+                            f"[red]{action_name}: {failure_msg if result.reason else 'action failed'}[/red]"
+                        )
+                        keep_running = Confirm.ask(
+                            "Continue simulation despite this failure?",
+                            console=resolver.console,
+                            default=False,
+                        )
+                    if not keep_running:
+                        state_after = self._capture_object_state(current_instance)
+                        step = SimulationStep(
+                            step_number=step_index,
+                            action_name=action_name,
+                            object_name=object_type,
+                            parameters=parameters,
+                            status=result.status,
+                            error_message=result.reason if result.status != "ok" else None,
+                            object_state_before=state_before,
+                            object_state_after=state_after,
+                            changes=result.changes,
+                        )
+                        history.steps.append(step)
+                        step_index += 1
+                        return history
+                    # User opted to continue; record failure but keep state unchanged
                     step = SimulationStep(
                         step_number=step_index,
                         action_name=action_name,
                         object_name=object_type,
                         parameters=parameters,
                         status=result.status,
-                        error_message=result.reason if result.status != "ok" else None,
+                        error_message=f"{result.reason or 'Action failed'} (continued)",
                         object_state_before=state_before,
-                        object_state_after=state_after,
+                        object_state_after=state_before.model_copy(deep=True),
                         changes=result.changes,
                     )
                     history.steps.append(step)
                     step_index += 1
-                    return history
+                    continue
 
             # Capture state after action
             state_after = self._capture_object_state(result.after if result.after else current_instance)
@@ -446,33 +475,23 @@ class SimulationRunner:
                 if result.status == "ok":
                     logger.info("✅ %s ran successfully", action_name)
                     # Show what effects were applied
-                    if resolver is not None and result.changes:
-                        # Check for conditional evaluation info first
-                        for change in result.changes:
-                            if change.kind == "info" and change.attribute == "[CONDITIONAL_EVAL]":
-                                # Show postcondition evaluation result
-                                if "FALSE" in change.after:
-                                    resolver.console.print(
-                                        f"[yellow]⚠ Postcondition evaluated: {change.after}[/yellow]\n"
-                                    )
-                                else:
-                                    resolver.console.print(f"[cyan]✓ Postcondition evaluated: {change.after}[/cyan]\n")
-
+                    if resolver is not None:
                         # Show actual effects applied
                         value_changes = [c for c in result.changes if c.kind in ("value", "trend", "clarification")]
+                        resolver.console.print("[dim cyan]Effects applied:[/dim cyan]")
                         if value_changes:
-                            resolver.console.print("[dim cyan]Effects applied:[/dim cyan]")
                             for change in value_changes:
                                 if change.kind in ("value", "clarification"):
                                     resolver.console.print(
                                         f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
                                     )
                                 elif change.kind == "trend":
-                                    # Note: change.attribute already contains .trend suffix from context.write_trend()
                                     resolver.console.print(
                                         f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
                                     )
-                            resolver.console.print("")  # Empty line
+                        else:
+                            resolver.console.print("[dim]  • No visible changes[/dim]")
+                        resolver.console.print("")  # Empty line
                 else:
                     logger.warning("Action failed: %s", result.reason)
 

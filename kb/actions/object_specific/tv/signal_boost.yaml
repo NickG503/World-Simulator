@@ -1,4 +1,4 @@
-action: test_required_postcondition
+action: signal_boost
 object_type: tv
 
 parameters: {}
@@ -10,22 +10,29 @@ preconditions:
     value: on
 
 effects:
-  # Conditional effect WITHOUT else branch
-  # This means the condition is REQUIRED (must be TRUE)
   - type: conditional
     condition:
-      type: and
+      type: or
       conditions:
-        - type: attribute_check
-          target: power_source.voltage
-          operator: equals
-          value: high
         - type: attribute_check
           target: network.wifi_connected
           operator: equals
           value: on
+        - type: attribute_check
+          target: power_source.voltage
+          operator: equals
+          value: high
     then:
       - type: set_attribute
         target: screen.brightness
         value: high
-    # NO else branch - if condition is FALSE, action should FAIL
+      - type: set_attribute
+        target: audio.volume
+        value: high
+    else:
+      - type: set_attribute
+        target: screen.brightness
+        value: medium
+      - type: set_attribute
+        target: audio.volume
+        value: medium

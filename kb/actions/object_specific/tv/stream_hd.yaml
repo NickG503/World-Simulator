@@ -4,21 +4,25 @@ object_type: tv
 parameters: {}
 
 preconditions:
-  # Multiple preconditions checking different unknown attributes
   - type: attribute_check
     target: screen.power
     operator: equals
     value: on
-  - type: attribute_check
-    target: network.wifi_connected
-    operator: equals
-    value: on
-  - type: attribute_check
-    target: power_source.voltage
-    operator: not_equals
-    value: low
+  - type: and
+    conditions:
+      - type: attribute_check
+        target: network.wifi_connected
+        operator: equals
+        value: on
+      - type: attribute_check
+        target: power_source.connection
+        operator: equals
+        value: on
 
 effects:
+  - type: set_attribute
+    target: audio.channel
+    value: high
   - type: set_attribute
     target: screen.brightness
     value: high

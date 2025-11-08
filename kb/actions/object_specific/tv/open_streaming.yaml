@@ -8,13 +8,28 @@ preconditions:
     target: screen.power
     operator: equals
     value: on
-  - type: attribute_check
-    target: network.wifi_connected
-    operator: equals
-    value: on
 
 effects:
-  # Keep brightness as-is (turn_on sets medium); we don't change it so a later HDR enable may fail
+  - type: conditional
+    condition:
+      type: attribute_check
+      target: network.wifi_connected
+      operator: equals
+      value: on
+    then:
+      - type: set_attribute
+        target: audio.channel
+        value: medium
+      - type: set_attribute
+        target: screen.brightness
+        value: high
+    else:
+      - type: set_attribute
+        target: audio.channel
+        value: low
+      - type: set_attribute
+        target: screen.brightness
+        value: medium
   - type: set_attribute
-    target: screen.power
-    value: on
+    target: audio.volume
+    value: medium

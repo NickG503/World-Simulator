@@ -149,9 +149,13 @@ class TransitionEngine:
                 else:
                     # True failure (not due to unknown)
                     failure_msg = self._create_failure_message(condition, eval_ctx)
-                    return TransitionResult.rejected(
-                        f"Precondition failed: {failure_msg}", before=instance, clarifications=[]
-                    )
+                    structure = self._describe_condition_structure(condition)
+                    normalized = failure_msg.strip() if failure_msg else ""
+                    if normalized in (structure, f"({structure})"):
+                        reason = f"Precondition failed: {structure}"
+                    else:
+                        reason = f"Precondition failed ({structure}): {failure_msg}"
+                    return TransitionResult.rejected(reason, before=instance, clarifications=[])
 
         # Phase 3.5: Check effect conditions for unknowns
         effect_clarifications = self._clarify_effect_conditions(action.effects, eval_ctx)
@@ -175,9 +179,6 @@ class TransitionEngine:
         for effect in action.effects:
             sc = self.effect_applier.apply(effect, app_ctx, new_instance)
             for c in sc:
-                # Check for conditional effect failure (no else branch)
-                if c.kind == "error" and c.attribute == "[CONDITIONAL_EVAL_FAILED]":
-                    return TransitionResult.rejected(f"Postcondition failed: {c.after}", before=instance)
                 changes.append(DiffEntry(attribute=c.attribute, before=c.before, after=c.after, kind=c.kind))
 
         # Phase 5: Check constraints on the new state (cached)
@@ -240,8 +241,8 @@ class TransitionEngine:
                 return f"parameter '{condition.parameter}' in {condition.valid_values} (current: '{actual_value}', valid: {condition.valid_values})"  # noqa: E501
 
             elif isinstance(condition, LogicalCondition):
-                # For logical conditions, just use the describe method (complex to resolve all nested conditions)
-                return condition.describe()
+                actual = self._describe_condition_actuals(condition, eval_ctx)
+                return f"instead got {actual}"
 
             elif isinstance(condition, ImplicationCondition):
                 return condition.describe()
@@ -325,6 +326,38 @@ class TransitionEngine:
             return f"IF {if_part} THEN {then_part}"
 
         return "complex condition"
+
+    def _describe_condition_actuals(self, condition, eval_ctx) -> str:
+        """Return actual attribute values involved in a condition."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.core.actions.conditions.logical_conditions import (
+            ImplicationCondition,
+            LogicalCondition,
+        )
+
+        if isinstance(condition, AttributeCondition):
+            try:
+                actual_value = eval_ctx.read_attribute(condition.target)
+            except Exception:
+                actual_value = "unknown"
+            return f"{condition.target.to_string()}={actual_value}"
+
+        if isinstance(condition, LogicalCondition):
+            parts = [self._describe_condition_actuals(c, eval_ctx) for c in condition.conditions]
+            if condition.operator == "not" and parts:
+                return f"NOT({parts[0]})"
+            if condition.operator == "and":
+                return f"({' AND '.join(parts)})"
+            if condition.operator == "or":
+                return f"({' OR '.join(parts)})"
+            return " ".join(parts)
+
+        if isinstance(condition, ImplicationCondition):
+            if_actual = self._describe_condition_actuals(condition.if_condition, eval_ctx)
+            then_actual = self._describe_condition_actuals(condition.then_condition, eval_ctx)
+            return f"IF {if_actual} THEN {then_actual}"
+
+        return condition.describe()
 
     def _smart_evaluate_condition_for_precond(
         self, condition, eval_ctx: EvaluationContext
@@ -537,13 +570,13 @@ class TransitionEngine:
         seen_attributes = set()  # Avoid duplicate questions for same attribute
         condition_structures = []  # Collect condition structures to show
 
-        def scan_effect(effect) -> None:
+        def scan_effect(effect, depth: int = 0) -> None:
             """Recursively scan an effect for conditions with unknowns."""
             if isinstance(effect, ConditionalEffect):
-                # Get the condition structure for informational message
-                structure = self._describe_condition_structure(effect.condition)
-                if structure not in condition_structures:
-                    condition_structures.append(structure)
+                if depth == 0:
+                    structure = self._describe_conditional_effect(effect)
+                    if structure not in condition_structures:
+                        condition_structures.append(structure)
 
                 # Use smart evaluation for the condition
                 result, clar = self._smart_evaluate_condition(effect.condition, eval_ctx)
@@ -563,10 +596,10 @@ class TransitionEngine:
                 then_effects = effect._as_list(effect.then_effect)
                 else_effects = effect._as_list(effect.else_effect)
                 for e in then_effects + else_effects:
-                    scan_effect(e)
+                    scan_effect(e, depth + 1)
             elif isinstance(effect, list):
                 for e in effect:
-                    scan_effect(e)
+                    scan_effect(e, depth)
 
         # Scan all effects
         for effect in effects:
@@ -574,7 +607,54 @@ class TransitionEngine:
 
         # If we have clarifications, prepend the structure information
         if clarifications and condition_structures:
-            structure_msg = "Postcondition structure: " + " AND ".join(condition_structures)
+            structure_msg = "Postcondition flow: " + " | ".join(condition_structures)
             clarifications.insert(0, f"[INFO] {structure_msg}")
 
         return clarifications
+
+    def _describe_conditional_effect(self, effect) -> str:
+        """Describe conditional effect using IF / ELSE chain notation."""
+        condition_text = self._describe_condition_structure(effect.condition)
+        then_text = self._describe_effect_branch(effect.then_effect)
+        else_text = self._describe_effect_branch(effect.else_effect)
+        description = f"IF {condition_text} THEN ({then_text})"
+        if else_text:
+            if else_text.startswith("IF "):
+                description += f" ELSE {else_text}"
+            else:
+                description += f" ELSE ({else_text})"
+        return description
+
+    def _describe_effect_branch(self, branch) -> str:
+        """Summarize the effects applied in a branch."""
+        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+        from simulator.core.actions.effects.trend_effects import TrendEffect
+        from simulator.core.actions.parameter import ParameterReference
+
+        def summarize_effect(effect) -> str:
+            if isinstance(effect, ConditionalEffect):
+                return self._describe_conditional_effect(effect)
+            if isinstance(effect, SetAttributeEffect):
+                target = effect.target.to_string()
+                value = effect.value
+                if isinstance(value, ParameterReference):
+                    value_desc = f"parameter:{value.name}"
+                else:
+                    value_desc = str(value)
+                return f"set {target} = {value_desc}"
+            if isinstance(effect, TrendEffect):
+                target = effect.target.to_string()
+                return f"set {target}.trend = {effect.direction}"
+            return effect.__class__.__name__
+
+        if branch is None:
+            return "no additional effects"
+        if isinstance(branch, list):
+            effects = list(branch)
+        else:
+            effects = [branch]
+        if not effects:
+            return "no additional effects"
+        summaries = [summarize_effect(effect) for effect in effects]
+        return "; ".join(summaries)

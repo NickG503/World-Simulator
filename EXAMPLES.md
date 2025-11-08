@@ -138,11 +138,13 @@ These happen when checking if an action **CAN** run.
 **Example:**
 
 ```bash
-# The change_channel action requires voltage != low as precondition
-uv run sim simulate --obj tv turn_on change_channel=high --name tv_precondition_demo
+# stream_hd requires wifi to be on before it can run
+uv run sim simulate --obj tv turn_on stream_hd --name tv_precondition_demo
 ```
 
-You'll see: `Precondition: what is power_source.voltage?`
+You'll see: `Precondition: what is network.wifi_connected?`
+
+> `turn_on` automatically sets `power_source.connection = on`, so the second half of the AND condition is already satisfied. If you start from a state where that attribute is unknown (for example, by loading a saved history before the TV was powered), you'll receive a second prompt.
 
 #### Postcondition Clarification
 
@@ -163,20 +165,27 @@ uv run sim simulate --obj tv turn_on adjust_brightness --name tv_Postcondition_d
 
 You'll see: `Postcondition: what is network.wifi_connected?`
 
+```bash
+# signal_boost uses OR logic in its postcondition
+uv run sim simulate --obj tv turn_on signal_boost --name tv_Postcondition_or_demo
+```
+
+You'll see: `Postcondition: what is network.wifi_connected?` followed by `Postcondition: what is power_source.voltage?` (only if the first answer doesn't satisfy the OR).
+
 #### Seeing Both Types Together
 
 ```bash
-# This sequence shows both pre-condition and Postcondition clarifications
+# This sequence shows both pre-condition and postcondition clarifications
 uv run sim simulate --obj tv \
-  turn_on adjust_brightness change_channel=high \
+  turn_on stream_hd smart_adjust \
   --name tv_both_clarifications
 ```
 
 **Clarifications in this sequence:**
-1. **Postcondition**: "Postcondition: what is network.wifi_connected?" (for adjust_brightness)
-   - Answer "on" or "off" - both work
-2. **Precondition**: "Precondition: what is power_source.voltage?" (for change_channel)
-   - Answer "medium" or "high" (not "low" to pass the precondition)
+1. **Precondition** (from `stream_hd`): `Precondition: what is network.wifi_connected?`
+   - Provide the wifi status so the action can start (the power connection is already satisfied by `turn_on`).
+2. **Postcondition** (from `smart_adjust`): "Postcondition: what is network.wifi_connected?" followed by "Postcondition: what is power_source.voltage?"
+   - Your answers determine which branch of the effect runs.
 
 ### Key Points
 
@@ -196,16 +205,16 @@ The simulator can handle **multiple unknown attributes** at once. Instead of sto
 #### Multiple Preconditions Example
 
 ```bash
-# stream_hd checks multiple unknown attributes in preconditions
+# stream_hd checks multiple attributes, but only wifi is unknown by default
 uv run sim simulate --obj tv turn_on stream_hd --name tv_multiple_preconditions
 ```
 
 **What happens:**
-1. `turn_on` succeeds
-2. `stream_hd` finds TWO unknown attributes in preconditions:
+1. `turn_on` succeeds (and auto-connects the power source)
+2. `stream_hd` asks for a single unknown precondition:
    - `Precondition: what is network.wifi_connected?` → Answer: **on**
-   - `Precondition: what is power_source.voltage?` → Answer: **high** or **medium**
-3. After answering both, the action retries and succeeds
+3. After answering, the action retries and succeeds
+4. If you manually clear the power connection (for example, by restoring a saved state before the TV was powered), the simulator would prompt for that attribute as well because the AND condition would have two unknowns.
 
 #### Multiple Postconditions Example
 
@@ -229,28 +238,37 @@ uv run sim simulate --obj tv turn_on smart_adjust --name tv_multiple_postconditi
 
 #### Combined Example (Both Types)
 
+You can experience both clarification phases in a single run by chaining two realistic actions:
+
 ```bash
-# optimize_viewing has multiple unknowns in BOTH preconditions AND postconditions
-uv run sim simulate --obj tv turn_on optimize_viewing --name tv_comprehensive_unknowns
+uv run sim simulate --obj tv turn_on stream_hd smart_adjust --name tv_pre_post_combo
 ```
 
 **What happens:**
-1. `turn_on` succeeds
-2. `optimize_viewing` checks preconditions and finds unknowns:
-   - `Precondition: what is network.wifi_connected?` → Answer: **on**
-   - `Precondition: what is power_source.voltage?` → Answer: **high** or **medium**
-3. Preconditions pass, then checks postconditions and finds unknowns:
-   - `Postcondition: what is audio.channel?` → Answer: **low**, **medium**, or **high**
-   - (Other effect conditions may also ask if their attributes are unknown)
-4. After all clarifications, action succeeds with appropriate effects applied
+1. `turn_on` succeeds.
+2. `stream_hd` pauses for the wifi precondition (and would also ask about the power connection if you started from a state where it wasn't already satisfied). Once resolved, it boosts the video settings.
+3. `smart_adjust` immediately follows, and its conditional effects ask about wifi and voltage to decide how to tune brightness and volume.
+4. The result file clearly separates which questions came from preconditions versus postconditions.
 
-This demonstrates the complete flow: **multiple preconditions** → all answered → **multiple postconditions** → all answered → **success**!
+That single command shows the flow end-to-end: **unknown preconditions** → resolved → **unknown postconditions** → resolved → **success**.
+
+#### Flashlight Battery Clarification (Postcondition)
+
+```bash
+uv run sim simulate --obj flashlight turn_on --name flashlight_battery_question
+```
+
+**What happens:**
+1. The physical action (flipping the switch) always succeeds and is applied immediately.
+2. The simulator then asks `Postcondition: what is battery.level?` because the brightness logic needs that value.
+3. If you answer **high/medium/low**, the light turns on with the matching brightness and the battery trend moves downward.
+4. If you answer **empty**, the conditional effect runs its `else` branch, leaving the bulb dark—yet the action still succeeds, so you can follow up with `turn_off` or `replace_battery` without restarting the run.
 
 ### Smart Short-Circuit Logic (Advanced)
 
-The simulator uses **intelligent short-circuit evaluation** for logical conditions (OR/AND) in postconditions. This means it only asks about unknowns that actually matter for the decision.
+The simulator uses **intelligent short-circuit evaluation** for logical conditions (OR/AND). It only asks about the attributes that actually influence the final result.
 
-**Structure Messages:** Before asking clarification questions, the simulator displays the complete logical structure of the condition, showing you the OR/AND relationships and which attributes are involved. This helps you understand what's being evaluated.
+**Structure Messages:** Before prompting, the CLI prints the entire logical structure so you can see how the checks are combined.
 
 #### Precondition Structure Example
 
@@ -259,69 +277,46 @@ The simulator uses **intelligent short-circuit evaluation** for logical conditio
 uv run sim simulate --obj tv turn_on stream_hd --name test_precond_structure
 ```
 
-**What you'll see:**
+**What you'll see (by default):**
 ```
-Precondition structure: (network.wifi_connected==on AND power_source.voltage!=low)
+Precondition structure: (network.wifi_connected==on AND power_source.connection==on)
 Precondition: what is network.wifi_connected?
-Precondition: what is power_source.voltage?
 ```
+
+`turn_on` satisfies the connection requirement, so only wifi needs clarification unless you intentionally reset `power_source.connection`.
+
+#### Logic Walkthrough Examples
+
+- **Precondition (AND)** — `uv run sim simulate --obj tv turn_on stream_hd --name tv_precond_and`  
+  Structure: `(network.wifi_connected==on AND power_source.connection==on)`. By default you'll only be asked about wifi because the connection is already satisfied, but the AND relationship is still visible. If you start from a saved state where `power_source.connection` is unknown, both prompts appear.
+- **Precondition (OR)** — `uv run sim simulate --obj tv turn_on premium_mode --name tv_precond_or`  
+  Structure: `(power_source.voltage==high OR network.wifi_connected==on)`. If the first attribute is TRUE (voltage=high), the simulator never asks about wifi; otherwise it immediately asks for wifi to see if the OR condition can still pass.
+- **Postcondition (AND)** — `uv run sim simulate --obj tv turn_on premium_mode --name tv_postcond_and`  
+  Structure: `(cooling.temperature!=hot AND audio.channel!=low)`. If you answer `cooling.temperature = hot`, the AND fails immediately and the `else` branch runs; otherwise it asks about `audio.channel` before applying the correct branch.
+- **Postcondition (OR)** — `uv run sim simulate --obj tv turn_on signal_boost --name tv_postcond_or`  
+  Structure: `(network.wifi_connected==on OR power_source.voltage==high)`. Provide either value to satisfy the OR and hit the “boost” branch; if both answers fall through, you'll see the fallback branch applied.
 
 #### OR Short-Circuit
 
-For `OR` conditions, if the first condition evaluates to TRUE, the simulator **does not** ask about subsequent conditions (they don't matter).
-
-**Example:**
+`premium_mode` has a precondition `(power_source.voltage==high OR network.wifi_connected==on)`. Run:
 
 ```bash
-# test_or_shortcircuit: checks (voltage==high) OR (wifi==on)
-# If voltage is high, should NOT ask about wifi
-uv run sim simulate --obj tv turn_on test_or_shortcircuit --name test_or_smart
+uv run sim simulate --obj tv turn_on premium_mode --name tv_or_shortcircuit
 ```
 
-**What happens:**
-- Shows structure: `Postcondition structure: (power_source.voltage==high OR network.wifi_connected==on)`
-- Asks: `Postcondition: what is power_source.voltage?`
-- You answer: **high** → First condition is TRUE
-- Result: **Does NOT ask** about `network.wifi_connected` (short-circuit!)
-- The condition is TRUE, executes `then` branch
-
-**But if you answer differently:**
-- You answer: **medium** → First condition is FALSE
-- Result: **Now asks** about `network.wifi_connected` (needs to check second condition)
+- When the prompt asks for `power_source.voltage`, answer **high** → the OR is already TRUE, so it never asks about wifi.
+- If you answer **medium**, the first branch is FALSE, so it immediately asks for `network.wifi_connected` to see if the second branch can rescue the condition.
 
 #### AND Short-Circuit
 
-For `AND` conditions, if the first condition evaluates to FALSE, the simulator **does not** ask about subsequent conditions (they don't matter).
-
-**Example:**
+The same `premium_mode` action has an effect condition `(cooling.temperature!=hot AND audio.channel!=low)` with a fallback branch. Run:
 
 ```bash
-# test_and_shortcircuit: checks (voltage==low) AND (wifi==on)
-# If voltage is NOT low, should NOT ask about wifi
-uv run sim simulate --obj tv turn_on test_and_shortcircuit --name test_and_smart
+uv run sim simulate --obj tv turn_on premium_mode --name tv_and_shortcircuit
 ```
 
-**What happens:**
-- Shows structure: `Postcondition structure: (power_source.voltage==low AND network.wifi_connected==on)`
-- Asks: `Postcondition: what is power_source.voltage?`
-- You answer: **high** → First condition is FALSE (voltage is NOT low)
-- Shows: `→ Set power_source.voltage = high`
-- Result: **Does NOT ask** about `network.wifi_connected` (short-circuit!)
-- Shows: `⚠ Postcondition evaluated: FALSE → 'else' branch`
-- Effects: Sets brightness to **high** (the 'else' branch)
-
-**But if you answer differently:**
-- You answer: **low** → First condition is TRUE
-- Result: **Now asks** about `network.wifi_connected` (needs ALL conditions for AND)
-- After both answered: `✓ Postcondition evaluated: TRUE → 'then' branch`
-- Effects: Sets brightness to **low** (the 'then' branch)
-
-#### Benefits of Smart Logic
-
-1. **Efficiency**: Only asks necessary questions
-2. **User Experience**: Fewer irrelevant questions
-3. **Correctness**: Respects logical evaluation order like programming languages
-4. **Smart**: Adapts based on your answers
+- When the postcondition asks for `cooling.temperature`, answer **hot**. The first clause becomes FALSE, so it never asks about `audio.channel`.
+- Re-run and answer **cold**. Now the first clause is TRUE, so it immediately asks about `audio.channel` before deciding which branch to use.
 
 #### Behavior Summary
 
@@ -332,54 +327,22 @@ uv run sim simulate --obj tv turn_on test_and_shortcircuit --name test_and_smart
 | AND | TRUE | ✅ YES | Need all conditions to be true |
 | AND | FALSE | ❌ NO | Already false, second doesn't matter |
 
-This smart evaluation works recursively with nested conditions like `(A OR B) AND (C OR D)`, always asking only what's necessary to determine the outcome.
+This logic nests, so complicated expressions like `(A OR B) AND (C OR D)` only query the attributes that matter.
 
-#### Nested Condition Example
+### Postconditions Always Provide Outcomes
 
-```bash
-# test_nested_logic: ((voltage==high) OR (wifi==on)) AND (channel!=low)
-uv run sim simulate --obj tv turn_on test_nested_logic --name test_nested
-```
+Every conditional effect now has an explicit `else` branch, so once an action passes its preconditions it always finishes successfully. Instead of failing, the simulator simply chooses the branch that matches your answers.
 
-**What happens:**
-- Shows structure: `Postcondition structure: ((power_source.voltage==high OR network.wifi_connected==on) AND audio.channel!=low)`
-- Asks about voltage → Answer: **high** → OR's first part is TRUE
-- **Doesn't ask** about wifi (OR short-circuit!)
-- AND needs all parts, so asks about channel → Answer: **medium** → TRUE
-- Both parts of AND satisfied → Success!
-
-### Required Postconditions (No Else Branch)
-
-Some actions have postconditions **without an 'else' branch**. These act as **requirements** - if the condition is FALSE, the action **FAILS**.
-
-#### When to Use
-
-- **With else branch**: Condition is a decision point (both outcomes valid)
-- **Without else branch**: Condition is a requirement (must be TRUE)
-
-#### Example
+Example with `premium_mode`:
 
 ```bash
-# test_required_postcondition: requires (voltage==high AND wifi==on)
-# No else branch - if FALSE, action fails
-uv run sim simulate --obj tv turn_on test_required_postcondition --name test_required
+uv run sim simulate --obj tv turn_on premium_mode --name tv_branch_choice
 ```
 
-**Scenario 1: Condition TRUE → Success**
-- Shows structure: `Postcondition structure: (voltage==high AND wifi==on)`
-- Answer voltage: **high** → TRUE
-- Answer wifi: **on** → TRUE
-- Result: `✓ Postcondition evaluated: TRUE → 'then' branch`
-- ✅ **Action succeeds**
+- If you answer `cooling.temperature = cold` and `audio.channel = medium`, the postcondition evaluates TRUE and sets brightness/volume to **high**.
+- If you answer `audio.channel = low`, the same postcondition evaluates FALSE and the `else` branch sets both attributes to **medium**.
 
-**Scenario 2: Condition FALSE → Failure**
-- Shows structure: `Postcondition structure: (voltage==high AND wifi==on)`
-- Answer voltage: **medium** → FALSE
-- AND short-circuits (doesn't ask about wifi)
-- Result: ❌ **Action FAILS: "Postcondition failed: FALSE (no 'else' branch defined)"**
-- Simulation stops
-
-This allows you to create actions with **strict requirements** in postconditions, similar to preconditions.
+Either way, the action succeeds and records which branch ran.
 
 ### Complete Example: Both Pre and Post Structures
 
@@ -394,43 +357,19 @@ uv run sim simulate --obj tv turn_on premium_mode --name demo_both_structures
 
 Precondition structure: (power_source.voltage==high OR network.wifi_connected==on)
 Precondition: what is power_source.voltage?
-  → Answer: high (OR satisfied, short-circuit!)
+  → Answer: high (OR satisfied immediately)
 
 Postcondition structure: (cooling.temperature!=hot AND audio.channel!=low)
+Postcondition: what is cooling.temperature?
+  → Answer: cold (TRUE)
 Postcondition: what is audio.channel?
-  → Answer: medium
+  → Answer: medium (TRUE)
 
 ✓ Postcondition evaluated: TRUE → 'then' branch
 ✅ premium_mode ran successfully
 ```
 
-This demonstrates the complete flow with both precondition and postcondition structures visible!
-
-**Note:** The simulator only asks about **unknown** attributes. In this example:
-- `cooling.temperature` has default value "cold" (known) → Evaluated automatically → cold!=hot → TRUE
-- `audio.channel` has default value "unknown" → Asked user
-
-If you want to see it ask about BOTH attributes in an AND condition:
-
-```bash
-# test_both_unknown_postcond: Both attributes default to unknown
-uv run sim simulate --obj tv turn_on test_both_unknown_postcond --name test_both_ask
-```
-
-**What you'll see:**
-```
-Postcondition structure: (power_source.voltage==high AND network.wifi_connected==on)
-
-Postcondition: what is power_source.voltage?
-→ Answer: high (TRUE)
-
-Postcondition: what is network.wifi_connected?  ← Asks about second!
-→ Answer: on (TRUE)
-
-✓ Postcondition evaluated: TRUE → 'then' branch
-```
-
-Both attributes are unknown, so AND asks about both (first is TRUE, needs to check all).
+If you answer differently (e.g., set `audio.channel` to **low**), the postcondition evaluates FALSE, runs the `else` branch, and the simulation continues without error.
 
 ---
 
@@ -440,35 +379,33 @@ Understanding how the simulator handles failures is crucial for creating realist
 
 ### Types of Failures
 
-#### 1. Unknown-Driven Failures
+#### 1. Unknown-Driven Clarifications
 
-If a precondition depends on an unknown value, the simulator asks for clarification and retries:
+Whenever an action needs an unknown attribute (whether in a precondition or inside its effects), the simulator pauses, asks for the value, and then continues without marking the step as failed.
 
 ```bash
-# Battery level is unknown - simulator will ask
+# Battery level is unknown - simulator will ask during the postcondition
 uv run sim simulate --obj flashlight turn_on --name flashlight_clarify
 ```
 
-If the clarification resolves the issue, the action succeeds and is recorded as OK.
+After you answer, the action completes successfully and records whichever branch ran.
 
 #### 2. True Precondition Failures
 
-If a precondition is not met (and no clarification applies), the simulator **STOPS immediately**:
+If a precondition is not met (and no clarification applies), the simulator now shows the failure reason **and asks whether you want to continue**. Choosing `Y` logs the failed step and moves on; choosing `N` ends the run immediately.
 
 ```bash
-# Drain battery then try to turn on (will fail)
-uv run sim simulate --obj flashlight drain_battery turn_on turn_off --name flashlight_fail_test
+# Trying to change the channel while the TV is still off
+uv run sim simulate --obj tv change_channel=medium --name tv_precondition_fail
 
 # View the failure
-uv run sim history outputs/histories/flashlight_fail_test.yaml
+uv run sim history outputs/histories/tv_precondition_fail.yaml
 ```
 
 **What happens:**
-1. `drain_battery` → Succeeds, battery is now empty
-2. `turn_on` → **FAILS** (empty battery doesn't meet precondition)
-3. `turn_off` → **NEVER RUNS** (simulation stops at failure)
-
-The object state remains unchanged from the last valid state.
+1. `change_channel` runs first, but its precondition (`screen.power == on`) is FALSE because the TV starts off.
+2. The CLI prints `Precondition failed (screen.power==on): screen.power should be on, but got off` and asks if you'd like to continue.
+3. Answer **N** to stop immediately, or **Y** to keep going (the failure is recorded with zero effects so the state is unchanged).
 
 #### 3. Validation Failures
 
@@ -478,6 +415,10 @@ Invalid parameters fail before execution:
 # Invalid parameter value
 uv run sim simulate --obj kettle pour_water=overflow --name kettle_invalid
 ```
+
+#### 4. Conditional Effect Branches
+
+Conditional effects always include an `else` branch, so after preconditions succeed an action will never fail because a postcondition couldn't pick a branch. The simulator simply records which branch ran (or that no changes were needed) and moves on.
 
 ### Failure Examples
 

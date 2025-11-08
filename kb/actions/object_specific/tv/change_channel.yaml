@@ -12,10 +12,6 @@ preconditions:
     target: screen.power
     operator: equals
     value: on
-  - type: attribute_check
-    target: power_source.voltage
-    operator: not_equals
-    value: low
 
 effects:
   - type: set_attribute

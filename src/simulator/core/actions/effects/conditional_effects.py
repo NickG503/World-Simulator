@@ -32,14 +32,14 @@ class ConditionalEffect(Effect):
             # Check if else branch exists
             else_effects = self._as_list(self.else_effect)
             if not else_effects:
-                # No else branch and condition is FALSE → This is a failure
+                # No else branch: log informative change and skip additional effects
+                effects = []
                 branch_info = StateChange(
-                    attribute="[CONDITIONAL_EVAL_FAILED]",
+                    attribute="[CONDITIONAL_EVAL]",
                     before="evaluating",
-                    after="FALSE (no 'else' branch defined)",
-                    kind="error",
+                    after="FALSE → no effects applied",
+                    kind="info",
                 )
-                return [branch_info]
             else:
                 # Else branch exists, execute it
                 effects = else_effects

@@ -54,5 +54,10 @@ def test_constraint_violation_bulb_on_empty_battery(tmp_path: Path):
     engine = TransitionEngine(rm)
     result = engine.apply_action(inst, action, {})
 
-    # Should be rejected due to precondition failure
-    assert result.status == "rejected", f"Action should be rejected, got {result.status}"
+    # Action now succeeds but produces no light when the battery is empty
+    assert result.status == "ok"
+    assert result.after is not None
+    bulb_state = result.after.parts["bulb"].attributes["state"].current_value
+    brightness = result.after.parts["bulb"].attributes["brightness"].current_value
+    assert bulb_state == "off"
+    assert brightness == "none"
