@@ -448,8 +448,12 @@ def simulate(
 
 @app.command()
 def history(
-    file_path: str = typer.Argument(..., help="History filename or path (looks in outputs/histories/ by default)"),
+    file_path: str = typer.Argument(
+        ...,
+        help="History name or path (bare names resolve to outputs/histories/<name>.yaml automatically)",
+    ),
     step: Optional[int] = typer.Option(None, "--step", "-s", help="Show detailed table for a specific step"),
+    all_steps: bool = typer.Option(False, "--all", "-a", help="Show detailed tables for every step"),
 ) -> None:
     from simulator.cli.paths import find_history_file
     from simulator.core.simulation_runner import SimulationRunner
@@ -462,6 +466,25 @@ def history(
         raise typer.Exit(code=1)
 
     rm = RegistryManager()
+
+    # Load KB for space definitions (needed for constrained options display)
+    try:
+        from simulator.cli.paths import kb_actions_path, kb_objects_path, kb_spaces_path
+        from simulator.io.loaders.action_loader import load_actions
+        from simulator.io.loaders.object_loader import load_object_types
+        from simulator.io.loaders.yaml_loader import load_spaces
+
+        load_spaces(kb_spaces_path(None), rm)
+        rm.register_defaults()
+        load_object_types(kb_objects_path(None), rm)
+        load_actions(kb_actions_path(None), rm)
+    except Exception:
+        pass  # KB loading failed, constrained options won't be shown
+
+    if all_steps and step is not None:
+        console.print("[red]Cannot use --all and --step together.[/red]")
+        raise typer.Exit(code=2)
+
     runner = SimulationRunner(rm)
     try:
         history_obj = runner.load_history_from_yaml(resolved_path)
@@ -496,47 +519,207 @@ def history(
                 f"[red]Step {step_obj.step_number} '{step_obj.action_name}' failed:[/red] {step_obj.error_message}"
             )
 
-    if step is not None:
-        target = next((st for st in history_obj.steps if st.step_number == step), None)
-        if target is None:
-            console.print(f"[red]Step {step} not found in history.[/red]")
-            return
-
+    def _render_step_detail(target_step):
         console.print("")
-        console.print(f"[bold]Step {step} Detail[/bold]: {target.action_name}")
-        status_color = "green" if target.status == "ok" else "red"
-        console.print(f"Status: [{status_color}]{target.status}[/{status_color}]")
-        if target.error_message:
-            console.print(f"Error: {target.error_message}")
+        console.print(f"[bold]Step {target_step.step_number} Detail[/bold]: {target_step.action_name}")
+        status_color = "green" if target_step.status == "ok" else "red"
+        console.print(f"Status: [{status_color}]{target_step.status}[/{status_color}]")
+        if target_step.error_message:
+            console.print(f"Error: {target_step.error_message}")
 
-        if target.changes:
-            detail_table = Table(title=f"Step {step} Changes")
+        if target_step.changes:
+            detail_table = Table(title=f"Step {target_step.step_number} Changes")
             detail_table.add_column("Attribute")
             detail_table.add_column("Before")
             detail_table.add_column("After")
             detail_table.add_column("Kind")
-            for change in target.changes:
-                before_val = "—" if change.before is None else str(change.before)
-                after_val = "—" if change.after is None else str(change.after)
+
+            def resolve_snapshot_attr(snapshot, attr_path: str):
+                """Find the AttributeSnapshot for a change path."""
+                if snapshot is None or not attr_path or attr_path.startswith("["):
+                    return None
+                parts = attr_path.split(".")
+                if parts and parts[-1] == "trend":
+                    parts = parts[:-1]
+                if not parts:
+                    return None
+
+                if len(parts) == 1:
+                    return (snapshot.global_attributes or {}).get(parts[0])
+
+                part_name = parts[0]
+                attr_name = ".".join(parts[1:])
+                part_state = (snapshot.parts or {}).get(part_name)
+                if not part_state:
+                    return None
+                return part_state.attributes.get(attr_name)
+
+            def describe_value(raw_value, snapshot_attr):
+                """Format change value, showing constrained options for unknowns."""
+                if raw_value is None:
+                    return "—"
+                if raw_value != "unknown" or snapshot_attr is None:
+                    return str(raw_value)
+
+                direction = snapshot_attr.last_trend_direction or snapshot_attr.trend
+                if direction in ("up", "down") and snapshot_attr.last_known_value and snapshot_attr.space_id:
+                    try:
+                        space = rm.spaces.get(snapshot_attr.space_id)
+                        constrained = space.constrained_levels(
+                            last_known_value=snapshot_attr.last_known_value,
+                            trend=direction,
+                        )
+                        if constrained:
+                            return ", ".join(constrained)
+                    except Exception:
+                        pass
+                return "unknown"
+
+            for change in target_step.changes:
+                before_attr = resolve_snapshot_attr(target_step.object_state_before, change.attribute or "")
+                after_attr = resolve_snapshot_attr(target_step.object_state_after, change.attribute or "")
+                before_val = describe_value(change.before, before_attr)
+                after_val = describe_value(change.after, after_attr)
                 detail_table.add_row(change.attribute or "", before_val, after_val, change.kind)
             console.print(detail_table)
         else:
             console.print("No recorded changes for this step.")
 
-        state_after = history_obj.get_state_at_step(step)
+        state_after = history_obj.get_state_at_step(target_step.step_number)
         if state_after:
             console.print("State after step (tracked attributes):")
             state_table = Table(show_header=True)
             state_table.add_column("Location")
             state_table.add_column("Value")
             state_table.add_column("Trend")
+
+            # Helper function to format value with constraints
+            def format_value(attr) -> str:
+                if attr.value != "unknown":
+                    return str(attr.value)
+
+                # Value is unknown - check if we can show constrained options
+                if (
+                    hasattr(attr, "last_known_value")
+                    and attr.last_known_value
+                    and hasattr(attr, "last_trend_direction")
+                    and attr.last_trend_direction in ("up", "down")
+                    and hasattr(attr, "space_id")
+                    and attr.space_id
+                ):
+                    try:
+                        space = rm.spaces.get(attr.space_id)
+                        constrained = space.constrained_levels(
+                            last_known_value=attr.last_known_value,
+                            trend=attr.last_trend_direction,
+                        )
+                        if constrained:
+                            # Show ONLY the constrained options (without "unknown" prefix)
+                            return ", ".join(constrained)
+                    except Exception:
+                        pass
+
+                return "unknown"
+
             for part_name, part in (state_after.parts or {}).items():
                 for attr_name, attr in part.attributes.items():
-                    state_table.add_row(f"{part_name}.{attr_name}", str(attr.value), str(attr.trend))
+                    value_display = format_value(attr)
+                    state_table.add_row(f"{part_name}.{attr_name}", value_display, str(attr.trend))
             for attr_name, attr in (state_after.global_attributes or {}).items():
-                state_table.add_row(attr_name, str(attr.value), str(attr.trend))
+                value_display = format_value(attr)
+                state_table.add_row(attr_name, value_display, str(attr.trend))
             if state_table.row_count:
                 console.print(state_table)
+
+        # Show conditional effect structure if the action has one
+        action = rm.create_behavior_enhanced_action(history_obj.object_type, target_step.action_name)
+        if action and action.effects:
+            from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+            from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+            from simulator.core.actions.effects.trend_effects import TrendEffect
+            from simulator.core.engine.transition_engine import TransitionEngine
+
+            # Check if there are any conditional effects
+            def has_conditional(effects):
+                if isinstance(effects, list):
+                    return any(isinstance(e, ConditionalEffect) or has_conditional(e) for e in effects)
+                return isinstance(effects, ConditionalEffect)
+
+            engine = TransitionEngine(rm)
+            has_cond = has_conditional(action.effects)
+            title = "Effect Structure:" if has_cond else "Effects:"
+            console.print(f"\n[bold]{title}[/bold]")
+
+            step_params = target_step.parameters or {}
+            change_value_lookup = {}
+            for change in target_step.changes or []:
+                if not change.attribute or change.kind not in ("value", "clarification"):
+                    continue
+                change_value_lookup.setdefault(change.attribute, []).append(change.after)
+
+            def _resolve_param_value(param_name: str, effect_target) -> Optional[str]:
+                if param_name in step_params and step_params[param_name] is not None:
+                    return step_params[param_name]
+                target_path = effect_target.to_string() if effect_target else None
+                if target_path and target_path in change_value_lookup:
+                    for candidate in reversed(change_value_lookup[target_path]):
+                        if candidate is not None:
+                            return candidate
+                return None
+
+            def describe_effects(effects, indent=0):
+                if not isinstance(effects, list):
+                    effects = [effects]
+
+                for effect in effects:
+                    if isinstance(effect, ConditionalEffect):
+                        prefix = "  " * indent
+                        cond_desc = engine._describe_condition_structure(effect.condition)
+                        console.print(f"{prefix}[cyan]IF[/cyan] {cond_desc}")
+
+                        then_effects = (
+                            effect.then_effect if isinstance(effect.then_effect, list) else [effect.then_effect]
+                        )
+                        console.print(f"{prefix}[cyan]THEN:[/cyan]")
+                        describe_effects(then_effects, indent + 1)
+
+                        if effect.else_effect:
+                            console.print(f"{prefix}[cyan]ELSE:[/cyan]")
+                            else_effects = (
+                                effect.else_effect if isinstance(effect.else_effect, list) else [effect.else_effect]
+                            )
+                            describe_effects(else_effects, indent + 1)
+                    else:
+                        # Describe non-conditional effects
+                        prefix = "  " * indent
+                        if isinstance(effect, SetAttributeEffect):
+                            # Resolve parameter references for display
+                            from simulator.core.actions.parameter import ParameterReference
+
+                            if isinstance(effect.value, ParameterReference):
+                                resolved = _resolve_param_value(effect.value.name, effect.target)
+                                value_desc = resolved if resolved is not None else f"parameter:{effect.value.name}"
+                            else:
+                                value_desc = str(effect.value)
+                            console.print(f"{prefix}[dim]• Set {effect.target.to_string()} = {value_desc}[/dim]")
+                        elif isinstance(effect, TrendEffect):
+                            console.print(
+                                f"{prefix}[dim]• Trend {effect.target.to_string()} → {effect.direction}[/dim]"
+                            )
+
+            describe_effects(action.effects)
+
+    if all_steps:
+        for st in history_obj.steps:
+            _render_step_detail(st)
+        return
+
+    if step is not None:
+        target = next((st for st in history_obj.steps if st.step_number == step), None)
+        if target is None:
+            console.print(f"[red]Step {step} not found in history.[/red]")
+            return
+        _render_step_detail(target)
 
 
 __all__ = ["app"]

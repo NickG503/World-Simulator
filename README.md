@@ -45,8 +45,14 @@ uv run sim show behaviors flashlight
 # Run a simulation (interactive)
 uv run sim simulate --obj flashlight turn_on turn_off --name basic_test
 
-# View the simulation history 
+# View the simulation history (no need to type outputs/histories or .yaml)
 uv run sim history basic_test
+
+# Dump every step detail in one go
+uv run sim history basic_test --all
+
+# Inspect a specific step (0-based index)
+uv run sim history basic_test --step=1
 ```
 
 **Note**: Simulations are interactive and will prompt you for clarification when encountering unknown attribute values.
@@ -116,7 +122,7 @@ Conditions share a unified dictionary format supporting logical operators (`and`
 | `sim show behaviors NAME` | List behaviour overrides bound to an object. |
 | `sim apply OBJECT ACTION [--param key=value] [--verbose-load]` | Instantiate the default object, resolve unknowns, apply an action, and print the resulting diff. |
 | `sim simulate OBJECT ACTION... [--history-name NAME] [--dataset-name NAME] [--id] [--verbose-load] [--verbose-run]` | Execute action sequences interactively (clarify unknowns), save a compact history and a dataset text. |
-| `sim history NAME [--step N]` | Show a step summary table and inline errors for a saved history. Accepts just the name (e.g., `basic_test`) or full path. Use `--step` for detailed changes. |
+| `sim history NAME [--step N \| --all]` | Show a summary, or use `--step`/`--all` for detailed tables. You can pass just the simulation name (e.g., `basic_test`) and the CLI resolves `outputs/histories/<name>.yaml` automatically. |
 
 Use `--verbose-load` whenever you need the full validation trace for malformed YAML; otherwise, loader errors remain short and user friendly.
 

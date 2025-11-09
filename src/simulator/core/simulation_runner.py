@@ -27,6 +27,9 @@ class AttributeSnapshot(BaseModel):
     value: Optional[str]
     trend: Optional[str]
     confidence: float
+    last_known_value: Optional[str] = None
+    last_trend_direction: Optional[str] = None
+    space_id: Optional[str] = None
 
 
 class PartStateSnapshot(BaseModel):
@@ -165,8 +168,27 @@ def _apply_changes_to_snapshot(state: ObjectStateSnapshot, changes: List[DiffEnt
 
         attr_snapshot = _ensure_attr_snapshot(new_state, part_name, attr_name)
         if is_trend:
+            # When trend becomes up/down, replicate the side effect behavior from ApplicationContext
+            if change.after in ("up", "down"):
+                # Preserve last known value if we have a concrete reading
+                if attr_snapshot.value and attr_snapshot.value != "unknown":
+                    attr_snapshot.last_known_value = attr_snapshot.value
+                # Mark value unknown to signal follow-up clarification
+                attr_snapshot.value = "unknown"
+                attr_snapshot.confidence = 0.0
+                attr_snapshot.last_trend_direction = change.after
+            # Note: when trend becomes "none", we intentionally keep last_trend_direction
+            # so that constrained options remain available until a concrete value is set
             attr_snapshot.trend = change.after
         else:
+            # Track value changes and metadata
+            if change.after == "unknown" and change.before and change.before != "unknown":
+                # Value becoming unknown - preserve last known value
+                attr_snapshot.last_known_value = change.before
+            elif change.after != "unknown":
+                # Value becoming known - update last known and clear trend direction
+                attr_snapshot.last_known_value = change.after
+                attr_snapshot.last_trend_direction = None
             attr_snapshot.value = change.after
     return new_state
 
@@ -486,9 +508,31 @@ class SimulationRunner:
                                         f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
                                     )
                                 elif change.kind == "trend":
-                                    resolver.console.print(
-                                        f"[dim]  • {change.attribute}: {change.before} → {change.after}[/dim]"
-                                    )
+                                    trend_display = f"[dim]  • {change.attribute}: {change.before} → {change.after}"
+
+                                    # Try to extract the attribute path and show constrained options
+                                    if change.attribute.endswith(".trend") and result.after:
+                                        attr_path = change.attribute[:-6]  # Remove ".trend"
+                                        try:
+                                            from simulator.core.objects.part import AttributeTarget
+
+                                            ai = AttributeTarget.from_string(attr_path).resolve(result.after)
+                                            if (
+                                                ai.current_value == "unknown"
+                                                and ai.last_known_value
+                                                and change.after in ("up", "down")
+                                            ):
+                                                space = self.registry_manager.spaces.get(ai.spec.space_id)
+                                                constrained = space.constrained_levels(
+                                                    last_known_value=ai.last_known_value,
+                                                    trend=change.after,
+                                                )
+                                                if constrained and len(constrained) < len(space.levels):
+                                                    trend_display += f" (value now: {', '.join(constrained)})"
+                                        except Exception:
+                                            pass
+
+                                    resolver.console.print(f"{trend_display}[/dim]")
                         else:
                             resolver.console.print("[dim]  • No visible changes[/dim]")
                         resolver.console.print("")  # Empty line
@@ -509,6 +553,9 @@ class SimulationRunner:
                     value=attr_instance.current_value,
                     trend=attr_instance.trend,
                     confidence=attr_instance.confidence,
+                    last_known_value=attr_instance.last_known_value,
+                    last_trend_direction=attr_instance.last_trend_direction,
+                    space_id=attr_instance.spec.space_id,
                 )
             parts[part_name] = PartStateSnapshot(attributes=attrs)
 
@@ -518,6 +565,9 @@ class SimulationRunner:
                 value=attr_instance.current_value,
                 trend=attr_instance.trend,
                 confidence=attr_instance.confidence,
+                last_known_value=attr_instance.last_known_value,
+                last_trend_direction=attr_instance.last_trend_direction,
+                space_id=attr_instance.spec.space_id,
             )
 
         return ObjectStateSnapshot(

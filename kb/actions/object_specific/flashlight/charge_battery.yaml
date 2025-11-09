@@ -1,0 +1,17 @@
+action: charge_battery
+object_type: flashlight
+
+preconditions:
+  - type: attribute_check
+    target: bulb.state
+    operator: equals
+    value: off
+  - type: attribute_check
+    target: battery.level
+    operator: not_equals
+    value: full
+
+effects:
+  - type: set_trend
+    target: battery.level
+    direction: up

@@ -45,8 +45,8 @@ uv run sim show behaviors tv
 # Simple flashlight on/off
 uv run sim simulate --obj flashlight turn_on turn_off --name basic_test
 
-# View the generated history
-uv run sim history outputs/histories/basic_test.yaml
+# View the generated history (name only is enough)
+uv run sim history basic_test
 ```
 
 **Note**: All simulations show real-time progress automatically:
@@ -399,7 +399,7 @@ If a precondition is not met (and no clarification applies), the simulator now s
 uv run sim simulate --obj tv change_channel=medium --name tv_precondition_fail
 
 # View the failure
-uv run sim history outputs/histories/tv_precondition_fail.yaml
+uv run sim history tv_precondition_fail
 ```
 
 **What happens:**
@@ -459,10 +459,10 @@ Every simulation automatically saves two files:
 
 ```bash
 # View complete history
-uv run sim history outputs/histories/basic_test.yaml
+uv run sim history basic_test
 
 # View specific step (0-based index)
-uv run sim history outputs/histories/tv_reset_forced.yaml --step=2
+uv run sim history tv_reset_forced --step=2
 ```
 
 ### History Format
@@ -547,6 +547,57 @@ uv run sim simulate --obj flashlight replace_battery=low turn_on turn_off turn_o
 ```
 
 During the final `turn_on` you'll be prompted for `battery.level`; the previous level is excluded from the menu, so pick any of the lower options when the clarification appears.
+
+### Flashlight Battery Charging (Trend Up)
+
+See the upward trend constraints without clarifying after the drain:
+
+```bash
+uv run sim simulate --obj flashlight \
+  replace_battery=medium turn_on turn_off charge_battery \
+  --name flashlight_charge_trend_up
+
+# Inspect the turn_off step (battery is unknown, still trending down)
+uv run sim history flashlight_charge_trend_up --step=2
+
+# Inspect the charge step (trend flips to up; options are now ≥ previous level)
+uv run sim history flashlight_charge_trend_up --step=3
+```
+
+During `charge_battery` you'll first be asked to pick the actual battery level (using the constrained options from step 2). Once you answer, Step 3 overwrites the constraint to `medium, high, full`, demonstrating how the upward charge trend changes the clarification menu immediately after your choice.
+
+### Down → Up Trend Transition In One Run
+
+Combine both directions and trigger the clarification again to see the constrained menu update:
+
+```bash
+uv run sim simulate --obj flashlight \
+  replace_battery=medium turn_on turn_off charge_battery turn_on \
+  --name flashlight_trend_flip_demo
+
+# Watch the state evolve
+uv run sim history flashlight_trend_flip_demo --step=1
+uv run sim history flashlight_trend_flip_demo --step=3
+uv run sim history flashlight_trend_flip_demo --step=4
+```
+
+- Step 1 (`turn_on`) drains the battery and marks it `unknown` with a downward constraint.
+- Step 3 (`charge_battery`) flips the trend upward while the value is still unknown.
+- Step 3 also forces a clarification before it can run, so you select the actual value (e.g., `low`) and the trend switches to `up`.
+- Step 4 (`turn_on`) asks you to clarify `battery.level` again, but now the prompt only offers `medium`, `high`, or `full`, confirming that the charge action overwrote the earlier downward constraint based on your previous answer.
+
+Need a longer trace? Extend the sequence and render every step at once:
+
+```bash
+uv run sim simulate --obj flashlight \
+  replace_battery=medium turn_on turn_off charge_battery turn_on turn_off turn_on \
+  --name flashlight_trend_long_demo
+
+# Show the entire history table plus each step's detail
+uv run sim history flashlight_trend_long_demo
+```
+
+The `uv run sim history … --all` option will print every step detail sequentially, so you can scan the full timeline without re-running the command for each `--step=N`. Use plain `uv run sim history <simulation_name>` for a quick summary (no need to type `outputs/histories/` or `.yaml`), `--all` for full detail, or `--step=N` for targeted inspection.
 
 ### Kettle Refill Sequence
 
@@ -645,9 +696,10 @@ uv run sim simulate --obj <object> <action1> <action2> --name <name>
 # With parameters
 uv run sim simulate --obj <object> <action>=<value> --name <name>
 
-# History
-uv run sim history <path/to/history.yaml>
-uv run sim history <path/to/history.yaml> --step=<N>
+# History (name or path; extension optional)
+uv run sim history <history_name_or_path>
+uv run sim history <history_name_or_path> --step=<N>
+uv run sim history <history_name_or_path> --all
 ```
 
 ---

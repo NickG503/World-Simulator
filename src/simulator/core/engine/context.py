@@ -35,6 +35,19 @@ class ApplicationContext(EvaluationContext):
     # instance-scoped (not class-level) to avoid shared mutable state
     _last_before: str | None = None
 
+    def _format_attribute_value_for_display(self, ai: AttributeInstance) -> str:
+        """Format attribute value for display, showing constrained options if applicable."""
+        current = ai.current_value if isinstance(ai.current_value, str) else "unknown"
+
+        # If value is unknown and we have trend constraint info, show constrained options
+        if current == "unknown" and ai.last_known_value and ai.last_trend_direction:
+            space = self.registries.spaces.get(ai.spec.space_id)
+            constrained = space.constrained_levels(last_known_value=ai.last_known_value, trend=ai.last_trend_direction)
+            if constrained and constrained != list(space.levels):
+                return ", ".join(constrained)
+
+        return current
+
     def write_attribute(self, target: AttributeTarget, value: str, instance: ObjectInstance) -> str:
         # Resolve attribute safely and validate value against its qualitative space
         if target.part is None:
@@ -54,8 +67,8 @@ class ApplicationContext(EvaluationContext):
         if value not in space.levels:
             raise ValueError(f"Invalid value '{value}' for {target.to_string()}. Valid values: {space.levels}")
 
-        # Record before and apply
-        self._last_before = ai.current_value if isinstance(ai.current_value, str) else None
+        # Record before (with constrained options if applicable) and apply
+        self._last_before = self._format_attribute_value_for_display(ai)
         ai.current_value = value
         ai.last_known_value = value
         ai.confidence = 1.0
