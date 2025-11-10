@@ -41,11 +41,6 @@ constraints:
 
 behaviors:
   turn_on:
-    preconditions:
-      - type: attribute_check
-        target: switch.position
-        operator: equals
-        value: off
     effects:
       - type: set_attribute
         target: switch.position
