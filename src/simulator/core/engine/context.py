@@ -71,7 +71,6 @@ class ApplicationContext(EvaluationContext):
         self._last_before = self._format_attribute_value_for_display(ai)
         ai.current_value = value
         ai.last_known_value = value
-        ai.confidence = 1.0
         ai.last_trend_direction = None
         return target.attribute if target.part is None else f"{target.part}.{target.attribute}"
 
@@ -107,5 +106,4 @@ class ApplicationContext(EvaluationContext):
             ai.last_known_value = ai.current_value
         # Mark value unknown to signal follow-up clarification
         ai.current_value = "unknown"
-        ai.confidence = 0.0
         ai.last_trend_direction = direction  # remember most recent direction

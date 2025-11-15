@@ -73,7 +73,7 @@ def _ensure_snapshot_attr(snapshot: ObjectStateSnapshot, reference: str) -> Attr
     if len(parts) == 1:
         attr = parts[0]
         if attr not in snapshot.global_attributes:
-            snapshot.global_attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+            snapshot.global_attributes[attr] = AttributeSnapshot(value=None, trend=None)
         return snapshot.global_attributes[attr]
     if len(parts) >= 2:
         part = parts[0]
@@ -82,7 +82,7 @@ def _ensure_snapshot_attr(snapshot: ObjectStateSnapshot, reference: str) -> Attr
             snapshot.parts[part] = PartStateSnapshot()
         part_snapshot = snapshot.parts[part]
         if attr not in part_snapshot.attributes:
-            part_snapshot.attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+            part_snapshot.attributes[attr] = AttributeSnapshot(value=None, trend=None)
         return part_snapshot.attributes[attr]
     raise ValueError(f"Invalid attribute reference: {reference}")
 
@@ -94,7 +94,6 @@ def _apply_answers_to_snapshot(snapshot: ObjectStateSnapshot, answers: List[tupl
         attr_snapshot.last_known_value = value
         attr_snapshot.last_trend_direction = None
         attr_snapshot.trend = attr_snapshot.trend or "none"
-        attr_snapshot.confidence = 1.0
 
 
 def _reconstruct_snapshots(
@@ -174,7 +173,6 @@ def apply_snapshot(instance: ObjectInstance, snapshot: Mapping[str, Any]) -> Non
             attr = part_instance.attributes[attr_name]
             attr.current_value = attr_snapshot.get("value")
             attr.trend = attr_snapshot.get("trend")
-            attr.confidence = attr_snapshot.get("confidence", 1.0)
             attr.last_known_value = attr_snapshot.get("last_known_value")
             attr.last_trend_direction = attr_snapshot.get("last_trend_direction")
     for attr_name, attr_snapshot in (snapshot.get("global_attributes") or {}).items():
@@ -183,7 +181,6 @@ def apply_snapshot(instance: ObjectInstance, snapshot: Mapping[str, Any]) -> Non
         attr = instance.global_attributes[attr_name]
         attr.current_value = attr_snapshot.get("value")
         attr.trend = attr_snapshot.get("trend")
-        attr.confidence = attr_snapshot.get("confidence", 1.0)
         attr.last_known_value = attr_snapshot.get("last_known_value")
         attr.last_trend_direction = attr_snapshot.get("last_trend_direction")
 
@@ -195,7 +192,6 @@ def mask_attributes(instance: ObjectInstance, attr_refs: Iterable[str]) -> None:
         except Exception:
             continue
         target.current_value = "unknown"
-        target.confidence = 0.0
         target.last_trend_direction = None
 
 
@@ -211,7 +207,6 @@ def capture_snapshot(instance: ObjectInstance) -> Dict[str, Any]:
             snap_attrs[attr_name] = {
                 "value": attr.current_value,
                 "trend": attr.trend,
-                "confidence": attr.confidence,
                 "last_known_value": attr.last_known_value,
                 "last_trend_direction": attr.last_trend_direction,
                 "space_id": attr.spec.space_id,
@@ -221,7 +216,6 @@ def capture_snapshot(instance: ObjectInstance) -> Dict[str, Any]:
         snapshot["global_attributes"][attr_name] = {
             "value": attr.current_value,
             "trend": attr.trend,
-            "confidence": attr.confidence,
             "last_known_value": attr.last_known_value,
             "last_trend_direction": attr.last_trend_direction,
             "space_id": attr.spec.space_id,

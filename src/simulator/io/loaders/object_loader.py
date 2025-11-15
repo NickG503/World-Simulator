@@ -50,12 +50,10 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
             # Handle 'unknown' as a special default value
             if a_spec.default_value == "unknown":
                 default = "unknown"
-                confidence = 0.0  # Unknown values have no confidence
                 last_known = None
                 last_trend = None
             else:
                 default = a_spec.default_value if a_spec.default_value is not None else space.levels[0]
-                confidence = 1.0
                 last_known = default
                 last_trend = None
 
@@ -63,7 +61,6 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
                 spec=a_spec,
                 current_value=default,
                 trend="none",
-                confidence=confidence,
                 last_known_value=last_known,
                 last_trend_direction=last_trend,
             )
@@ -75,12 +72,10 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
         # Handle 'unknown' as a special default value
         if g_spec.default_value == "unknown":
             default = "unknown"
-            confidence = 0.0  # Unknown values have no confidence
             last_known = None
             last_trend = None
         else:
             default = g_spec.default_value if g_spec.default_value is not None else space.levels[0]
-            confidence = 1.0
             last_known = default
             last_trend = None
 
@@ -88,7 +83,6 @@ def instantiate_default(obj_type: ObjectType, registries: RegistryManager) -> Ob
             spec=g_spec,
             current_value=default,
             trend="none",
-            confidence=confidence,
             last_known_value=last_known,
             last_trend_direction=last_trend,
         )

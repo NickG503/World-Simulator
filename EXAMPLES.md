@@ -9,7 +9,7 @@ This document provides example commands for using the World Simulator CLI, organ
 1. [Validation & Inspection](#validation--inspection)
 2. [Basic Simulations](#basic-simulations)
 3. [Understanding Parameters](#understanding-parameters)
-4. [Clarification Questions](#clarification-questions)
+4. [Handling Unknowns & Clarifications](#handling-unknowns--clarifications)
 5. [Failure Handling](#failure-handling)
 6. [History & Results](#history--results)
 7. [Complex Multi-Action Examples](#complex-multi-action-examples)
@@ -113,19 +113,15 @@ uv run sim simulate --obj tv \
 
 ---
 
-## Clarification Questions
+## Handling Unknowns & Clarifications
 
-The simulator asks clarification questions when it encounters unknown attribute values. This is a key feature for reasoning about incomplete information.
+Unknown values are intentional—they model partially observable worlds. When an action needs a value you haven’t provided yet, the simulator pauses, asks the missing question, records your answer, and retries the step automatically. Keep in mind:
 
-### How Clarifications Work
+- Questions appear only when an attribute is unknown *at the moment it matters*.
+- Answers persist, so later actions reuse what you told the simulator.
+- Every question/answer pair is saved to the history file for later review.
 
-- **Unknown-driven questions**: If an action depends on an unknown value, the simulator will ask you to clarify it
-- **Automatic retry**: After you answer, the action retries automatically
-- **State persistence**: Your answers update the object's state for the rest of the simulation
-
-### Two Types of Clarifications
-
-#### Pre-condition Clarification
+### Pre-condition Clarification
 
 When an action's **preconditions** check an unknown attribute:
 
@@ -146,7 +142,7 @@ You'll see: `Precondition: what is network.wifi_connected?`
 
 > `turn_on` automatically sets `power_source.connection = on`, so the second half of the AND condition is already satisfied. If you start from a state where that attribute is unknown (for example, by loading a saved history before the TV was powered), you'll receive a second prompt.
 
-#### Postcondition Clarification
+### Postcondition Clarification
 
 When an action's **conditional effects** check an unknown attribute:
 
@@ -165,7 +161,7 @@ uv run sim simulate --obj tv turn_on adjust_brightness --name tv_Postcondition_d
 
 You'll see: `Postcondition: what is network.wifi_connected?`
 
-#### Seeing Both Types Together
+### Seeing Both Types Together
 
 ```bash
 # This sequence shows both pre-condition and postcondition clarifications
@@ -179,13 +175,6 @@ uv run sim simulate --obj tv \
    - Provide the wifi status so the action can start (the power connection is already satisfied by `turn_on`).
 2. **Postcondition** (from `smart_adjust`): "Postcondition: what is network.wifi_connected?" followed by "Postcondition: what is power_source.voltage?"
    - Your answers determine which branch of the effect runs.
-
-### Key Points
-
-- **Pre-condition clarifications** happen FIRST when checking if an action CAN run
-- **Postcondition clarifications** happen AFTER pre-conditions pass, when determining WHAT EFFECTS to apply
-- **Both must be satisfied** for an action to succeed
-- This enables the simulator to reason about object behavior with incomplete information
 
 ### Multiple Unknowns
 
@@ -222,12 +211,6 @@ uv run sim simulate --obj tv turn_on smart_adjust --name tv_multiple_postconditi
    - `Postcondition: what is network.wifi_connected?` → Answer: **on** or **off**
    - `Postcondition: what is power_source.voltage?` → Answer: **high**, **medium**, or **low**
 3. The effects are applied based on your answers
-
-#### Benefits
-
-- **Efficient**: Ask all questions at once rather than retrying multiple times
-- **Complete**: Ensures all unknowns are resolved before proceeding
-- **Clear**: Shows how many attributes need clarification (e.g., "Precondition requires clarification (2 attribute(s))")
 
 #### Combined Example (Both Types)
 

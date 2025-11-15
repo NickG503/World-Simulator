@@ -26,7 +26,6 @@ from simulator.core.registries.registry_manager import RegistryManager
 class AttributeSnapshot(BaseModel):
     value: Optional[str]
     trend: Optional[str]
-    confidence: float
     last_known_value: Optional[str] = None
     last_trend_direction: Optional[str] = None
     space_id: Optional[str] = None
@@ -134,11 +133,11 @@ def _ensure_attr_snapshot(state: ObjectStateSnapshot, part: Optional[str], attr:
             state.parts[part] = PartStateSnapshot()
         part_state = state.parts[part]
         if attr not in part_state.attributes:
-            part_state.attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+            part_state.attributes[attr] = AttributeSnapshot(value=None, trend=None)
         return part_state.attributes[attr]
 
     if attr not in state.global_attributes:
-        state.global_attributes[attr] = AttributeSnapshot(value=None, trend=None, confidence=1.0)
+        state.global_attributes[attr] = AttributeSnapshot(value=None, trend=None)
     return state.global_attributes[attr]
 
 
@@ -175,7 +174,6 @@ def _apply_changes_to_snapshot(state: ObjectStateSnapshot, changes: List[DiffEnt
                     attr_snapshot.last_known_value = attr_snapshot.value
                 # Mark value unknown to signal follow-up clarification
                 attr_snapshot.value = "unknown"
-                attr_snapshot.confidence = 0.0
                 attr_snapshot.last_trend_direction = change.after
             # Note: when trend becomes "none", we intentionally keep last_trend_direction
             # so that constrained options remain available until a concrete value is set
@@ -246,7 +244,6 @@ class SimulationRunner:
                 try:
                     ai = AttributeTarget.from_string(ref).resolve(obj_instance)
                     ai.current_value = "unknown"  # type: ignore
-                    ai.confidence = 0.0
                     ai.last_trend_direction = None
                 except Exception:
                     # ignore invalid unknown paths
@@ -383,7 +380,6 @@ class SimulationRunner:
                             previous_value = ai.current_value
 
                             ai.current_value = picked
-                            ai.confidence = 1.0
                             ai.last_known_value = picked
                             ai.last_trend_direction = None
 
@@ -552,7 +548,6 @@ class SimulationRunner:
                 attrs[attr_name] = AttributeSnapshot(
                     value=attr_instance.current_value,
                     trend=attr_instance.trend,
-                    confidence=attr_instance.confidence,
                     last_known_value=attr_instance.last_known_value,
                     last_trend_direction=attr_instance.last_trend_direction,
                     space_id=attr_instance.spec.space_id,
@@ -564,7 +559,6 @@ class SimulationRunner:
             global_attrs[attr_name] = AttributeSnapshot(
                 value=attr_instance.current_value,
                 trend=attr_instance.trend,
-                confidence=attr_instance.confidence,
                 last_known_value=attr_instance.last_known_value,
                 last_trend_direction=attr_instance.last_trend_direction,
                 space_id=attr_instance.spec.space_id,

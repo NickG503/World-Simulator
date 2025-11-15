@@ -78,7 +78,6 @@ def _capture_snapshot(instance) -> Dict[str, Any]:
             attrs[attr_name] = {
                 "value": attr.current_value,
                 "trend": attr.trend,
-                "confidence": attr.confidence,
                 "last_known_value": attr.last_known_value,
                 "last_trend_direction": attr.last_trend_direction,
                 "space_id": attr.spec.space_id,
@@ -90,7 +89,6 @@ def _capture_snapshot(instance) -> Dict[str, Any]:
         global_attrs[attr_name] = {
             "value": attr.current_value,
             "trend": attr.trend,
-            "confidence": attr.confidence,
             "last_known_value": attr.last_known_value,
             "last_trend_direction": attr.last_trend_direction,
             "space_id": attr.spec.space_id,
@@ -116,7 +114,6 @@ def _base_attribute(reference: str) -> str:
 def _set_attribute(instance, reference: str, value: str) -> None:
     target = AttributeTarget.from_string(reference).resolve(instance)
     target.current_value = value
-    target.confidence = 1.0
     target.last_known_value = value
     target.last_trend_direction = None
 

@@ -33,27 +33,22 @@ steps:
           position:
             value: 'off'
             trend: none
-            confidence: 1.0
       bulb:
         attributes:
           state:
             value: 'off'
             trend: none
-            confidence: 1.0
           brightness:
             value: none
             trend: none
-            confidence: 1.0
       battery:
         attributes:
           level:
             value: medium
             trend: none
-            confidence: 1.0
           type:
             value: AA
             trend: none
-            confidence: 1.0
     global_attributes: {}
   object_state_after:
     type: flashlight
@@ -63,27 +58,22 @@ steps:
           position:
             value: 'on'
             trend: none
-            confidence: 1.0
       bulb:
         attributes:
           state:
             value: 'on'
             trend: none
-            confidence: 1.0
           brightness:
             value: medium
             trend: none
-            confidence: 1.0
       battery:
         attributes:
           level:
             value: medium
             trend: down
-            confidence: 1.0
           type:
             value: AA
             trend: none
-            confidence: 1.0
     global_attributes: {}
 - step: 1
   action: turn_off
@@ -113,27 +103,22 @@ steps:
           position:
             value: 'on'
             trend: none
-            confidence: 1.0
       bulb:
         attributes:
           state:
             value: 'on'
             trend: none
-            confidence: 1.0
           brightness:
             value: medium
             trend: none
-            confidence: 1.0
       battery:
         attributes:
           level:
             value: medium
             trend: down
-            confidence: 1.0
           type:
             value: AA
             trend: none
-            confidence: 1.0
     global_attributes: {}
   object_state_after:
     type: flashlight
@@ -143,25 +128,20 @@ steps:
           position:
             value: 'off'
             trend: none
-            confidence: 1.0
       bulb:
         attributes:
           state:
             value: 'off'
             trend: none
-            confidence: 1.0
           brightness:
             value: none
             trend: none
-            confidence: 1.0
       battery:
         attributes:
           level:
             value: medium
             trend: none
-            confidence: 1.0
           type:
             value: AA
             trend: none
-            confidence: 1.0
     global_attributes: {}

@@ -94,7 +94,6 @@ class UnknownValueResolver:
                         if 0 <= idx < len(options):
                             selected_value = options[idx]
                             attr_inst.current_value = selected_value
-                            attr_inst.confidence = 1.0  # User-provided values have full confidence
                             attr_inst.last_known_value = selected_value
                             attr_inst.last_trend_direction = None
                             self.console.print(f"[green]Set {path} = {selected_value}[/green]")
@@ -105,7 +104,6 @@ class UnknownValueResolver:
                         # Try direct value match
                         if choice in options:
                             attr_inst.current_value = choice
-                            attr_inst.confidence = 1.0
                             attr_inst.last_known_value = choice
                             attr_inst.last_trend_direction = None
                             self.console.print(f"[green]Set {path} = {choice}[/green]")
@@ -119,7 +117,6 @@ class UnknownValueResolver:
                 options = self.get_allowed_levels(attr_inst, space)
                 selected = options[0] if options else space.levels[0]
                 attr_inst.current_value = selected
-                attr_inst.confidence = 0.5  # Lower confidence for auto-resolved values
                 attr_inst.last_known_value = selected
                 attr_inst.last_trend_direction = None
 

@@ -117,7 +117,6 @@ initial_state:
         power:
           value: 'off'
           trend: 'none'
-          confidence: 1.0
   global_attributes: {}
 steps:
   - step: 0

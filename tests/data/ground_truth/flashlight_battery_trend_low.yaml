@@ -11,7 +11,6 @@ initial_state:
         position:
           value: 'off'
           trend: none
-          confidence: 1.0
           last_known_value: 'off'
           last_trend_direction: null
           space_id: binary_state
@@ -20,14 +19,12 @@ initial_state:
         state:
           value: 'off'
           trend: none
-          confidence: 1.0
           last_known_value: 'off'
           last_trend_direction: null
           space_id: binary_state
         brightness:
           value: none
           trend: none
-          confidence: 1.0
           last_known_value: none
           last_trend_direction: null
           space_id: brightness_level
@@ -36,14 +33,12 @@ initial_state:
         level:
           value: unknown
           trend: none
-          confidence: 0.0
           last_known_value: null
           last_trend_direction: null
           space_id: battery_level
         type:
           value: AA
           trend: none
-          confidence: 1.0
           last_known_value: AA
           last_trend_direction: null
           space_id: battery_types

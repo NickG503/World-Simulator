@@ -11,7 +11,6 @@ initial_state:
         state:
           value: 'on'
           trend: none
-          confidence: 1.0
           last_known_value: 'on'
           last_trend_direction: null
           space_id: binary_state
@@ -20,14 +19,12 @@ initial_state:
         power:
           value: 'off'
           trend: none
-          confidence: 1.0
           last_known_value: 'off'
           last_trend_direction: null
           space_id: binary_state
         brightness:
           value: none
           trend: none
-          confidence: 1.0
           last_known_value: none
           last_trend_direction: null
           space_id: brightness_level
@@ -36,14 +33,12 @@ initial_state:
         volume:
           value: medium
           trend: none
-          confidence: 1.0
           last_known_value: medium
           last_trend_direction: null
           space_id: volume_level
         channel:
           value: unknown
           trend: none
-          confidence: 0.0
           last_known_value: null
           last_trend_direction: null
           space_id: channel_number
@@ -52,7 +47,6 @@ initial_state:
         wifi_connected:
           value: 'off'
           trend: none
-          confidence: 1.0
           last_known_value: 'off'
           last_trend_direction: null
           space_id: binary_state
@@ -61,14 +55,12 @@ initial_state:
         connection:
           value: unknown
           trend: none
-          confidence: 0.0
           last_known_value: null
           last_trend_direction: null
           space_id: binary_state
         voltage:
           value: medium
           trend: none
-          confidence: 1.0
           last_known_value: medium
           last_trend_direction: null
           space_id: power_level
@@ -77,7 +69,6 @@ initial_state:
         temperature:
           value: unknown
           trend: none
-          confidence: 0.0
           last_known_value: null
           last_trend_direction: null
           space_id: temperature_level

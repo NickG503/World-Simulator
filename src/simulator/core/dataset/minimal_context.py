@@ -176,7 +176,6 @@ def generate_minimal_case_text(
             test_inst = instance.model_copy(deep=True)
             tai = AttributeTarget.from_string(clarify_attr).resolve(test_inst)
             tai.current_value = opt
-            tai.confidence = 1.0
             r = engine.apply_action(test_inst, action, {})
             desc = _format_changes(r)
             lines.append(f'{opt}: "{desc}"')

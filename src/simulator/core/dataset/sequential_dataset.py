@@ -126,7 +126,6 @@ def build_sequential_dataset_text(
             # Inject the chosen option
             tai = AttributeTarget.from_string(failing_attr).resolve(cur2)
             tai.current_value = opt
-            tai.confidence = 1.0
             # Apply the failing step
             a_fail = registries.create_behavior_enhanced_action(object_type, actions[failing_index].get("name"))
             rf = engine.apply_action(cur2, a_fail, actions[failing_index].get("parameters") or {})
