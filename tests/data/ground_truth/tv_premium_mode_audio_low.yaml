@@ -1,0 +1,144 @@
+history_version: 3
+simulation_id: tv_premium_mode_audio_low
+object_name: tv
+started_at: '2025-11-15'
+total_steps: 2
+initial_state:
+  type: tv
+  parts:
+    button:
+      attributes:
+        state:
+          value: 'on'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'on'
+          last_trend_direction: null
+          space_id: binary_state
+    screen:
+      attributes:
+        power:
+          value: 'off'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'off'
+          last_trend_direction: null
+          space_id: binary_state
+        brightness:
+          value: none
+          trend: none
+          confidence: 1.0
+          last_known_value: none
+          last_trend_direction: null
+          space_id: brightness_level
+    audio:
+      attributes:
+        volume:
+          value: medium
+          trend: none
+          confidence: 1.0
+          last_known_value: medium
+          last_trend_direction: null
+          space_id: volume_level
+        channel:
+          value: low
+          trend: none
+          confidence: 1.0
+          last_known_value: low
+          last_trend_direction: null
+          space_id: channel_number
+    network:
+      attributes:
+        wifi_connected:
+          value: 'on'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'on'
+          last_trend_direction: null
+          space_id: binary_state
+    power_source:
+      attributes:
+        connection:
+          value: 'on'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'on'
+          last_trend_direction: null
+          space_id: binary_state
+        voltage:
+          value: high
+          trend: none
+          confidence: 1.0
+          last_known_value: high
+          last_trend_direction: null
+          space_id: power_level
+    cooling:
+      attributes:
+        temperature:
+          value: cold
+          trend: none
+          confidence: 1.0
+          last_known_value: cold
+          last_trend_direction: null
+          space_id: temperature_level
+  global_attributes: {}
+steps:
+- step_number: 0
+  action_name: turn_on
+  parameters: {}
+  status: ok
+  error: null
+  changes:
+  - attribute: button.state
+    before: 'on'
+    after: 'on'
+    kind: value
+  - attribute: screen.power
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: screen.brightness
+    before: none
+    after: medium
+    kind: value
+  - attribute: cooling.temperature.trend
+    before: none
+    after: up
+    kind: trend
+- step_number: 1
+  action_name: premium_mode
+  parameters: {}
+  status: ok
+  error: null
+  changes:
+  - attribute: screen.brightness
+    before: medium
+    after: medium
+    kind: value
+  - attribute: audio.volume
+    before: medium
+    after: medium
+    kind: value
+interactions:
+- step: 1
+  action: premium_mode
+  attribute: cooling.temperature
+  question: 'Postcondition: what is cooling.temperature?'
+  answer: cold
+  options:
+  - cold
+  - warm
+  - hot
+  - very_hot
+metadata:
+  tracked_attributes:
+  - audio.volume
+  - button.state
+  - network.wifi_connected
+  - power_source.connection
+  - power_source.voltage
+  - screen.brightness
+  - screen.power
+  hidden_attributes:
+  - audio.channel
+  - cooling.temperature

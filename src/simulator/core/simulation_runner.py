@@ -581,11 +581,10 @@ class SimulationRunner:
         # Ensure parent directory exists
         Path(file_path).parent.mkdir(parents=True, exist_ok=True)
 
-        # Build a compact v2 format to improve readability and avoid redundant fields
+        # Build a compact format to improve readability and avoid redundant fields
         data: Dict[str, Any] = {
             "history_version": 3,
             "simulation_id": history.simulation_id,
-            "object_type": history.object_type,
             "object_name": history.object_name,
             "started_at": history.started_at,
             "total_steps": history.total_steps,
@@ -628,8 +627,8 @@ class SimulationRunner:
         # v3 delta format
         if isinstance(data, dict) and data.get("history_version") == 3 and "steps" in data:
             sim_id = data.get("simulation_id", "unknown")
-            obj_type = data.get("object_type", "unknown")
-            obj_name = data.get("object_name", obj_type)
+            obj_name = data.get("object_name") or data.get("object_type", "unknown")
+            obj_type = data.get("object_type", obj_name)
             started = data.get("started_at")
             total = data.get("total_steps", len(data.get("steps") or []))
 

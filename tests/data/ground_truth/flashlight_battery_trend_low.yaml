@@ -1,0 +1,148 @@
+history_version: 3
+simulation_id: flashlight_battery_trend_low
+object_name: flashlight
+started_at: '2025-11-15'
+total_steps: 4
+initial_state:
+  type: flashlight
+  parts:
+    switch:
+      attributes:
+        position:
+          value: 'off'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'off'
+          last_trend_direction: null
+          space_id: binary_state
+    bulb:
+      attributes:
+        state:
+          value: 'off'
+          trend: none
+          confidence: 1.0
+          last_known_value: 'off'
+          last_trend_direction: null
+          space_id: binary_state
+        brightness:
+          value: none
+          trend: none
+          confidence: 1.0
+          last_known_value: none
+          last_trend_direction: null
+          space_id: brightness_level
+    battery:
+      attributes:
+        level:
+          value: unknown
+          trend: none
+          confidence: 0.0
+          last_known_value: null
+          last_trend_direction: null
+          space_id: battery_level
+        type:
+          value: AA
+          trend: none
+          confidence: 1.0
+          last_known_value: AA
+          last_trend_direction: null
+          space_id: battery_types
+  global_attributes: {}
+steps:
+- step_number: 0
+  action_name: replace_battery
+  parameters:
+    to: low
+  status: ok
+  error: null
+  changes:
+  - attribute: battery.level
+    before: unknown
+    after: low
+    kind: value
+  - attribute: battery.level.trend
+    before: none
+    after: none
+    kind: trend
+- step_number: 1
+  action_name: turn_on
+  parameters: {}
+  status: ok
+  error: null
+  changes:
+  - attribute: switch.position
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: bulb.state
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: bulb.brightness
+    before: none
+    after: low
+    kind: value
+  - attribute: battery.level.trend
+    before: none
+    after: down
+    kind: trend
+- step_number: 2
+  action_name: turn_off
+  parameters: {}
+  status: ok
+  error: null
+  changes:
+  - attribute: switch.position
+    before: 'on'
+    after: 'off'
+    kind: value
+  - attribute: bulb.state
+    before: 'on'
+    after: 'off'
+    kind: value
+  - attribute: bulb.brightness
+    before: low
+    after: none
+    kind: value
+  - attribute: battery.level.trend
+    before: down
+    after: none
+    kind: trend
+- step_number: 3
+  action_name: turn_on
+  parameters: {}
+  status: ok
+  error: null
+  changes:
+  - attribute: switch.position
+    before: 'off'
+    after: 'on'
+    kind: value
+  - attribute: bulb.state
+    before: 'off'
+    after: 'off'
+    kind: value
+  - attribute: bulb.brightness
+    before: none
+    after: none
+    kind: value
+interactions:
+- step: 3
+  action: turn_on
+  attribute: battery.level
+  question: 'Postcondition: what is battery.level?'
+  answer: empty
+  options:
+  - empty
+  - low
+  - medium
+  - high
+  - full
+metadata:
+  tracked_attributes:
+  - battery.type
+  - bulb.brightness
+  - bulb.state
+  - switch.position
+  hidden_attributes:
+  - battery.level
