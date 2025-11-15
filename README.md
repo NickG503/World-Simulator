@@ -170,7 +170,157 @@ uv run pytest tests/test_flashlight_turn_off.py
 uv run pytest tests/test_flashlight_turn_off.py::test_behavior_turn_off_ok -v
 ```
 
-**Current Status**: All 29 tests passing ✓
+**Current Status**: All 45 tests passing ✓
+
+---
+
+## Ground Truth Testing
+
+### Overview
+
+The ground truth testing system validates simulator correctness by comparing **fully observable** trajectories against **partially observable** replays. This approach ensures that the simulator handles hidden attributes correctly and asks clarification questions at the right moments.
+
+**Key Concept**: Start with a complete simulation where all states are known. Then replay it with some attributes masked as "unknown" (partially observable). At each step, when the simulator asks for clarification, answer using the fully observable ground truth. The partially observable replay should remain consistent with the ground truth throughout.
+
+### Ground Truth Files
+
+Ground truth files live in `tests/data/ground_truth/` and differ from regular simulation history files in several ways:
+
+```yaml
+# tests/data/ground_truth/flashlight_battery_trend_low.yaml
+
+object_name: flashlight
+metadata:
+  hidden_attributes:
+    - battery.level        # Initially unknown to simulator
+  tracked_attributes:
+    - state
+    - bulb.brightness
+    
+interaction_answers:
+  0:                       # Step index
+    - [battery.level, low] # Attribute, answer
+  1:
+    - [battery.level, empty]
+
+steps:
+  - action: turn_on
+    parameters: {}
+    changes:
+      - attribute: state
+        kind: value
+        from: off
+        to: on
+    # ... full state snapshots at each step
+```
+
+**Key Differences from Regular History Files**:
+
+1. **`metadata.hidden_attributes`** - Lists attributes that start as "unknown" and are not revealed until the simulator explicitly asks about them
+2. **`interaction_answers`** - Maps step indices to clarification answers, providing the ground truth values when the simulator asks
+3. **Complete state tracking** - Every step includes both before and after snapshots with all attribute values (even hidden ones)
+
+### Testing Mechanism
+
+The `test_ground_truth_replay` test (`tests/test_ground_truth_replay.py`) performs the following:
+
+1. **Load Ground Truth** - Parse the fully observable trajectory
+2. **Initialize Object** - Create instance with hidden attributes masked as "unknown"
+3. **Replay Each Step**:
+   - Apply pre-step interaction answers (if simulator didn't ask but ground truth has them)
+   - Execute action with clarification loop
+   - When simulator asks questions, answer from `interaction_answers`
+   - Validate state matches expected snapshot
+4. **Enforce Invariants** - Run strict validation checks (see below)
+5. **Validate Metadata** - Ensure all expected clarifications occurred
+
+### Enforcement Rules
+
+The test implements two critical enforcement rules to catch subtle bugs:
+
+#### ENFORCEMENT 1: Pre-Clarification Integrity
+
+**Rule**: Hidden attributes must stay `"unknown"` until explicitly clarified.
+
+**Exception**: If an action explicitly sets a hidden attribute value (listed in `changes`), that counts as legitimate clarification.
+
+**What This Catches**:
+- Actions that accidentally mutate hidden attributes before asking about them
+- Unintended side effects that reveal hidden information
+- Pre-clarification drift where values change without the simulator asking
+
+```python
+# Example violation:
+# Hidden attribute 'battery.level' changes from 'unknown' to 'low'
+# BUT action didn't list it in changes AND simulator didn't ask
+# → Test fails with detailed message showing when drift occurred
+```
+
+#### ENFORCEMENT 2: Post-Clarification Tracking
+
+**Rule**: Once an attribute is clarified, it must always be tracked (never reverts to "unknown" unexpectedly).
+
+**Exception**: Values can become "unknown" when trends change to "up" or "down" (simulator intentionally masks values to force re-clarification). In this case, ground truth must also show "unknown".
+
+**What This Catches**:
+- Accidental resets of clarified attributes
+- Re-masking bugs where attributes incorrectly revert to "unknown"
+- Inconsistencies between trend behavior and expected state
+
+```python
+# Example violation:
+# Attribute 'battery.level' was clarified to 'medium' at step 0
+# At step 3, it becomes 'unknown' again
+# No trend change to explain it
+# → Test fails showing when attribute was clarified and when it reverted
+```
+
+### Metadata Validation
+
+After replay completes, the test validates metadata consistency:
+
+1. **Unused Hidden Attributes** - Warns if attributes marked hidden were never asked about (might indicate outdated metadata)
+2. **Missing Clarifications** - Fails if `interaction_answers` exist but were never used (simulator should have asked but didn't)
+3. **Unexpected Questions** - Warns if simulator asks about non-hidden attributes (shouldn't need clarification)
+
+### Tracking State
+
+The test maintains sophisticated tracking to provide clear failure messages:
+
+```python
+clarified_at_step: dict[str, int]      # When each attribute was first clarified
+clarified_values: dict[str, Any]       # What value it had when clarified
+actually_asked: set[str]               # Attributes simulator actually asked about
+ever_clarified: set[str]               # Attributes that were clarified at any point
+```
+
+This enables error messages like:
+
+```
+AssertionError: Step 3 (drain_battery): Previously clarified attribute 
+'battery.level' reverted to 'unknown'. It was clarified to 'medium' at step 0.
+This suggests an accidental reset or re-masking bug.
+```
+
+### Why This Works
+
+This testing approach catches bugs that simple end-state validation would miss:
+
+- **Temporal Correctness**: Validates state at every step, not just final state
+- **Information Flow**: Ensures hidden information stays hidden until properly revealed
+- **Question Timing**: Verifies simulator asks clarification questions at the right moments
+- **Consistency**: Guarantees partially observable replay produces same result as fully observable ground truth
+
+### Creating Ground Truth Files
+
+Ground truth files are typically created by:
+
+1. Running a simulation with all attributes visible (fully observable)
+2. Identifying which attributes should be initially hidden
+3. Recording when the simulator would need to ask about them
+4. Using `tests/create_ground_truth_dataset.py` or `scripts/build_ground_truth.py` to generate the test file
+
+The result is a comprehensive test case that validates both the correctness of state transitions and the proper handling of partial observability.
 
 ---
 
