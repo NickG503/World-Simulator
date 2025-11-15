@@ -165,13 +165,6 @@ uv run sim simulate --obj tv turn_on adjust_brightness --name tv_Postcondition_d
 
 You'll see: `Postcondition: what is network.wifi_connected?`
 
-```bash
-# signal_boost uses OR logic in its postcondition
-uv run sim simulate --obj tv turn_on signal_boost --name tv_Postcondition_or_demo
-```
-
-You'll see: `Postcondition: what is network.wifi_connected?` followed by `Postcondition: what is power_source.voltage?` (only if the first answer doesn't satisfy the OR).
-
 #### Seeing Both Types Together
 
 ```bash
@@ -293,8 +286,6 @@ Precondition: what is network.wifi_connected?
   Structure: `(power_source.voltage==high OR network.wifi_connected==on)`. If the first attribute is TRUE (voltage=high), the simulator never asks about wifi; otherwise it immediately asks for wifi to see if the OR condition can still pass.
 - **Postcondition (AND)** — `uv run sim simulate --obj tv turn_on premium_mode --name tv_postcond_and`  
   Structure: `(cooling.temperature!=hot AND audio.channel!=low)`. If you answer `cooling.temperature = hot`, the AND fails immediately and the `else` branch runs; otherwise it asks about `audio.channel` before applying the correct branch.
-- **Postcondition (OR)** — `uv run sim simulate --obj tv turn_on signal_boost --name tv_postcond_or`  
-  Structure: `(network.wifi_connected==on OR power_source.voltage==high)`. Provide either value to satisfy the OR and hit the “boost” branch; if both answers fall through, you'll see the fallback branch applied.
 
 #### OR Short-Circuit
 
