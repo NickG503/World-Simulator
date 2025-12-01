@@ -34,6 +34,33 @@ A simulation engine for modeling object state transitions using a tree-based exe
 - Preconditions check ONE attribute (binary result)
 - Postconditions check ONE attribute with flat if-elif-else
 
+### 2024-12-01: Phase 2 Branching Implementation
+
+**Decision:** Implemented branching on unknown values with value sets.
+
+**Rationale:**
+- Allow simulation to explore multiple possible outcomes
+- Support trends creating value sets (e.g., trend down from "medium" → {empty, low, medium})
+- Enable more realistic uncertainty modeling
+
+**Key Changes:**
+1. `AttributeSnapshot.value` now supports `Union[str, List[str], None]` for value sets
+2. Added `_compute_value_set_from_trend()` to calculate possible values from trends
+3. Implemented `_create_precondition_branches()` for 2-way branching (success/fail)
+4. Implemented `_create_postcondition_branches()` for N+1 branching (if/elif/else)
+5. Updated `_process_action` to detect unknowns and trigger branching
+6. Updated visualization to display value sets as `{v1, v2, v3}`
+7. Added trend arrows (↑/↓) in visualization
+
+**Branching Rules:**
+- **Precondition unknown**: Creates 2 branches
+  - Success branch: values that satisfy the condition
+  - Fail branch: values that violate the condition
+- **Postcondition unknown**: Creates N+1 branches
+  - One branch per if/elif case with specific value
+  - One else branch with remaining values as a set
+- **Maximum branches per action**: 2 × (postcondition_cases + 1)
+
 ---
 
 ## Project Structure
@@ -105,47 +132,83 @@ World-Simulator/
 
 ### Tree Module (`simulator.core.tree`)
 
-**Purpose:** Tree-based simulation execution
+**Purpose:** Tree-based simulation execution with branching support
 
 **Components:**
-- `WorldSnapshot` - Immutable state capture at a point in time
-  - `get_attribute_value(path)` - Get value by path
-  - `get_attribute_trend(path)` - Get trend by path
-  - `is_attribute_known(path)` - Check if value is known (for Phase 2)
-  - `get_all_attribute_paths()` - List all attributes
-- `TreeNode` - Single node in simulation tree
-  - `is_root`, `is_leaf`, `succeeded`, `failed` properties
-  - `describe()` - Human-readable description
-  - `get_changed_attributes()` - List of changed attribute paths
-- `BranchCondition` - Describes what condition led to a branch
-  - `describe()` - Human-readable condition
-  - `matches_value(value)` - Check if value matches (for Phase 2)
-- `SimulationTree` - Complete tree structure
-  - `add_node()`, `add_branch_nodes()` - Node management
-  - `get_leaf_nodes()`, `get_path_to_node()` - Traversal
-  - `get_statistics()` - Depth, width, success/fail counts
-- `TreeSimulationRunner` - Executes simulations building tree structure
-  - Extension points for Phase 2 branching
-- `NodeStatus`, `BranchSource` - Enums for type safety
 
-**Extension Points for Phase 2:**
-```python
-# In TreeSimulationRunner:
-_get_unknown_precondition_attribute()   # Detect branching need
-_get_unknown_postcondition_attribute()  # Detect branching need
-_get_postcondition_branch_options()     # Get branch options (TODO)
-```
+#### `AttributeSnapshot` (simulation_runner.py)
+Represents a single attribute's state with value set support.
+- `value: Union[str, List[str], None]` - Single value or set of possible values
+- `is_value_set()` - Check if value is a list
+- `get_value_as_set()` - Get value as Python set
+- `get_single_value()` - Get first/only value
+- `is_unknown()` - True if None, "unknown", or multi-value set
+
+#### `WorldSnapshot`
+Immutable state capture at a point in time.
+- `get_attribute_value(path)` - Get value by path (may return list for value sets)
+- `get_attribute_trend(path)` - Get trend by path
+- `is_attribute_known(path)` - Check if value is known (single definite value)
+- `is_attribute_value_set(path)` - Check if value is a set
+- `get_single_value(path)` - Get value as single string
+- `get_all_attribute_paths()` - List all attributes
+
+#### `TreeNode`
+Single node in simulation tree.
+- `is_root`, `is_leaf`, `succeeded`, `failed` properties
+- `describe()` - Human-readable description
+- `get_changed_attributes()` - List of changed attribute paths
+- `branch_condition` - BranchCondition that led to this node
+
+#### `BranchCondition`
+Describes what condition led to a branch.
+- `value: Union[str, List[str]]` - Single value or set (for else branches)
+- `branch_type: Literal["if", "elif", "else", "success", "fail"]`
+- `is_value_set()` - Check if value is a list
+- `get_value_display()` - Format value (handles sets as `{v1, v2}`)
+- `describe()` - Human-readable condition
+- `matches_value(value)` - Check if value matches
+
+#### `SimulationTree`
+Complete tree structure.
+- `add_node()`, `add_branch_nodes()` - Node management
+- `get_leaf_nodes()`, `get_path_to_node()`, `get_children()`, `get_siblings()` - Traversal
+- `get_statistics()` - Depth, width, success/fail counts, branch points
+
+#### `TreeSimulationRunner`
+Executes simulations building tree structure.
+- `_compute_value_set_from_trend(value, trend, space_id)` - Calculate possible values
+- `_create_precondition_branches()` - Create 2 branches for unknown precondition
+- `_create_postcondition_branches()` - Create N+1 branches for unknown postcondition
+- `_get_postcondition_branch_options()` - Extract if/elif/else cases from action
+
+#### Enums
+- `NodeStatus` - ok, rejected, constraint_violated, error
+- `BranchSource` - precondition, postcondition
 
 **Interfaces:**
 ```python
 from simulator.core.tree import TreeSimulationRunner, SimulationTree
+from simulator.core.simulation_runner import AttributeSnapshot
 
+# Run simulation (with automatic branching on unknowns)
 runner = TreeSimulationRunner(registry_manager)
 tree = runner.run(object_type="flashlight", actions=[...])
 
 # Access tree statistics
 stats = tree.get_statistics()
-print(f"Depth: {stats['depth']}, Success: {stats['successful_actions']}")
+print(f"Depth: {stats['depth']}, Branches: {stats['branch_points']}")
+
+# Check for value sets
+node = tree.nodes["state1"]
+value = node.snapshot.get_attribute_value("battery.level")
+if isinstance(value, list):
+    print(f"Possible values: {value}")
+
+# Work with AttributeSnapshot value sets
+attr = AttributeSnapshot(value=["low", "medium"], trend="down")
+if attr.is_value_set():
+    print(f"Value set: {attr.get_value_as_set()}")
 
 # Save
 runner.save_tree_to_yaml(tree, "output.yaml")
@@ -217,33 +280,44 @@ sim visualize <history.yaml> --no-open    # Don't auto-open browser
 
 ## Future Enhancements
 
-### Phase 2: Branching on Unknown Values
-- When precondition has unknown attribute → split into success/fail branches
-- When postcondition has unknown attribute → split by each option value
-- Tree structure supports multiple children per node
-
 ### Phase 3: Probabilistic Branching
 - Add probability weights to branches
 - Monte Carlo simulation support
 - Aggregate statistics across paths
 
 ### Completed Features (Dec 2024)
+
+#### Phase 1: Tree Foundation
 - [x] Sequential node IDs (state0, state1, state2...)
 - [x] Simple date format (YYYY-MM-DD)
 - [x] Trend no longer makes values unknown - preserves current value
 - [x] HTML visualization generator (`sim visualize <history.yaml>`)
 - [x] Graph-based visualization with circle nodes (scalable for branching)
 - [x] CLI command displayed in visualization header
-- [x] Unit tests for tree simulation (46 tests covering Phase 2 APIs)
+- [x] Unit tests for tree simulation
 - [x] CI/CD with formatting, linting, KB validation, tests, and integration tests
 - [x] Tree statistics API (depth, width, success/fail counts)
 - [x] WorldSnapshot helper methods (get_attribute_value, is_attribute_known)
 - [x] TreeNode properties (succeeded, failed, change_count)
 
+#### Phase 2: Branching on Unknown Values
+- [x] Value set support in AttributeSnapshot (`Union[str, List[str], None]`)
+- [x] `_compute_value_set_from_trend()` - trends create value sets
+- [x] Precondition branching (2 branches: success/fail)
+- [x] Postcondition branching (N+1 branches: if/elif/else)
+- [x] `_create_precondition_branches()` implementation
+- [x] `_create_postcondition_branches()` implementation
+- [x] BranchCondition with value set support
+- [x] Visualization displays value sets as `{v1, v2, v3}`
+- [x] Trend arrows (↑/↓) displayed in visualization
+- [x] Branch type styling (if/elif/else nodes colored differently)
+- [x] Comprehensive branching tests (50+ tests)
+
 ### Planned Features
-- [ ] New `BranchEffect` type for explicit if-elif-else chains
+- [ ] Interactive branch exploration in visualization
 - [ ] Branch pruning/merging strategies
 - [ ] Parallel branch evaluation
+- [ ] Export tree as DOT graph format
 
 ---
 

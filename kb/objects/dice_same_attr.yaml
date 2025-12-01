@@ -1,0 +1,79 @@
+# Dice object definition - SAME ATTRIBUTE in precondition AND postcondition
+# This demonstrates intersection logic when both check the same attribute
+#
+# Scenario:
+# - Precondition: face in {3, 5, 6} (face={1,2,4} FAILS, face={3,5,6} SUCCEEDS)
+# - Postcondition: checks FACE (SAME attribute!)
+#     if face == 6 → small prize
+#     else (face={3,5}) → big prize
+#
+# When face=unknown:
+# Creates 3 branches:
+#   1. FAIL: face={1,2,4} (precondition failed - NOT in {3,5,6})
+#   2. SUCCESS + face=6: small prize
+#   3. SUCCESS + else: face={3,5} → big prize (grouped same effect)
+#
+# Key principle: Different if/elif conditions = different effects = different branches
+# Same effect = group in else = single branch with value SET
+
+type: dice_same_attr
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
+
+behaviors:
+  # Check win - SAME attribute (face for both precond AND postcond)
+  check_win:
+    # Precondition: face must be IN {3, 5, 6} to succeed
+    # face={1, 2, 4} will FAIL
+    preconditions:
+      - type: attribute_check
+        target: cube.face
+        operator: in
+        value: ["3", "5", "6"]
+    effects:
+      # Set result to win
+      - type: set_attribute
+        target: prize.result
+        value: win
+      # Postcondition branches on FACE (SAME as precondition!)
+      # IF face == 6 -> small prize
+      # ELSE (face={3,5}) -> big prize
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.face
+          operator: equals
+          value: "6"
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: small
+        else:
+          - type: set_attribute
+            target: prize.level
+            value: big
+
+  # Reset the dice
+  reset:
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: none
+      - type: set_attribute
+        target: prize.level
+        value: none

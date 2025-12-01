@@ -11,7 +11,8 @@ A deterministic simulator for everyday objects with qualitative reasoning and tr
 
 - **Knowledge driven** – Qualitative spaces, object definitions, and actions live in `kb/` and are loaded through strict schemas
 - **Tree-based execution** – Simulations produce tree structures where each node represents a world state after an action
-- **Deterministic** – All attribute values are known, enabling single-path execution through the tree
+- **Branching support** – Unknown values trigger branching: preconditions split into success/fail, postconditions split by if/elif/else cases
+- **Value sets** – Trends create value sets (e.g., trend down from "medium" → {empty, low, medium})
 - **Visual output** – Interactive HTML visualizations show the simulation tree with clickable nodes
 - **CLI oriented** – The `sim` command provides entry points for validation, inspection, simulation, and visualization
 
@@ -42,13 +43,16 @@ uv run sim show object flashlight
 uv run sim show behaviors flashlight
 
 # Run a simulation
-uv run sim simulate --obj flashlight turn_on turn_off --name demo
+uv run sim simulate --obj flashlight --actions turn_on turn_off --name demo
 
 # View the simulation tree
 uv run sim history demo
 
 # Generate and open visualization
 uv run sim visualize demo
+
+# Branching: set attribute to unknown and watch the tree split!
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on --name branching_demo --viz
 ```
 
 ### Example Output
@@ -97,8 +101,16 @@ Each simulation produces a tree structure:
 
 - **Root node (state0)**: Initial world state before any actions
 - **Child nodes (state1, state2, ...)**: States after each action
-- **Single path**: With all values known, execution follows one deterministic path
+- **Branching**: Unknown values cause the tree to split into multiple paths
 - **Node data**: Each node contains a snapshot, action taken, changes, and status
+
+### Branching (Phase 2)
+
+When attributes are unknown, the simulation branches:
+
+- **Precondition branching**: Unknown precondition attribute → 2 branches (success/fail)
+- **Postcondition branching**: Unknown postcondition attribute → N+1 branches (if/elif/else cases)
+- **Value sets**: Branches can have value sets like `{empty, low, medium}` representing possible values
 
 ### Preconditions
 
@@ -146,6 +158,10 @@ Attributes can have trends (up/down) that indicate future movement:
   direction: down
 ```
 
+When branching occurs, trends create **value sets**:
+- Trend "down" from "medium" → `{empty, low, medium}` (all values at or below)
+- Trend "up" from "low" → `{low, medium, high, full}` (all values at or above)
+
 ---
 
 ## CLI Commands
@@ -156,21 +172,30 @@ Attributes can have trends (up/down) that indicate future movement:
 | `sim show object NAME` | Display object structure, defaults, and constraints |
 | `sim show behaviors NAME` | List behaviors available for an object |
 | `sim apply OBJECT ACTION` | Apply a single action and show the diff |
-| `sim simulate --obj TYPE ACTIONS...` | Run multi-action simulation, save tree |
+| `sim simulate --obj TYPE --actions ...` | Run multi-action simulation, save tree |
 | `sim history NAME` | Display simulation tree summary |
 | `sim visualize NAME` | Generate interactive HTML visualization |
 
 ### Simulation Options
 
 ```bash
-# Named simulation
-uv run sim simulate --obj flashlight turn_on turn_off --name my_test
+# Basic simulation
+uv run sim simulate --obj flashlight --actions turn_on turn_off --name my_test
 
-# With parameters (inline syntax)
-uv run sim simulate --obj tv turn_on adjust_volume=high --name tv_test
+# With action parameters (action=value syntax)
+uv run sim simulate --obj tv --actions turn_on adjust_volume=high turn_off --name tv_test
+
+# Set initial attribute values (space-separated after --set)
+uv run sim simulate --obj flashlight --set battery.level=low --actions turn_on --name low_battery
+
+# Set multiple initial values
+uv run sim simulate --obj flashlight --set battery.level=high switch.position=off --actions turn_on turn_off --name preset_test
+
+# Set attribute to unknown (triggers branching!)
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on --name branching_demo
 
 # Generate visualization automatically
-uv run sim simulate --obj flashlight turn_on --name demo --viz
+uv run sim simulate --obj flashlight --actions turn_on turn_off --name demo --viz
 ```
 
 ---
@@ -231,7 +256,10 @@ The visualizer creates interactive HTML pages:
 
 - **Graph view**: Nodes as circles, connected by edges
 - **Click to inspect**: See full world state for any node
-- **Change highlighting**: Green for changed attributes
+- **Change highlighting**: Changed attributes shown in gold
+- **Value sets**: Displayed as `{v1, v2, v3}` with purple styling
+- **Trend indicators**: Arrows (↑/↓) show attribute trends
+- **Branch types**: Different styling for if/elif/else branches
 - **Expandable details**: Show/hide unchanged attributes
 
 Generate visualization:

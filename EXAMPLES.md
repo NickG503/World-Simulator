@@ -1,354 +1,238 @@
-# Simulator CLI Examples
+# World Simulator Examples
 
-This document provides example commands for using the World Simulator CLI.
-
----
+This document provides examples organized from simple to complex, demonstrating all features of the World Simulator.
 
 ## Table of Contents
 
-1. [Validation & Inspection](#validation--inspection)
-2. [Basic Simulations](#basic-simulations)
-3. [Using Parameters](#using-parameters)
-4. [Viewing Results](#viewing-results)
-5. [Visualization](#visualization)
-6. [Multi-Action Sequences](#multi-action-sequences)
-7. [Understanding Failures](#understanding-failures)
+1. [Basic Commands](#basic-commands)
+2. [Simple Linear Simulation](#simple-linear-simulation)
+3. [Setting Initial Values](#setting-initial-values)
+4. [Branching on Unknown Values](#branching-on-unknown-values)
+5. [Advanced Branching with IN Operator](#advanced-branching-with-in-operator)
+6. [Same Attribute Branching (Intersection Logic)](#same-attribute-branching-intersection-logic)
+7. [Multi-Level Branching (Complex)](#multi-level-branching-complex)
 
 ---
 
-## Validation & Inspection
+## Basic Commands
 
-Before running simulations, validate and inspect your knowledge base:
-
+### Validate Knowledge Base
 ```bash
-# Validate the entire knowledge base
-uv run sim validate
-
-# Show object structure
-uv run sim show object flashlight
-uv run sim show object tv
-uv run sim show object kettle
-
-# Show available behaviors
-uv run sim show behaviors flashlight
-uv run sim show behaviors tv
+sim validate
 ```
 
-**Example output for `show object flashlight`:**
-
-```
-flashlight (Object Type)
-Parts: 3, Attributes: 5, Constraints: 1
-              Definition
-┏━━━━━━━━━━━━━━━━━┳━━━━━━━━━┳━━━━━━━━━┓
-┃ Attribute       ┃ Default ┃ Mutable ┃
-┡━━━━━━━━━━━━━━━━━╇━━━━━━━━━╇━━━━━━━━━┩
-│ switch.position │ off     │ ✓       │
-│ bulb.state      │ off     │ ✓       │
-│ bulb.brightness │ none    │ ✓       │
-│ battery.level   │ medium  │ ✓       │
-│ battery.type    │ AA      │ ✗       │
-└─────────────────┴─────────┴─────────┘
-
-Constraints (1):
-  1. If bulb.state == on, then battery.level != empty
+### Show Object Details
+```bash
+sim show object flashlight
+sim show object dice
+sim show object dice_same_attr
 ```
 
 ---
 
-## Basic Simulations
+## Simple Linear Simulation
 
-### Single Action
+Basic simulations where all values are known - results in linear execution (no branching).
 
-Apply one action and see the result:
-
+### Flashlight: Turn On and Off
 ```bash
-# Apply turn_on to flashlight
-uv run sim apply flashlight turn_on
-
-# Apply turn_on to TV
-uv run sim apply tv turn_on
+sim simulate --obj flashlight --actions turn_on turn_off --name flashlight_basic
 ```
 
-### Simple Sequences
-
-Run multiple actions in sequence:
-
+### Flashlight: Multiple Actions
 ```bash
-# Flashlight on/off cycle
-uv run sim simulate --obj flashlight turn_on turn_off --name flashlight_demo
+sim simulate --obj flashlight --actions turn_on turn_off turn_on --name flashlight_multi
+```
 
-# TV session
-uv run sim simulate --obj tv turn_on open_streaming turn_off --name tv_demo
+### View History
+```bash
+sim history outputs/histories/flashlight_basic.yaml
+```
 
-# Kettle workflow
-uv run sim simulate --obj kettle pour_water=full heat turn_off --name kettle_demo
+### Generate Visualization
+```bash
+sim visualize outputs/histories/flashlight_basic.yaml -o outputs/visualizations/flashlight_basic.html
 ```
 
 ---
 
-## Using Parameters
+## Setting Initial Values
 
-Some actions accept parameters to customize behavior.
+Use `--set` to override default attribute values before simulation.
 
-### Inline Parameter Syntax
-
-Use `action=value` format:
-
+### Flashlight with Low Battery
 ```bash
-# Pour specific amount of water
-uv run sim simulate --obj kettle pour_water=full --name kettle_full
-uv run sim simulate --obj kettle pour_water=medium --name kettle_medium
-
-# Adjust TV volume
-uv run sim simulate --obj tv turn_on adjust_volume=high turn_off --name tv_volume
-
-# Change TV channel
-uv run sim simulate --obj tv turn_on change_channel=medium turn_off --name tv_channel
-
-# Replace flashlight battery with specific level
-uv run sim simulate --obj flashlight replace_battery=high turn_on --name flashlight_new_battery
+sim simulate --obj flashlight --set battery.level=low --actions turn_on turn_off --name flashlight_low
 ```
 
-### Multiple Parameters
-
-Each action can have its own parameter:
-
+### Flashlight with Full Battery
 ```bash
-# TV with multiple adjustments
-uv run sim simulate --obj tv \
-  turn_on adjust_volume=low adjust_volume=high change_channel=medium turn_off \
-  --name tv_adjustments
+sim simulate --obj flashlight --set battery.level=full --actions turn_on turn_off --name flashlight_full
+```
+
+### Flashlight with Empty Battery (Action Fails)
+```bash
+sim simulate --obj flashlight --set battery.level=empty --actions turn_on --name flashlight_empty
+```
+*Note: `turn_on` fails because precondition requires `battery.level != empty`*
+
+---
+
+## Branching on Unknown Values
+
+When an attribute is set to `unknown`, the simulator branches on all possible values.
+
+### Flashlight with Unknown Battery Level
+```bash
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on --name flashlight_unknown
+```
+*Creates branches for each battery level: empty (fail), low, medium, high, full (success with different brightness)*
+
+### Flashlight Unknown Battery - Full Cycle
+```bash
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off --name flashlight_unknown_cycle
+```
+*Shows how subsequent actions apply to ALL branches (including the failed one)*
+
+### Visualize Branching
+```bash
+sim visualize outputs/histories/flashlight_unknown.yaml -o outputs/visualizations/flashlight_unknown.html
 ```
 
 ---
 
-## Viewing Results
+## Advanced Branching with IN Operator
 
-### History Command
+The `in` operator allows checking if a value is in a set of values.
 
-View simulation results using the history command:
+### Dice: Different Attributes for Precondition vs Postcondition
 
-```bash
-# View simulation summary
-uv run sim history flashlight_demo
-
-# Just use the name - no need for full path or .yaml extension
-uv run sim history tv_demo
-```
-
-**Example output:**
-
-```
-Simulation: flashlight_demo
-Object: flashlight
-Date: 2025-12-01
-Nodes: 3
-             Execution Path
-┏━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━┳━━━━━━━━━┓
-┃ Node   ┃ Action   ┃ Status ┃ Changes ┃
-┡━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━╇━━━━━━━━━┩
-│ state0 │ Initial  │ ok     │ 0       │
-│ state1 │ turn_on  │ ok     │ 4       │
-│ state2 │ turn_off │ ok     │ 4       │
-└────────┴──────────┴────────┴─────────┘
-```
-
-### Detailed View
+The `dice` object demonstrates:
+- **Precondition**: `cube.face IN {3, 5, 6}` (succeeds) / `{1, 2, 4}` (fails)
+- **Postcondition**: Branches on `cube.color` (different attribute!)
+  - `if color == green` → small prize
+  - `elif color == red` → medium prize
+  - `elif color IN {yellow, black, white}` → big prize (grouped as value set)
 
 ```bash
-# View specific step details
-uv run sim history flashlight_demo --step=1
+# With known values (linear)
+sim simulate --obj dice --set cube.face=3 cube.color=green --actions check_win --name dice_known
 
-# View all steps in detail
-uv run sim history flashlight_demo --all
+# With unknown face and color - full branching
+sim simulate --obj dice --set cube.face=unknown cube.color=unknown --actions check_win --name dice_branching
+```
+
+**Expected branches for unknown face + color (4 branches):**
+1. ✓ **SUCCESS + green**: `face={3,5,6}`, `color=green` → small prize
+2. ✓ **SUCCESS + red**: `face={3,5,6}`, `color=red` → medium prize
+3. ✓ **SUCCESS + else**: `face={3,5,6}`, `color={yellow,black,white}` → big prize
+4. ✗ **FAIL**: `face={1,2,4}` - precondition failed
+
+### Visualize Dice Branching
+```bash
+sim visualize outputs/histories/dice_branching.yaml -o outputs/visualizations/dice_branching.html
 ```
 
 ---
 
-## Visualization
+## Same Attribute Branching (Intersection Logic)
 
-Generate interactive HTML visualizations:
+When the same attribute is checked in both precondition AND postcondition, the simulator computes the intersection.
+
+### Dice Same Attribute: Intersection Demo
+
+The `dice_same_attr` object demonstrates:
+- **Precondition**: `cube.face IN {3, 5, 6}` (succeeds) / `{1, 2, 4}` (fails)
+- **Postcondition**: `if face == 6` → small prize / `else` → big prize (same attribute!)
 
 ```bash
-# Generate visualization from existing history
-uv run sim visualize flashlight_demo
+# With known values (linear)
+sim simulate --obj dice_same_attr --set cube.face=3 --actions check_win --name dice_same_known
 
-# Generate visualization and open in browser (default)
-uv run sim visualize tv_demo
-
-# Don't auto-open browser
-uv run sim visualize kettle_demo --no-open
+# With unknown face - branching with intersection
+sim simulate --obj dice_same_attr --set cube.face=unknown --actions check_win --name dice_same_branching
 ```
 
-### Auto-Visualization During Simulation
+**Expected branches for unknown face (3 branches):**
+1. ✓ **SUCCESS + face=6**: specific match → small prize
+2. ✓ **SUCCESS + else**: `face={3,5}` (remaining after intersection) → big prize
+3. ✗ **FAIL**: `face={1,2,4}` - precondition failed (NOT in {3,5,6})
 
+*Note: The else branch gets `{3,5}` = intersection of pass values `{3,5,6}` minus explicit check `{6}`*
+
+### Visualize Same Attribute Branching
 ```bash
-# Use --viz flag to generate and open visualization automatically
-uv run sim simulate --obj flashlight turn_on turn_off --name demo --viz
-```
-
-### Visualization Features
-
-The HTML visualization provides:
-
-- **Graph view**: Nodes displayed as circles
-- **Click to inspect**: Click any node to see its world state
-- **Change highlighting**: Changed attributes shown in gold
-- **Relevant attributes**: Attributes involved in the action shown in green
-- **Expandable sections**: Show/hide other attributes
-
----
-
-## Multi-Action Sequences
-
-### Flashlight Battery Cycle
-
-```bash
-# Full battery lifecycle
-uv run sim simulate --obj flashlight \
-  turn_on turn_off turn_on turn_off \
-  --name flashlight_cycle
-```
-
-### TV Evening Session
-
-```bash
-# Complete TV usage scenario
-uv run sim simulate --obj tv \
-  turn_on open_streaming adjust_volume=high change_channel=medium smart_adjust turn_off \
-  --name tv_evening
-```
-
-### Kettle Morning Routine
-
-```bash
-# Fill, heat, and turn off
-uv run sim simulate --obj kettle \
-  pour_water=full heat turn_off \
-  --name kettle_morning
+sim visualize outputs/histories/dice_same_branching.yaml -o outputs/visualizations/dice_same_branching.html
 ```
 
 ---
 
-## Understanding Failures
+## Multi-Level Branching (Complex)
 
-### Precondition Failures
+This example shows branching happening at multiple levels - each action creates new branches on top of previous branches.
 
-Actions fail when preconditions aren't met:
+### Flashlight: Double Turn On (Two Levels of Branching)
 
 ```bash
-# Try to change channel while TV is off - will fail
-uv run sim simulate --obj tv change_channel=medium --name tv_fail_demo
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_on --name flashlight_double_branch
 ```
 
 **What happens:**
-1. `change_channel` requires `screen.power == on`
-2. TV starts with screen off
-3. Action is rejected with reason: "Precondition failed"
+1. **Level 1 (first `turn_on`)**: Battery is unknown → splits into 5 branches by postcondition:
+   - battery=full → brightness=high
+   - battery=high → brightness=high  
+   - battery=medium → brightness=medium
+   - battery=low → brightness=low
+   - battery=empty → FAIL (precondition)
 
-### Viewing Failed Steps
+2. **Level 2 (second `turn_on`)**: Each success branch now has a battery value SET from the trend (e.g., `{empty, low}` when low with trend=down):
+   - From battery=full: battery now `{empty, low, medium, high}` (trend down) → splits by postcondition
+   - From battery=high: battery now `{empty, low, medium}` (trend down) → splits by postcondition
+   - From battery=medium: battery now `{empty, low}` (trend down) → splits
+   - From battery=low: battery now `{empty}` → FAIL (precondition: battery != empty)
+   - Failed branch: stays failed (world unchanged)
 
+This creates a tree with **25 nodes** showing cascading branches.
+
+### Visualize Multi-Level Branching
 ```bash
-# Check the history to see failures
-uv run sim history tv_fail_demo
+sim visualize outputs/histories/flashlight_double_branch.yaml -o outputs/visualizations/flashlight_double_branch.html
 ```
-
-Failed steps show status as `rejected` with the failure reason.
-
-### Continuing After Failure
-
-The simulation continues after failures, recording each step:
-
-```bash
-# Multiple actions with a failure in the middle
-uv run sim simulate --obj tv \
-  turn_on turn_off factory_reset turn_on \
-  --name tv_with_reset
-```
-
-**What happens:**
-1. `turn_on` → Success
-2. `turn_off` → Success
-3. `factory_reset` → Success (screen is off)
-4. `turn_on` → Success
 
 ---
 
-## Object Reference
+## Quick Test All Examples
 
-### Flashlight
-
-**Parts:** switch, bulb, battery
-
-**Behaviors:**
-- `turn_on` - Turn on (requires battery not empty)
-- `turn_off` - Turn off
-- `replace_battery` - Replace battery (parameter: level)
-- `drain_battery` - Drain battery to empty
-- `charge_battery` - Charge battery
-
-### TV
-
-**Parts:** button, screen, audio, network, power_source, cooling
-
-**Behaviors:**
-- `turn_on` - Power on TV
-- `turn_off` - Power off TV
-- `open_streaming` - Open streaming app (requires wifi)
-- `adjust_volume` - Adjust volume (parameter: level)
-- `adjust_brightness` - Adjust brightness
-- `change_channel` - Change channel (parameter: channel)
-- `premium_mode` - Enable premium mode
-- `smart_adjust` - Auto-adjust settings
-- `stream_hd` - Stream in HD
-- `factory_reset` - Reset to factory settings
-
-### Kettle
-
-**Parts:** tank, heating_element, power
-
-**Behaviors:**
-- `pour_water` - Pour water (parameter: level)
-- `heat` - Heat the water
-- `turn_off` - Turn off
-- `drain` - Empty the tank
-
----
-
-## Tips
-
-1. **Use `--viz` flag** for immediate visual feedback
-2. **Name simulations descriptively** for easy reference later
-3. **Check behaviors first** with `sim show behaviors <object>`
-4. **Validate after KB changes** with `sim validate`
-5. **Use history** to understand state changes step by step
-
----
-
-## Command Reference
-
+Run all examples at once:
 ```bash
-# Validation
-uv run sim validate
-
-# Inspection
-uv run sim show object <name>
-uv run sim show behaviors <name>
-
-# Single action
-uv run sim apply <object> <action>
-
-# Simulation
-uv run sim simulate --obj <object> <actions...> --name <name>
-uv run sim simulate --obj <object> <actions...> --name <name> --viz
-
-# History
-uv run sim history <name>
-uv run sim history <name> --step=N
-uv run sim history <name> --all
-
-# Visualization
-uv run sim visualize <name>
-uv run sim visualize <name> --no-open
+./scripts/run_examples.sh
 ```
+
+This will:
+1. Create `outputs/histories/` and `outputs/visualizations/` folders
+2. Run all simulations above
+3. Generate HTML visualizations for each
+
+---
+
+## CLI Reference
+
+### Simulate Command
+```bash
+sim simulate --obj <object_type> [--set attr=value ...] --actions <action1> [action2 ...] [--name <id>]
+```
+
+Options:
+- `--obj`: Object type to simulate (required)
+- `--set`: Space-separated list of `attribute=value` pairs to set initial values
+- `--actions`: Space-separated list of actions to execute
+- `--name`: Simulation ID (optional, auto-generated if not provided)
+
+### Visualize Command
+```bash
+sim visualize <history_file> [-o output.html] [--no-open]
+```
+
+Options:
+- `-o`: Output HTML file path
+- `--no-open`: Don't automatically open in browser

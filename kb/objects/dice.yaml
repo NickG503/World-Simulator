@@ -1,0 +1,99 @@
+# Dice object definition
+# Demonstrates branching with DIFFERENT attributes in precondition vs postcondition
+#
+# Scenario:
+# - Precondition: face in {3, 5, 6} (face={1,2,4} FAILS, face={3,5,6} SUCCEEDS)
+# - Postcondition: checks COLOR (different attribute!)
+#     if color == green → small prize
+#     elif color == red → medium prize
+#     else (yellow, black, white) → big prize (grouped as value set)
+#
+# When face=unknown AND color=unknown:
+# Creates 4 branches:
+#   1. SUCCESS + color=green: face={3,5,6}, color=green → small
+#   2. SUCCESS + color=red: face={3,5,6}, color=red → medium
+#   3. SUCCESS + color=else: face={3,5,6}, color={yellow,black,white} → big
+#   4. FAIL: face={1,2,4} (precondition failed - NOT in {3,5,6})
+
+type: dice
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: green
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
+
+behaviors:
+  # Check win - DIFFERENT attributes (face for precond, color for postcond)
+  check_win:
+    # Precondition: face must be IN {3, 5, 6} to succeed
+    # face={1, 2, 4} will FAIL
+    preconditions:
+      - type: attribute_check
+        target: cube.face
+        operator: in
+        value: ["3", "5", "6"]
+    effects:
+      # Set result to win
+      - type: set_attribute
+        target: prize.result
+        value: win
+      # Postcondition branches on COLOR
+      # IF color == green -> small prize
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.color
+          operator: equals
+          value: green
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: small
+      # ELIF color == red -> medium prize
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.color
+          operator: equals
+          value: red
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: medium
+      # ELSE color in {yellow, black, white} -> big prize (grouped as value set)
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.color
+          operator: in
+          value: ["yellow", "black", "white"]
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: big
+
+  # Reset the dice
+  reset:
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: none
+      - type: set_attribute
+        target: prize.level
+        value: none

@@ -9,8 +9,9 @@ Simplified for tree-based simulation:
 
 from __future__ import annotations
 
-from typing import Dict, Optional
+from typing import Dict, List, Optional
 
+import click
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -215,37 +216,110 @@ def apply(
         _render_instance_state("Resulting state", instance)
 
 
-@app.command()
-def simulate(
-    obj: str = typer.Option(..., "--obj", help="Object type to simulate"),
-    actions: list[str] = typer.Argument(..., help="Actions to execute (use action=value for inline parameters)"),
-    run_name: str | None = typer.Option(None, "--name", help="Name for output files (auto-generated if not provided)"),
-    objs: str | None = typer.Option(None, "--objs-path", help="Path to kb/objects folder"),
-    acts: str | None = typer.Option(None, "--acts-path", help="Path to kb/actions folder"),
-    verbose_load: bool = typer.Option(False, "--verbose-load", help="Display full validation trace on loader errors"),
-    visualize: bool = typer.Option(False, "--viz", help="Open HTML visualization after simulation"),
+class VariadicTuple(click.ParamType):
+    """Custom type that returns the value as-is (used with MultiValueOption)."""
+
+    name = "variadic"
+
+    def convert(self, value, param, ctx):
+        # Value is already a tuple from MultiValueOption, return as-is
+        if isinstance(value, tuple):
+            return value
+        return (value,) if value else ()
+
+
+class MultiValueOption(click.Option):
+    """
+    Custom Click Option that consumes multiple space-separated values until the next flag.
+
+    Usage: --set val1 val2 val3 --actions act1 act2
+    """
+
+    def __init__(self, *args, **kwargs):
+        kwargs.setdefault("type", VariadicTuple())
+        super().__init__(*args, **kwargs)
+
+    def add_to_parser(self, parser, ctx):
+        dest = self.name  # Capture dest name
+
+        def _parser_process(value, state):
+            # Collect all values until we hit another option (starts with -)
+            values = [value]
+            while state.rargs:
+                next_arg = state.rargs[0]
+                if next_arg.startswith("-"):
+                    break
+                values.append(state.rargs.pop(0))
+            # Store as tuple
+            state.opts[dest] = tuple(values)
+
+        retval = super().add_to_parser(parser, ctx)
+        # Replace the parser's process method with ours
+        for name in self.opts:
+            our_parser = parser._long_opt.get(name) or parser._short_opt.get(name)
+            if our_parser:
+                our_parser.process = _parser_process
+        return retval
+
+
+# Create the simulate command using Click directly for variadic options
+@click.command("simulate")
+@click.option("--obj", required=True, help="Object type to simulate")
+@click.option("--set", "set_attrs", cls=MultiValueOption, default=(), help="Initial attr=value pairs (space-separated)")
+@click.option("--actions", cls=MultiValueOption, required=True, help="Actions to execute (space-separated)")
+@click.option("--name", "run_name", default=None, help="Simulation name")
+@click.option("--objs-path", "objs", default=None, help="Path to kb/objects folder")
+@click.option("--acts-path", "acts", default=None, help="Path to kb/actions folder")
+@click.option("--verbose-load", "verbose_load", is_flag=True, help="Verbose loader errors")
+@click.option("--viz", "visualize", is_flag=True, help="Open HTML visualization")
+def simulate_cmd(
+    obj: str,
+    set_attrs: tuple,
+    actions: tuple,
+    run_name: Optional[str],
+    objs: Optional[str],
+    acts: Optional[str],
+    verbose_load: bool,
+    visualize: bool,
 ) -> None:
-    """Run a simulation with multiple actions using tree-based execution."""
+    """
+    Run a simulation with tree-based execution.
+
+    \b
+    Example:
+        sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off
+        sim simulate --obj flashlight --set battery.level=high switch.position=off --actions turn_on
+    """
     rm = _load_registries(objs, acts, verbose_load=verbose_load)
 
-    # Parse actions
-    action_specs: list[dict] = []
-    for action_str in actions:
+    # Parse initial attribute values from --set options
+    initial_values: dict[str, str] = {}
+    for attr_spec in set_attrs:
+        if "=" not in attr_spec:
+            console.print(f"[red]Invalid --set format[/red]: expected 'attr=value', got '{attr_spec}'")
+            raise SystemExit(2)
+        path, value = attr_spec.split("=", 1)
+        initial_values[path.strip()] = value.strip()
+
+    # Parse actions (action or action=param format)
+    action_list = list(actions)
+    action_specs: List[dict] = []
+    for action_str in action_list:
         if "=" in action_str:
             action_name_raw, inline_value = action_str.split("=", 1)
             action_name = action_name_raw.strip()
-            value = inline_value.strip()
+            param_value = inline_value.strip()
 
-            if not value:
+            if not param_value:
                 console.print(f"[red]Bad action value[/red]: expected 'action=value', got '{action_str}'")
-                raise typer.Exit(code=2)
+                raise SystemExit(2)
 
             param_name = _infer_inline_param_name(rm, obj, action_name)
             if param_name:
-                action_specs.append({"name": action_name, "parameters": {param_name: value}})
+                action_specs.append({"name": action_name, "parameters": {param_name: param_value}})
             else:
                 console.print(f"[red]Cannot infer parameter for action '{action_name}'[/red]")
-                raise typer.Exit(code=2)
+                raise SystemExit(2)
         else:
             action_specs.append({"name": action_str.strip(), "parameters": {}})
 
@@ -260,11 +334,20 @@ def simulate(
         actions=action_specs,
         simulation_id=simulation_name,
         verbose=False,
+        initial_values=initial_values if initial_values else None,
     )
 
+    # Show initial values in output if any were set
+    if initial_values:
+        console.print(f"[dim]Initial values: {initial_values}[/dim]")
+
     # Store CLI command and actions in tree for visualization
-    tree.cli_command = f"sim simulate --obj {obj} {' '.join(actions)}" + (f" --name {run_name}" if run_name else "")
-    tree.actions = actions
+    set_args = "--set " + " ".join(f"{k}={v}" for k, v in initial_values.items()) if initial_values else ""
+    actions_str = "--actions " + " ".join(action_list)
+    tree.cli_command = f"sim simulate --obj {obj} {set_args} {actions_str}".strip()
+    if run_name:
+        tree.cli_command += f" --name {run_name}"
+    tree.actions = action_list
 
     # Save tree to file
     history_path = resolve_history_path(tree.simulation_id)
@@ -404,4 +487,16 @@ def history(
     console.print(table)
 
 
-__all__ = ["app"]
+def _get_cli():
+    """Get the CLI app with the Click-based simulate command added."""
+    click_app = typer.main.get_command(app)
+    click_app.add_command(simulate_cmd, "simulate")
+    return click_app
+
+
+def main():
+    """Entry point for the CLI."""
+    _get_cli()()
+
+
+__all__ = ["app", "main"]

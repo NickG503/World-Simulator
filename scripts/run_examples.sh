@@ -1,208 +1,131 @@
 #!/bin/bash
-#
 # Run all examples from EXAMPLES.md and generate visualizations
 # Usage: ./scripts/run_examples.sh
-#
-# Outputs:
-#   - YAML histories: outputs/histories/
-#   - HTML visualizations: outputs/visualizations/
-#
 
 set -e
 
-GREEN='\033[0;32m'
-BLUE='\033[0;34m'
-YELLOW='\033[1;33m'
-NC='\033[0m' # No Color
-
-echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
-echo -e "${BLUE}║          World Simulator - Running All Examples                ║${NC}"
-echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
-echo ""
+echo "=========================================="
+echo "World Simulator - Running All Examples"
+echo "=========================================="
 
 # Create output directories
 mkdir -p outputs/histories
 mkdir -p outputs/visualizations
 
-# Clean up old files
-echo -e "${YELLOW}🧹 Cleaning up old files...${NC}"
-rm -f outputs/histories/*.yaml 2>/dev/null || true
-rm -f outputs/visualizations/*.html 2>/dev/null || true
-echo ""
+# Clean previous outputs
+rm -f outputs/histories/*.yaml
+rm -f outputs/visualizations/*.html
 
-# ============================================================================
-# VALIDATION & INSPECTION
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}📋 VALIDATION & INSPECTION${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "1. BASIC COMMANDS"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ Validating knowledge base...${NC}"
+echo "Validating knowledge base..."
 uv run sim validate
-echo ""
 
-echo -e "${YELLOW}▶ Showing flashlight object...${NC}"
+echo ""
+echo "Showing flashlight object..."
 uv run sim show object flashlight
-echo ""
 
-echo -e "${YELLOW}▶ Showing flashlight behaviors...${NC}"
-uv run sim show behaviors flashlight
 echo ""
+echo "Showing dice object..."
+uv run sim show object dice
 
-echo -e "${YELLOW}▶ Showing TV behaviors...${NC}"
-uv run sim show behaviors tv
 echo ""
+echo "2. SIMPLE LINEAR SIMULATIONS"
+echo "=========================================="
 
-# ============================================================================
-# BASIC SIMULATIONS
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}🎮 BASIC SIMULATIONS${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "Flashlight basic (turn_on, turn_off)..."
+uv run sim simulate --obj flashlight --actions turn_on turn_off --name flashlight_basic
 
-echo -e "${YELLOW}▶ Flashlight on/off cycle...${NC}"
-uv run sim simulate --obj flashlight turn_on turn_off --name basic_flashlight
 echo ""
+echo "Flashlight multi (turn_on, turn_off, turn_on)..."
+uv run sim simulate --obj flashlight --actions turn_on turn_off turn_on --name flashlight_multi
 
-echo -e "${YELLOW}▶ TV simple session...${NC}"
-uv run sim simulate --obj tv turn_on adjust_volume=medium turn_off --name tv_simple
 echo ""
+echo "3. SETTING INITIAL VALUES"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ Kettle simple workflow...${NC}"
-uv run sim simulate --obj kettle pour_water=full heat turn_off --name kettle_simple
 echo ""
+echo "Flashlight with low battery..."
+uv run sim simulate --obj flashlight --set battery.level=low --actions turn_on turn_off --name flashlight_low
 
-# ============================================================================
-# USING PARAMETERS
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}⚙️ USING PARAMETERS${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "Flashlight with full battery..."
+uv run sim simulate --obj flashlight --set battery.level=full --actions turn_on turn_off --name flashlight_full
 
-echo -e "${YELLOW}▶ Kettle pour different amounts...${NC}"
-uv run sim simulate --obj kettle pour_water=full --name kettle_full
-uv run sim simulate --obj kettle pour_water=medium --name kettle_medium
 echo ""
+echo "Flashlight with empty battery (will fail turn_on)..."
+uv run sim simulate --obj flashlight --set battery.level=empty --actions turn_on --name flashlight_empty
 
-echo -e "${YELLOW}▶ TV volume adjustment...${NC}"
-uv run sim simulate --obj tv turn_on adjust_volume=high turn_off --name tv_volume_high
 echo ""
+echo "4. BRANCHING ON UNKNOWN VALUES"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ Flashlight with new battery...${NC}"
-uv run sim simulate --obj flashlight replace_battery=high turn_on --name flashlight_new_battery
 echo ""
+echo "Flashlight with unknown battery (single action)..."
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on --name flashlight_unknown
 
-echo -e "${YELLOW}▶ TV multiple adjustments...${NC}"
-uv run sim simulate --obj tv turn_on adjust_volume=low adjust_volume=high change_channel=medium turn_off --name tv_adjustments
 echo ""
+echo "Flashlight with unknown battery (full cycle)..."
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off --name flashlight_unknown_cycle
 
-# ============================================================================
-# MULTI-ACTION SEQUENCES
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}🔄 MULTI-ACTION SEQUENCES${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "5. ADVANCED BRANCHING WITH IN OPERATOR"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ Flashlight battery cycle...${NC}"
-uv run sim simulate --obj flashlight turn_on turn_off turn_on turn_off --name flashlight_cycle
 echo ""
+echo "Dice with known values (linear)..."
+uv run sim simulate --obj dice --set cube.face=3 cube.color=green --actions check_win --name dice_known
 
-echo -e "${YELLOW}▶ TV evening session...${NC}"
-uv run sim simulate --obj tv turn_on open_streaming adjust_volume=high change_channel=medium smart_adjust turn_off --name tv_evening
 echo ""
+echo "Dice with unknown face and color (full branching)..."
+uv run sim simulate --obj dice --set cube.face=unknown cube.color=unknown --actions check_win --name dice_branching
 
-echo -e "${YELLOW}▶ Kettle morning routine...${NC}"
-uv run sim simulate --obj kettle pour_water=full heat turn_off --name kettle_morning
 echo ""
+echo "6. SAME ATTRIBUTE BRANCHING (INTERSECTION LOGIC)"
+echo "=========================================="
 
-# ============================================================================
-# FAILURE HANDLING
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}⚠️ FAILURE HANDLING${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "Dice same attr with known value (linear)..."
+uv run sim simulate --obj dice_same_attr --set cube.face=3 --actions check_win --name dice_same_known
 
-echo -e "${YELLOW}▶ TV change channel while off (will fail)...${NC}"
-uv run sim simulate --obj tv change_channel=medium --name tv_fail_demo
 echo ""
+echo "Dice same attr with unknown face (intersection branching)..."
+uv run sim simulate --obj dice_same_attr --set cube.face=unknown --actions check_win --name dice_same_branching
 
-echo -e "${YELLOW}▶ Flashlight drain then turn on (will fail)...${NC}"
-uv run sim simulate --obj flashlight drain_battery turn_on --name flashlight_empty_fail
 echo ""
+echo "7. MULTI-LEVEL BRANCHING (COMPLEX)"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ TV with factory reset...${NC}"
-uv run sim simulate --obj tv turn_on turn_off factory_reset turn_on --name tv_with_reset
 echo ""
+echo "Flashlight double turn_on (two levels of branching)..."
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_on --name flashlight_double_branch
 
-# ============================================================================
-# VIEWING RESULTS
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}📊 VIEWING RESULTS${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
+echo "=========================================="
+echo "GENERATING VISUALIZATIONS"
+echo "=========================================="
 
-echo -e "${YELLOW}▶ View flashlight cycle history...${NC}"
-uv run sim history flashlight_cycle
-echo ""
-
-echo -e "${YELLOW}▶ View TV evening history...${NC}"
-uv run sim history tv_evening
-echo ""
-
-echo -e "${YELLOW}▶ View failure demo history...${NC}"
-uv run sim history tv_fail_demo
-echo ""
-
-# ============================================================================
-# GENERATE VISUALIZATIONS
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}🌐 GENERATING VISUALIZATIONS${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo ""
-
-echo -e "${YELLOW}▶ Generating visualizations for all histories...${NC}"
-for yaml_file in outputs/histories/*.yaml; do
-    if [ -f "$yaml_file" ]; then
-        name=$(basename "$yaml_file" .yaml)
-        output_html="outputs/visualizations/${name}.html"
-        echo "  → Generating $name.html..."
-        uv run sim visualize "$name" --no-open -o "$output_html"
-    fi
+# Generate visualizations for all histories
+for history in outputs/histories/*.yaml; do
+    name=$(basename "$history" .yaml)
+    echo "Visualizing: $name"
+    uv run sim visualize "$history" -o "outputs/visualizations/${name}.html" --no-open
 done
-echo ""
 
-# ============================================================================
-# SUMMARY
-# ============================================================================
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
-echo -e "${GREEN}✅ SUMMARY${NC}"
-echo -e "${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}"
 echo ""
-
-echo -e "${YELLOW}Generated files:${NC}"
+echo "=========================================="
+echo "SUMMARY"
+echo "=========================================="
 echo ""
-echo "History YAML files (outputs/histories/):"
-ls outputs/histories/*.yaml 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+echo "Histories saved to: outputs/histories/"
+ls -la outputs/histories/
 echo ""
-echo "Visualization HTML files (outputs/visualizations/):"
-ls outputs/visualizations/*.html 2>/dev/null | while read f; do echo "  $(basename $f)"; done
+echo "Visualizations saved to: outputs/visualizations/"
+ls -la outputs/visualizations/
 echo ""
-
-# Count files
-yaml_count=$(ls outputs/histories/*.yaml 2>/dev/null | wc -l | tr -d ' ')
-html_count=$(ls outputs/visualizations/*.html 2>/dev/null | wc -l | tr -d ' ')
-
-echo -e "${GREEN}Total: $yaml_count history files, $html_count visualizations${NC}"
-echo ""
-echo -e "${YELLOW}To view a history:${NC} uv run sim history <name>"
-echo -e "${YELLOW}To open a visualization:${NC} open outputs/visualizations/<name>.html"
-echo ""
-echo -e "${GREEN}✨ All examples complete!${NC}"
-echo ""
+echo "=========================================="
+echo "All examples completed successfully!"
+echo "=========================================="

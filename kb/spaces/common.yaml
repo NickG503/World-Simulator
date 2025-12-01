@@ -42,3 +42,23 @@ spaces:
   - id: temperature_level
     name: Temperature Level
     levels: ["cold", "warm", "hot"]
+
+  # Dice face values
+  - id: dice_face
+    name: Dice Face
+    levels: ["1", "2", "3", "4", "5", "6"]
+
+  # Result state
+  - id: result_state
+    name: Result State
+    levels: ["none", "win", "lose"]
+
+  # Prize level
+  - id: prize_level
+    name: Prize Level
+    levels: ["none", "small", "medium", "big", "jackpot"]
+
+  # Dice colors
+  - id: dice_color
+    name: Dice Color
+    levels: ["green", "red", "yellow", "black", "white"]

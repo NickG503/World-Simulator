@@ -1,0 +1,10 @@
+action: reset
+object_type: generic
+description: "Generic reset action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

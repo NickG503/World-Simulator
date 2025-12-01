@@ -276,6 +276,16 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             background: rgba(248, 81, 73, 0.2);
         }}
 
+        .value.value-set {{
+            background: rgba(163, 113, 247, 0.2);
+            border: 1px solid var(--accent-purple);
+            color: var(--accent-purple);
+        }}
+
+        .branch-value-set {{
+            color: var(--accent-purple);
+        }}
+
         .change-item {{
             display: grid;
             grid-template-columns: 1fr auto auto auto;
@@ -351,6 +361,22 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             filter: drop-shadow(0 0 8px currentColor);
         }}
 
+        .node.branching .node-circle {{
+            stroke-dasharray: 4 2;
+        }}
+
+        .node.branch-if .node-circle {{
+            fill: rgba(63, 185, 80, 0.1);
+        }}
+
+        .node.branch-elif .node-circle {{
+            fill: rgba(88, 166, 255, 0.1);
+        }}
+
+        .node.branch-else .node-circle {{
+            fill: rgba(163, 113, 247, 0.1);
+        }}
+
         .node-label {{
             font-family: inherit;
             font-size: 11px;
@@ -359,13 +385,6 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             pointer-events: none;
         }}
 
-        .node-action {{
-            font-family: inherit;
-            font-size: 10px;
-            fill: var(--text-dim);
-            text-anchor: middle;
-            pointer-events: none;
-        }}
 
         .edge {{
             stroke: var(--border);
@@ -376,6 +395,14 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         .edge.active {{
             stroke: var(--accent-cyan);
             stroke-width: 3;
+        }}
+
+        /* Action label on the left side per level */
+        .level-action {{
+            font-size: 13px;
+            fill: var(--text);
+            font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
         }}
 
         /* Tooltip */
@@ -447,9 +474,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         let selectedNodeId = null;
         const NODE_RADIUS = 28;
         const LEVEL_HEIGHT = 120;
-        const NODE_SPACING = 100;
+        const NODE_SPACING = 80;
+        const MIN_SIBLING_SPACING = 20;
 
-        // Calculate tree layout
+        // Calculate tree layout using proper hierarchical algorithm
+        // This groups children under their parent and centers parents over children
         function calculateLayout() {{
             const nodes = treeData.nodes || {{}};
             const rootId = treeData.root_id;
@@ -461,53 +490,76 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 children[id] = node.children_ids || [];
             }}
 
-            // Calculate positions using BFS
-            let maxWidth = 0;
-            const queue = [[rootId, 0, 0]]; // [nodeId, level, index]
-            const levelCounts = {{}};
-            const levelNodes = {{}};
-
-            // First pass: count nodes per level
-            const visited = new Set();
-            const bfsQueue = [rootId];
-            const nodeLevels = {{}};
-            nodeLevels[rootId] = 0;
-
-            while (bfsQueue.length > 0) {{
-                const nodeId = bfsQueue.shift();
-                if (visited.has(nodeId)) continue;
-                visited.add(nodeId);
-
-                const level = nodeLevels[nodeId];
-                levelCounts[level] = (levelCounts[level] || 0) + 1;
-                levelNodes[level] = levelNodes[level] || [];
-                levelNodes[level].push(nodeId);
-
+            // Calculate depth (level) for each node
+            const depths = {{}};
+            function calcDepth(nodeId, depth) {{
+                depths[nodeId] = depth;
                 for (const childId of children[nodeId] || []) {{
-                    if (!visited.has(childId)) {{
-                        nodeLevels[childId] = level + 1;
-                        bfsQueue.push(childId);
-                    }}
+                    calcDepth(childId, depth + 1);
                 }}
             }}
+            calcDepth(rootId, 0);
 
-            // Second pass: assign positions
-            const levelIndices = {{}};
-            for (const [level, nodeIds] of Object.entries(levelNodes)) {{
-                const count = nodeIds.length;
-                const totalWidth = (count - 1) * NODE_SPACING;
-                const startX = -totalWidth / 2;
+            // Calculate subtree width for each node (bottom-up)
+            const subtreeWidth = {{}};
+            function calcWidth(nodeId) {{
+                const kids = children[nodeId] || [];
+                if (kids.length === 0) {{
+                    subtreeWidth[nodeId] = NODE_SPACING;
+                    return NODE_SPACING;
+                }}
+                let totalWidth = 0;
+                for (const childId of kids) {{
+                    totalWidth += calcWidth(childId);
+                }}
+                // Add spacing between siblings
+                totalWidth += (kids.length - 1) * MIN_SIBLING_SPACING;
+                subtreeWidth[nodeId] = Math.max(NODE_SPACING, totalWidth);
+                return subtreeWidth[nodeId];
+            }}
+            calcWidth(rootId);
 
-                nodeIds.forEach((nodeId, idx) => {{
-                    layout[nodeId] = {{
-                        x: startX + idx * NODE_SPACING,
-                        y: parseInt(level) * LEVEL_HEIGHT + NODE_RADIUS + 40
-                    }};
-                    maxWidth = Math.max(maxWidth, Math.abs(layout[nodeId].x));
-                }});
+            // Assign x positions (top-down), centering parent over children
+            let maxWidth = 0;
+            function assignX(nodeId, leftX) {{
+                const kids = children[nodeId] || [];
+                const width = subtreeWidth[nodeId];
+
+                if (kids.length === 0) {{
+                    // Leaf node: center in its allocated space
+                    layout[nodeId] = {{ x: leftX + width / 2 }};
+                }} else {{
+                    // Internal node: place children, then center self
+                    let childX = leftX;
+                    let firstChildCenter = 0;
+                    let lastChildCenter = 0;
+
+                    kids.forEach((childId, idx) => {{
+                        assignX(childId, childX);
+                        if (idx === 0) firstChildCenter = layout[childId].x;
+                        if (idx === kids.length - 1) lastChildCenter = layout[childId].x;
+                        childX += subtreeWidth[childId] + MIN_SIBLING_SPACING;
+                    }});
+
+                    // Center parent over children
+                    layout[nodeId] = {{ x: (firstChildCenter + lastChildCenter) / 2 }};
+                }}
+
+                maxWidth = Math.max(maxWidth, Math.abs(layout[nodeId].x));
             }}
 
-            return {{ layout, maxWidth, maxLevel: Math.max(...Object.keys(levelNodes).map(Number)) }};
+            // Start from center (negative half of root subtree width)
+            const rootWidth = subtreeWidth[rootId];
+            assignX(rootId, -rootWidth / 2);
+
+            // Assign y positions based on depth
+            let maxLevel = 0;
+            for (const [nodeId, depth] of Object.entries(depths)) {{
+                layout[nodeId].y = depth * LEVEL_HEIGHT + NODE_RADIUS + 40;
+                maxLevel = Math.max(maxLevel, depth);
+            }}
+
+            return {{ layout, maxWidth, maxLevel }};
         }}
 
         function renderGraph() {{
@@ -522,6 +574,9 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             svg.style.height = height + 'px';
 
             let html = '';
+
+            // Track which actions we've labeled per level (to avoid duplicates)
+            const levelActions = {{}};
 
             // Draw edges first (so they're behind nodes)
             const nodes = treeData.nodes || {{}};
@@ -538,7 +593,31 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     const pathD = `M${{pos.x}},${{pos.y + NODE_RADIUS}} ` +
                                   `Q${{pos.x}},${{midY}} ${{childPos.x}},${{childPos.y - NODE_RADIUS}}`;
                     html += `<path class="edge" d="${{pathD}}" />`;
+
+                    // Track action for this level transition (only label once per level)
+                    const childNode = nodes[childId];
+                    if (childNode && childNode.action_name) {{
+                        const levelKey = Math.round(childPos.y);
+                        if (!levelActions[levelKey]) {{
+                            levelActions[levelKey] = {{
+                                action: childNode.action_name,
+                                y: midY,
+                                hasFailure: childNode.action_status !== 'ok'
+                            }};
+                        }} else if (childNode.action_status !== 'ok') {{
+                            levelActions[levelKey].hasFailure = true;
+                        }}
+                    }}
                 }}
+            }}
+
+            // Draw action labels on the left side (once per level)
+            const leftX = -width / 2 + 60;
+            for (const [levelY, info] of Object.entries(levelActions)) {{
+                const labelClass = info.hasFailure ? 'level-action has-failure' : 'level-action';
+                const txt = `<text class="${{labelClass}}" x="${{leftX}}" y="${{info.y}}" ` +
+                    `text-anchor="start">${{info.action}}</text>`;
+                html += txt;
             }}
 
             // Draw nodes
@@ -551,8 +630,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 const status = node.action_status || 'ok';
                 const statusClass = isRoot ? 'root' : (status === 'ok' ? 'success' : 'failed');
 
+                // Check if this is a branching node (has multiple children)
+                const isBranching = (node.children_ids || []).length > 1;
+                const branchingClass = isBranching ? 'branching' : '';
+
+                // Get branch type if available
+                const branchType = node.branch_condition?.branch_type || '';
+                const branchTypeClass = branchType ? `branch-${{branchType}}` : '';
+
+                const classes = `node ${{statusClass}} ${{isSelected ? 'selected' : ''}}` +
+                               ` ${{branchingClass}} ${{branchTypeClass}}`;
                 html += `
-                    <g class="node ${{statusClass}} ${{isSelected ? 'selected' : ''}}"
+                    <g class="${{classes.trim()}}"
                        data-node-id="${{nodeId}}"
                        transform="translate(${{pos.x}}, ${{pos.y}})"
                        onclick="selectNode('${{nodeId}}')"
@@ -560,7 +649,6 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                        onmouseleave="hideTooltip()">
                         <circle class="node-circle" r="${{NODE_RADIUS}}" cx="0" cy="0" />
                         <text class="node-label" y="4">${{nodeId.replace('state', 'S')}}</text>
-                        <text class="node-action" y="${{NODE_RADIUS + 16}}">${{node.action_name || 'Initial'}}</text>
                     </g>
                 `;
             }}
@@ -587,7 +675,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             panel.className = 'detail-panel';
 
             const snapshot = node.snapshot?.object_state || {{}};
-            const changes = node.changes || [];
+            // Filter out debug/internal changes like [CONDITIONAL_EVAL]
+            const changes = (node.changes || []).filter(c => {{
+                const attr = c.attribute || '';
+                return !attr.startsWith('[') && !attr.endsWith(']');
+            }});
             const changedAttrs = new Set(changes.map(c => {{
                 let attr = c.attribute || '';
                 if (attr.endsWith('.trend')) attr = attr.slice(0, -6);
@@ -606,8 +698,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
             if (node.branch_condition) {{
                 const bc = node.branch_condition;
-                const op = bc.operator === 'equals' ? '==' : bc.operator;
-                html += `<div class="branch">${{bc.attribute}} ${{op}} ${{bc.value}}</div>`;
+                const op = bc.operator === 'equals' ? '==' : (bc.operator === 'in' ? '∈' : bc.operator);
+                const valueDisplay = Array.isArray(bc.value)
+                    ? `<span class="branch-value-set">{{${{bc.value.join(', ')}}}}</span>`
+                    : bc.value;
+                html += `<div class="branch">${{bc.attribute}} == ${{valueDisplay}}</div>`;
             }}
 
             if (node.action_error) {{
@@ -629,9 +724,9 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     html += `
                         <div class="change-item">
                             <span class="attr-name">${{change.attribute}}</span>
-                            <span class="change-before">${{change.before || '—'}}</span>
+                            <span class="change-before">${{formatValue(change.before) || '—'}}</span>
                             <span class="change-arrow">→</span>
-                            <span class="change-after">${{change.after || '—'}}</span>
+                            <span class="change-after">${{formatValue(change.after) || '—'}}</span>
                         </div>
                     `;
                 }}
@@ -708,6 +803,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             panel.innerHTML = html;
         }}
 
+        function formatValue(value) {{
+            // Handle value sets (arrays)
+            if (Array.isArray(value)) {{
+                return '{{' + value.join(', ') + '}}';
+            }}
+            return value || '—';
+        }}
+
+        function isValueSet(value) {{
+            return Array.isArray(value) && value.length > 1;
+        }}
+
         function renderAttrItem(path, data, isChanged, isRelevant) {{
             const itemClass = isChanged ? 'changed' : (isRelevant ? 'relevant' : '');
 
@@ -718,11 +825,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 trendHtml = `<span class="trend ${{trendClass}}">${{trendIcon}} ${{data.trend}}</span>`;
             }}
 
+            // Add value set indicator if the value is a set
+            let valueSetClass = '';
+            let displayValue = formatValue(data.value);
+            if (isValueSet(data.value)) {{
+                valueSetClass = 'value-set';
+            }}
+
             return `
                 <div class="attr-item ${{itemClass}}">
                     <span class="attr-name">${{path}}</span>
                     <div class="attr-value">
-                        <span class="value">${{data.value || '—'}}</span>
+                        <span class="value ${{valueSetClass}}">${{displayValue}}</span>
                         ${{trendHtml}}
                     </div>
                 </div>

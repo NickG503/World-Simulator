@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-from typing import Literal, Union
+from typing import List, Literal, Union
 
 from simulator.core.objects import AttributeTarget
 
 from .base import Condition
 
-ComparisonOperator = Literal["equals", "not_equals", "lt", "lte", "gt", "gte"]
+ComparisonOperator = Literal["equals", "not_equals", "in", "not_in", "lt", "lte", "gt", "gte"]
 
 
 class AttributeCondition(Condition):
@@ -14,7 +14,7 @@ class AttributeCondition(Condition):
 
     target: AttributeTarget
     operator: ComparisonOperator
-    value: Union[str, "ParameterReference"]  # noqa: F821
+    value: Union[str, List[str], "ParameterReference"]  # noqa: F821
 
     def evaluate(self, context: "EvaluationContext") -> bool:  # noqa: F821
         from simulator.core.actions.parameter import ParameterReference
@@ -44,6 +44,16 @@ class AttributeCondition(Condition):
             return lhs == rhs
         elif self.operator == "not_equals":
             return lhs != rhs
+        elif self.operator == "in":
+            # Check if lhs is in the list rhs
+            if isinstance(rhs, list):
+                return lhs in rhs
+            return lhs == rhs
+        elif self.operator == "not_in":
+            # Check if lhs is NOT in the list rhs
+            if isinstance(rhs, list):
+                return lhs not in rhs
+            return lhs != rhs
         elif self.operator in ("lt", "lte", "gt", "gte"):
             # Order-aware comparisons using the attribute's qualitative space
             # Resolve space via registries using target
@@ -71,13 +81,20 @@ class AttributeCondition(Condition):
         op_map = {
             "equals": "==",
             "not_equals": "!=",
+            "in": "in",
+            "not_in": "not in",
             "lt": "<",
             "lte": "<=",
             "gt": ">",
             "gte": ">=",
         }
         op_symbol = op_map.get(self.operator, self.operator)
-        value_str = self.value.name if hasattr(self.value, "name") else str(self.value)
+        if hasattr(self.value, "name"):
+            value_str = self.value.name
+        elif isinstance(self.value, list):
+            value_str = "{" + ", ".join(self.value) + "}"
+        else:
+            value_str = str(self.value)
         return f"{self.target.to_string()} {op_symbol} {value_str}"
 
 

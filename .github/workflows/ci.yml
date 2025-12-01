@@ -138,16 +138,16 @@ jobs:
 
       - name: Run flashlight simulation
         run: |
-          uv run sim simulate --obj flashlight turn_on turn_off --name ci_flashlight_test
-          uv run sim history ci_flashlight_test
+          uv run sim simulate --obj flashlight --actions turn_on turn_off --name ci_flashlight_test
+          uv run sim history outputs/histories/ci_flashlight_test.yaml
 
       - name: Run TV simulation
         run: |
-          uv run sim simulate --obj tv turn_on open_streaming turn_off --name ci_tv_test
-          uv run sim history ci_tv_test
+          uv run sim simulate --obj tv --actions turn_on open_streaming turn_off --name ci_tv_test
+          uv run sim history outputs/histories/ci_tv_test.yaml
 
       - name: Generate visualization
         run: |
           mkdir -p outputs/visualizations
-          uv run sim visualize ci_flashlight_test -o outputs/visualizations/ci_test.html --no-open
+          uv run sim visualize outputs/histories/ci_flashlight_test.yaml -o outputs/visualizations/ci_test.html --no-open
           test -f outputs/visualizations/ci_test.html

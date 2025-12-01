@@ -1,0 +1,10 @@
+action: check_win
+object_type: generic
+description: "Generic check_win action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

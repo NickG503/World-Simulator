@@ -33,7 +33,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional, Union
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -67,7 +67,7 @@ class WorldSnapshot(BaseModel):
     object_state: ObjectStateSnapshot
     timestamp: str = Field(default_factory=lambda: datetime.now().strftime("%Y-%m-%d"))
 
-    def get_attribute_value(self, path: str) -> Optional[str]:
+    def get_attribute_value(self, path: str) -> Union[str, List[str], None]:
         """
         Get an attribute value by path.
 
@@ -75,21 +75,43 @@ class WorldSnapshot(BaseModel):
             path: Attribute path like 'battery.level' (part.attribute) or 'power' (global)
 
         Returns:
-            The attribute value or None if not found
+            The attribute value (string or list of values) or None if not found
+        """
+        attr = self._get_attribute_snapshot(path)
+        return attr.value if attr else None
+
+    def _get_attribute_snapshot(self, path: str):
+        """
+        Get the AttributeSnapshot for a given path.
+
+        Args:
+            path: Attribute path like 'battery.level' or 'power'
+
+        Returns:
+            AttributeSnapshot or None if not found
         """
         parts = path.split(".")
 
         if len(parts) == 1:
             # Global attribute
-            attr = self.object_state.global_attributes.get(parts[0])
-            return attr.value if attr else None
+            return self.object_state.global_attributes.get(parts[0])
         elif len(parts) == 2:
             # Part attribute
             part = self.object_state.parts.get(parts[0])
             if part:
-                attr = part.attributes.get(parts[1])
-                return attr.value if attr else None
+                return part.attributes.get(parts[1])
         return None
+
+    def get_single_value(self, path: str) -> Optional[str]:
+        """
+        Get attribute value as a single string.
+
+        If the value is a set, returns the first element.
+        """
+        attr = self._get_attribute_snapshot(path)
+        if not attr:
+            return None
+        return attr.get_single_value()
 
     def get_attribute_trend(self, path: str) -> Optional[str]:
         """Get an attribute's trend by path."""
@@ -107,12 +129,24 @@ class WorldSnapshot(BaseModel):
 
     def is_attribute_known(self, path: str) -> bool:
         """
-        Check if an attribute value is known (not 'unknown').
+        Check if an attribute value is known (single definite value).
 
-        This will be used in Phase 2 for branching decisions.
+        In Phase 2, a value is "unknown" if:
+        - It's None
+        - It's the string "unknown"
+        - It's a set with more than one value (uncertain state)
+
+        This is used for branching decisions.
         """
-        value = self.get_attribute_value(path)
-        return value is not None and value != "unknown"
+        attr = self._get_attribute_snapshot(path)
+        if not attr:
+            return False
+        return not attr.is_unknown()
+
+    def is_attribute_value_set(self, path: str) -> bool:
+        """Check if an attribute's value is a set of possible values."""
+        attr = self._get_attribute_snapshot(path)
+        return attr is not None and attr.is_value_set()
 
     def get_all_attribute_paths(self) -> List[str]:
         """Get all attribute paths in this snapshot."""
@@ -137,11 +171,13 @@ class BranchCondition(BaseModel):
     This captures what decision was made to reach this node:
     - For precondition branches: whether the precondition passed or failed
     - For postcondition branches: which if/elif/else case was matched
+
+    In Phase 2, the value can be a single value or a set of values (for else branches).
     """
 
     attribute: str  # e.g., "battery.level"
-    operator: str  # e.g., "equals", "not_equals"
-    value: str  # The actual value that was checked
+    operator: str  # e.g., "equals", "not_equals", "in"
+    value: Union[str, List[str]]  # Single value OR set of values (for else branch)
     source: Literal["precondition", "postcondition"]
 
     # For postcondition branches with if/elif/else
@@ -157,6 +193,16 @@ class BranchCondition(BaseModel):
             return v
         return v
 
+    def is_value_set(self) -> bool:
+        """Check if the value is a set of possible values."""
+        return isinstance(self.value, list)
+
+    def get_value_display(self) -> str:
+        """Get a display string for the value (handles sets)."""
+        if isinstance(self.value, list):
+            return "{" + ", ".join(self.value) + "}"
+        return str(self.value)
+
     def describe(self) -> str:
         """Human-readable description of the branch condition."""
         op_map = {
@@ -166,9 +212,12 @@ class BranchCondition(BaseModel):
             "lte": "<=",
             "gt": ">",
             "gte": ">=",
+            "in": "in",
+            "not_in": "not in",
         }
         op_symbol = op_map.get(self.operator, self.operator)
-        return f"{self.attribute} {op_symbol} {self.value}"
+        value_str = self.get_value_display()
+        return f"{self.attribute} {op_symbol} {value_str}"
 
     def matches_value(self, value: str) -> bool:
         """
@@ -177,10 +226,21 @@ class BranchCondition(BaseModel):
         Useful for Phase 2 when determining which branch to take.
         """
         if self.operator == "equals":
+            if isinstance(self.value, list):
+                return value in self.value
             return value == self.value
         elif self.operator == "not_equals":
+            if isinstance(self.value, list):
+                return value not in self.value
             return value != self.value
-        # Add more operators as needed
+        elif self.operator == "in":
+            if isinstance(self.value, list):
+                return value in self.value
+            return value == self.value
+        elif self.operator == "not_in":
+            if isinstance(self.value, list):
+                return value not in self.value
+            return value != self.value
         return False
 
 

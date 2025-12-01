@@ -22,7 +22,7 @@ parts:
     attributes:
       level:
         space: battery_level
-        default: medium  # Changed from unknown - all values known for Phase 1
+        default: medium
         mutable: true
       type:
         space: battery_types
@@ -76,35 +76,39 @@ behaviors:
           - type: set_attribute
             target: bulb.brightness
             value: high
-        else:
-          # ELIF battery.level == high -> brightness = high
-          - type: conditional
-            condition:
-              type: attribute_check
-              target: battery.level
-              operator: equals
-              value: high
-            then:
-              - type: set_attribute
-                target: bulb.brightness
-                value: high
-            else:
-              # ELIF battery.level == medium -> brightness = medium
-              - type: conditional
-                condition:
-                  type: attribute_check
-                  target: battery.level
-                  operator: equals
-                  value: medium
-                then:
-                  - type: set_attribute
-                    target: bulb.brightness
-                    value: medium
-                else:
-                  # ELSE (low) -> brightness = low
-                  - type: set_attribute
-                    target: bulb.brightness
-                    value: low
+      # ELIF battery.level == high -> brightness = high
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: high
+        then:
+          - type: set_attribute
+            target: bulb.brightness
+            value: high
+      # ELIF battery.level == medium -> brightness = medium
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: medium
+        then:
+          - type: set_attribute
+            target: bulb.brightness
+            value: medium
+      # ELSE (low) -> brightness = low
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: low
+        then:
+          - type: set_attribute
+            target: bulb.brightness
+            value: low
 
   # Turn off: Simple, no conditions
   turn_off:

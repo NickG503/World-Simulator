@@ -20,7 +20,7 @@ dev = [
 ]
 
 [project.scripts]
-sim = "simulator.cli.app:app"
+sim = "simulator.cli.app:main"
 
 [tool.ruff]
 line-length = 120

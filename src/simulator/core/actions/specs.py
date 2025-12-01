@@ -161,7 +161,7 @@ def _ensure_mapping(value: Any, ctx: str) -> Dict[str, Any]:
     return value
 
 
-def _normalize_attribute_value(raw: Any) -> Union[str, ParameterReference]:
+def _normalize_attribute_value(raw: Any) -> Union[str, List[str], ParameterReference]:
     """Normalize attribute values used in conditions/effects."""
 
     if isinstance(raw, ParameterReference):
@@ -173,6 +173,9 @@ def _normalize_attribute_value(raw: Any) -> Union[str, ParameterReference]:
         return ParameterReference(name=name.strip())
     if isinstance(raw, bool):
         return "on" if raw else "off"
+    # Preserve lists (for 'in' and 'not_in' operators)
+    if isinstance(raw, list):
+        return [str(v) for v in raw]
     return str(raw)
 
 
