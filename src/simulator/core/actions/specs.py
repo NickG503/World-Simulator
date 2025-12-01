@@ -5,11 +5,15 @@ from __future__ import annotations
 This module provides a single authoritative place to translate the raw YAML
 structures used across actions, object behaviors, and constraints into the
 runtime `Condition` and `Effect` instances consumed by the simulator.
+
+NOTE: Simplified for tree-based simulation. Complex logical conditions
+(AND/OR/NOT/Implication) have been removed. Preconditions are now binary
+(single AttributeCondition). Postconditions use flat if-elif-else in effects.
 """
 
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence, Union
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from simulator.core.actions.condition_registry import get_condition_registry
 from simulator.core.actions.conditions.attribute_conditions import (
@@ -17,11 +21,6 @@ from simulator.core.actions.conditions.attribute_conditions import (
     ComparisonOperator,
 )
 from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.conditions.logical_conditions import (
-    ImplicationCondition,
-    LogicalCondition,
-    LogicalOperator,
-)
 from simulator.core.actions.conditions.parameter_conditions import (
     ParameterEquals,
     ParameterValid,
@@ -73,38 +72,7 @@ class AttributeCheckConditionSpec(ConditionSpec):
     value: Any
 
 
-class LogicalConditionSpec(ConditionSpec):
-    type: LogicalOperator
-    conditions: List[ConditionSpec]
-
-    @field_validator("conditions", mode="before")
-    @classmethod
-    def _parse_conditions(cls, value: Any) -> List[ConditionSpec]:
-        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
-            raise TypeError("Logical condition 'conditions' must be a list")
-        return [parse_condition_spec(item) for item in value]
-
-    @model_validator(mode="after")
-    def _validate_not(self) -> "LogicalConditionSpec":
-        if self.type == "not" and len(self.conditions) != 1:
-            raise ValueError("Logical 'not' requires exactly one condition")
-        return self
-
-
-class ImplicationConditionSpec(ConditionSpec):
-    type: Literal["implication"]
-    if_condition: ConditionSpec = Field(alias="if")
-    then_condition: ConditionSpec = Field(alias="then")
-
-    @field_validator("if_condition", "then_condition", mode="before")
-    @classmethod
-    def _parse_branch(cls, value: Any) -> ConditionSpec:
-        return parse_condition_spec(value)
-
-
 ConditionSpec.model_rebuild()
-LogicalConditionSpec.model_rebuild()
-ImplicationConditionSpec.model_rebuild()
 
 
 class EffectSpec(_BaseSpec):
@@ -161,8 +129,7 @@ def _register_builtin_types() -> None:
     condition_registry = get_condition_registry()
     effect_registry = get_effect_registry()
 
-    # Register condition types with their spec classes and builder names
-    # The builder functions are defined below in build_condition()
+    # Register condition types - simplified to just attribute checks and parameter conditions
     condition_registry.register(
         "parameter_valid", ParameterValidConditionSpec, lambda spec: _build_parameter_valid(spec)
     )
@@ -172,14 +139,8 @@ def _register_builtin_types() -> None:
     condition_registry.register(
         "attribute_check", AttributeCheckConditionSpec, lambda spec: _build_attribute_condition(spec)
     )
-    condition_registry.register("and", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
-    condition_registry.register("or", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
-    condition_registry.register("not", LogicalConditionSpec, lambda spec: _build_logical_condition(spec))
-    condition_registry.register(
-        "implication", ImplicationConditionSpec, lambda spec: _build_implication_condition(spec)
-    )
 
-    # Register effect types with their spec classes and builder functions
+    # Register effect types
     effect_registry.register("set_attribute", SetAttributeEffectSpec, lambda spec: _build_set_attribute_effect(spec))
     effect_registry.register("set_trend", SetTrendEffectSpec, lambda spec: _build_set_trend_effect(spec))
     effect_registry.register("conditional", ConditionalEffectSpec, lambda spec: _build_conditional_effect(spec))
@@ -260,20 +221,6 @@ def _build_attribute_condition(spec: AttributeCheckConditionSpec) -> Condition:
     return AttributeCondition(target=target, operator=spec.operator, value=value)  # type: ignore[arg-type]
 
 
-def _build_logical_condition(spec: LogicalConditionSpec) -> Condition:
-    """Build LogicalCondition from spec."""
-    nested = [build_condition(c) for c in spec.conditions]
-    return LogicalCondition(operator=spec.type, conditions=nested)
-
-
-def _build_implication_condition(spec: ImplicationConditionSpec) -> Condition:
-    """Build ImplicationCondition from spec."""
-    return ImplicationCondition(
-        if_condition=build_condition(spec.if_condition),
-        then_condition=build_condition(spec.then_condition),
-    )
-
-
 def _build_set_attribute_effect(spec: SetAttributeEffectSpec) -> Effect:
     """Build SetAttributeEffect from spec."""
     target = AttributeTarget.from_string(spec.target)
@@ -296,36 +243,18 @@ def _build_conditional_effect(spec: ConditionalEffectSpec) -> Effect:
 
 
 def build_condition(spec: ConditionSpec) -> Condition:
-    """
-    Build runtime condition from spec using the condition registry.
-
-    This function delegates to the registry's builder functions, which were
-    registered during module initialization.
-    """
-    # For backward compatibility, handle direct isinstance checks
-    # The registry-based approach is preferred for new code
+    """Build runtime condition from spec."""
     if isinstance(spec, ParameterValidConditionSpec):
         return _build_parameter_valid(spec)
     if isinstance(spec, ParameterEqualsConditionSpec):
         return _build_parameter_equals(spec)
     if isinstance(spec, AttributeCheckConditionSpec):
         return _build_attribute_condition(spec)
-    if isinstance(spec, LogicalConditionSpec):
-        return _build_logical_condition(spec)
-    if isinstance(spec, ImplicationConditionSpec):
-        return _build_implication_condition(spec)
     raise TypeError(f"Unsupported condition spec: {spec}")
 
 
 def build_effect(spec: EffectSpec) -> Effect:
-    """
-    Build runtime effect from spec using the effect registry.
-
-    This function delegates to the registry's builder functions, which were
-    registered during module initialization.
-    """
-    # For backward compatibility, handle direct isinstance checks
-    # The registry-based approach is preferred for new code
+    """Build runtime effect from spec."""
     if isinstance(spec, SetAttributeEffectSpec):
         return _build_set_attribute_effect(spec)
     if isinstance(spec, SetTrendEffectSpec):
@@ -359,78 +288,19 @@ def build_effects(raw_items: Iterable[Any]) -> List[Effect]:
     return [build_effect_from_raw(item) for item in raw_items]
 
 
-def _is_condition_sequence(value: Any) -> bool:
-    return isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping))
-
-
-def _parse_condition_tree(value: Any) -> ConditionSpec:
-    if isinstance(value, ConditionSpec):
-        return value
-
-    if _is_condition_sequence(value):
-        items = list(value)
-        if not items:
-            raise ValueError("Logical group cannot be empty")
-        parsed = [_parse_condition_tree(item) for item in items]
-        if len(parsed) == 1:
-            return parsed[0]
-        return LogicalConditionSpec(type="and", conditions=parsed)
-
-    if not isinstance(value, Mapping):
-        raise TypeError(f"Unsupported condition structure: {type(value).__name__}")
-
-    if "type" in value:
-        return parse_condition_spec(value)
-
-    if len(value) != 1:
-        raise ValueError("Logical condition mapping must contain exactly one key")
-
-    key, raw = next(iter(value.items()))
-    key_normalized = str(key).lower()
-
-    if key_normalized in ("any_of", "or"):
-        branches = _parse_condition_group(raw, "or")
-        return LogicalConditionSpec(type="or", conditions=branches)
-    if key_normalized in ("all_of", "and"):
-        branches = _parse_condition_group(raw, "and")
-        return LogicalConditionSpec(type="and", conditions=branches)
-    if key_normalized == "not":
-        if _is_condition_sequence(raw):
-            raw_items = list(raw)
-            if len(raw_items) != 1:
-                raise ValueError("Logical 'not' expects exactly one condition")
-            branch = _parse_condition_tree(raw_items[0])
-        else:
-            branch = _parse_condition_tree(raw)
-        return LogicalConditionSpec(type="not", conditions=[branch])
-
-    raise ValueError(f"Unsupported logical operator in preconditions: {key}")
-
-
-def _parse_condition_group(raw: Any, operator: Literal["and", "or"]) -> List[ConditionSpec]:
-    if _is_condition_sequence(raw):
-        items = list(raw)
-    else:
-        items = [raw]
-
-    if not items:
-        raise ValueError(f"Logical '{operator}' group cannot be empty")
-
-    conditions = [_parse_condition_tree(item) for item in items]
-    return conditions
-
-
 def parse_preconditions_field(value: Any) -> List[ConditionSpec]:
-    """Normalize precondition declarations from YAML into structured specs."""
+    """Normalize precondition declarations from YAML into structured specs.
 
+    Simplified: Only accepts a list of simple conditions (no nested AND/OR).
+    """
     if value is None:
         return []
 
-    if _is_condition_sequence(value):
-        return [_parse_condition_tree(item) for item in value]
+    if isinstance(value, Sequence) and not isinstance(value, (str, bytes, Mapping)):
+        return [parse_condition_spec(item) for item in value]
 
     if isinstance(value, Mapping):
-        return [_parse_condition_tree(value)]
+        return [parse_condition_spec(value)]
 
     if isinstance(value, ConditionSpec):
         return [value]
@@ -441,7 +311,6 @@ def parse_preconditions_field(value: Any) -> List[ConditionSpec]:
 __all__ = [
     "AttributeCheckConditionSpec",
     "ConditionalEffectSpec",
-    "LogicalConditionSpec",
     "ParameterEqualsConditionSpec",
     "ParameterValidConditionSpec",
     "SetAttributeEffectSpec",

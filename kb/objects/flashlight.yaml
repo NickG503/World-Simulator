@@ -1,3 +1,6 @@
+# Flashlight object definition
+# Simplified for tree-based simulation with flat if-elif-else structure
+
 type: flashlight
 parts:
   switch:
@@ -19,7 +22,7 @@ parts:
     attributes:
       level:
         space: battery_level
-        default: unknown
+        default: medium  # Changed from unknown - all values known for Phase 1
         mutable: true
       type:
         space: battery_types
@@ -40,21 +43,41 @@ constraints:
     value: empty
 
 behaviors:
+  # Turn on: Flat if-elif-else structure based on battery.level
   turn_on:
+    # Precondition: battery must not be empty
+    preconditions:
+      - type: attribute_check
+        target: battery.level
+        operator: not_equals
+        value: empty
     effects:
+      # Always set switch on
       - type: set_attribute
         target: switch.position
         value: "on"
+      # Always turn bulb on (precondition ensures battery not empty)
+      - type: set_attribute
+        target: bulb.state
+        value: "on"
+      # Set trend down (battery drains)
+      - type: set_trend
+        target: battery.level
+        direction: down
+      # Flat if-elif-else for brightness based on battery.level
+      # IF battery.level == full -> brightness = high
       - type: conditional
         condition:
           type: attribute_check
           target: battery.level
-          operator: not_equals
-          value: empty
+          operator: equals
+          value: full
         then:
           - type: set_attribute
-            target: bulb.state
-            value: "on"
+            target: bulb.brightness
+            value: high
+        else:
+          # ELIF battery.level == high -> brightness = high
           - type: conditional
             condition:
               type: attribute_check
@@ -66,6 +89,7 @@ behaviors:
                 target: bulb.brightness
                 value: high
             else:
+              # ELIF battery.level == medium -> brightness = medium
               - type: conditional
                 condition:
                   type: attribute_check
@@ -77,19 +101,12 @@ behaviors:
                     target: bulb.brightness
                     value: medium
                 else:
+                  # ELSE (low) -> brightness = low
                   - type: set_attribute
                     target: bulb.brightness
                     value: low
-          - type: set_trend
-            target: battery.level
-            direction: down
-        else:
-          - type: set_attribute
-            target: bulb.state
-            value: "off"
-          - type: set_attribute
-            target: bulb.brightness
-            value: none
+
+  # Turn off: Simple, no conditions
   turn_off:
     effects:
       - type: set_attribute

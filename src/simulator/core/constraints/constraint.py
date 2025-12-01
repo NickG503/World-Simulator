@@ -53,10 +53,6 @@ class DependencyConstraint(Constraint):
     def describe(self) -> str:
         def _cond_to_text(c: Condition) -> str:
             from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-            from simulator.core.actions.conditions.logical_conditions import (
-                ImplicationCondition,
-                LogicalCondition,
-            )
 
             if isinstance(c, AttributeCondition):
                 op_map = {
@@ -69,16 +65,9 @@ class DependencyConstraint(Constraint):
                 }
                 op = op_map.get(c.operator, c.operator)
                 return f"{c.target.to_string()} {op} {c.value}"
-            if isinstance(c, LogicalCondition):
-                join = f" {c.operator} "
-                return "(" + join.join(_cond_to_text(x) for x in c.conditions) + ")"
-            if isinstance(c, ImplicationCondition):
-                return f"if {_cond_to_text(c.if_condition)} then {_cond_to_text(c.then_condition)}"
             return c.__class__.__name__
 
         return f"If {_cond_to_text(self.condition)}, then {_cond_to_text(self.requires)}"
-
-    # String expressions removed – constraints must use structured conditions
 
 
 class ConstraintViolation(BaseModel):

@@ -16,11 +16,8 @@ if TYPE_CHECKING:  # pragma: no cover - import for type hints only
 
 
 def format_condition(condition: Condition | Mapping[str, Any] | None) -> str:
+    """Format a condition for display."""
     from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-    from simulator.core.actions.conditions.logical_conditions import (
-        ImplicationCondition,
-        LogicalCondition,
-    )
     from simulator.core.actions.conditions.parameter_conditions import (
         ParameterEquals,
         ParameterValid,
@@ -61,14 +58,6 @@ def format_condition(condition: Condition | Mapping[str, Any] | None) -> str:
         op_symbol = op_map.get(condition.operator, condition.operator)
         value = condition.value.name if isinstance(condition.value, ParameterReference) else condition.value
         return f"{condition.target.to_string()} {op_symbol} {value}"
-
-    if isinstance(condition, LogicalCondition):
-        rendered = [format_condition(sub) for sub in condition.conditions]
-        joiner = f" {condition.operator.upper()} "
-        return f"({joiner.join(rendered)})"
-
-    if isinstance(condition, ImplicationCondition):
-        return f"IF ({format_condition(condition.if_condition)}) THEN ({format_condition(condition.then_condition)})"
 
     if isinstance(condition, ParameterEquals):
         return f"{condition.parameter} == {condition.value}"

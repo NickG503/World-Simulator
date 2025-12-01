@@ -57,10 +57,35 @@ jobs:
         run: |
           uv run ruff check src/ tests/
 
-  # Job 3: Run tests
+  # Job 3: Knowledge Base Validation
+  validate:
+    name: Validate Knowledge Base
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Validate KB
+        run: |
+          uv run sim validate
+
+  # Job 4: Run tests
   test:
     name: Test (Python 3.11)
     runs-on: ubuntu-latest
+    needs: [format, lint, validate]
 
     steps:
       - name: Checkout code
@@ -88,3 +113,41 @@ jobs:
           file: ./coverage.xml
           fail_ci_if_error: false
         continue-on-error: true
+
+  # Job 5: Integration test - run example simulation
+  integration:
+    name: Integration Test
+    runs-on: ubuntu-latest
+    needs: [test]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: |
+          uv sync --all-extras
+
+      - name: Run flashlight simulation
+        run: |
+          uv run sim simulate --obj flashlight turn_on turn_off --name ci_flashlight_test
+          uv run sim history ci_flashlight_test
+
+      - name: Run TV simulation
+        run: |
+          uv run sim simulate --obj tv turn_on open_streaming turn_off --name ci_tv_test
+          uv run sim history ci_tv_test
+
+      - name: Generate visualization
+        run: |
+          mkdir -p outputs/visualizations
+          uv run sim visualize ci_flashlight_test -o outputs/visualizations/ci_test.html --no-open
+          test -f outputs/visualizations/ci_test.html

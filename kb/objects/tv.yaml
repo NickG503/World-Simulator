@@ -1,3 +1,6 @@
+# TV object definition
+# Simplified for tree-based simulation - all defaults are known values
+
 type: tv
 parts:
   button:
@@ -23,29 +26,29 @@ parts:
         mutable: true
       channel:
         space: channel_number
-        default: unknown  # This will trigger clarification!
+        default: low  # Changed from unknown - all values known for Phase 1
         mutable: true
   network:
     attributes:
       wifi_connected:
         space: binary_state
-        default: 'unknown'
+        default: 'on'  # Changed from unknown - all values known for Phase 1
         mutable: true
   power_source:
     attributes:
       connection:
         space: binary_state
-        default: unknown
+        default: 'on'  # Changed from unknown - all values known for Phase 1
         mutable: true
       voltage:
         space: power_level
-        default: unknown  # This will trigger clarification!
+        default: high  # Changed from unknown - all values known for Phase 1
         mutable: true
   cooling:
     attributes:
       temperature:
         space: temperature_level
-        default: unknown
+        default: cold  # Changed from unknown - all values known for Phase 1
         mutable: true
 
 constraints:

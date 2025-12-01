@@ -4,10 +4,6 @@ from typing import Callable, Iterable, List
 
 from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
 from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.conditions.logical_conditions import (
-    ImplicationCondition,
-    LogicalCondition,
-)
 from simulator.core.actions.conditions.parameter_conditions import ParameterEquals, ParameterValid
 from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
 from simulator.core.actions.effects.base import Effect
@@ -138,6 +134,7 @@ class RegistryValidator:
         param_exists: Callable[[str], bool],
         context: str,
     ) -> List[str]:
+        """Validate a condition (simplified - only AttributeCondition and parameter conditions)."""
         errors: List[str] = []
         if isinstance(condition, AttributeCondition):
             attr_errors, _ = self._resolve_attribute_spec(obj_type, condition.target, context)
@@ -145,33 +142,6 @@ class RegistryValidator:
             value = getattr(condition, "value", None)
             if isinstance(value, ParameterReference) and not param_exists(value.name):
                 errors.append(f"{context}: unknown parameter reference '{value.name}'")
-        elif isinstance(condition, LogicalCondition):
-            for idx, child in enumerate(condition.conditions, start=1):
-                errors.extend(
-                    self._validate_condition_tree(
-                        child,
-                        obj_type,
-                        param_exists,
-                        f"{context} ({condition.operator}#{idx})",
-                    )
-                )
-        elif isinstance(condition, ImplicationCondition):
-            errors.extend(
-                self._validate_condition_tree(
-                    condition.if_condition,
-                    obj_type,
-                    param_exists,
-                    f"{context} implication IF",
-                )
-            )
-            errors.extend(
-                self._validate_condition_tree(
-                    condition.then_condition,
-                    obj_type,
-                    param_exists,
-                    f"{context} implication THEN",
-                )
-            )
         elif isinstance(condition, (ParameterEquals, ParameterValid)):
             if not param_exists(condition.parameter):
                 errors.append(f"{context}: unknown parameter '{condition.parameter}'")

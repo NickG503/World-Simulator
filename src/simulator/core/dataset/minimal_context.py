@@ -8,6 +8,8 @@ Produces a compact, natural-language serialized case with:
 - Clarification question if unknown precondition
 - Options (space levels) for the unknown attribute
 - Expected outcomes per option by simulating the action with each option value
+
+Simplified for tree-based simulation: No complex logical conditions.
 """
 
 from typing import Iterable, List, Optional, Set
@@ -15,10 +17,6 @@ from typing import Iterable, List, Optional, Set
 from simulator.core.actions.action import Action
 from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
 from simulator.core.actions.conditions.base import Condition
-from simulator.core.actions.conditions.logical_conditions import (
-    ImplicationCondition,
-    LogicalCondition,
-)
 from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
 from simulator.core.actions.effects.base import Effect
 from simulator.core.actions.effects.conditional_effects import ConditionalEffect
@@ -30,13 +28,8 @@ from simulator.core.registries.registry_manager import RegistryManager
 
 
 def _walk_conditions(cond: Condition) -> Iterable[Condition]:
+    """Walk through conditions (simplified - only AttributeCondition)."""
     yield cond
-    if isinstance(cond, LogicalCondition):
-        for c in cond.conditions:
-            yield from _walk_conditions(c)
-    if isinstance(cond, ImplicationCondition):
-        yield from _walk_conditions(cond.if_condition)
-        yield from _walk_conditions(cond.then_condition)
 
 
 def _walk_effects(eff: Effect) -> Iterable[Effect]:
@@ -134,22 +127,12 @@ def generate_minimal_case_text(
         raise KeyError(f"Action not found for {object_type}.{action_name}")
 
     engine = TransitionEngine(registries)
-    # Attempt once to capture clarifications (if any)
     result = engine.apply_action(instance, action, {})
 
     relevant = sorted(get_relevant_attributes(action))
 
-    # Decide which attribute to clarify
-    clarify_attr: Optional[str] = None
-    if result.clarifications:
-        # Expect questions like "What is battery.level?"
-        for q in result.clarifications:
-            q = q.strip()
-            if q.lower().startswith("what is ") and q.endswith("?"):
-                clarify_attr = q[len("What is ") : -1].strip()
-                break
-    if not clarify_attr:
-        clarify_attr = _first_unknown_in_instance(relevant, instance)
+    # Decide which attribute to clarify (if any unknown)
+    clarify_attr: Optional[str] = _first_unknown_in_instance(relevant, instance)
 
     # Compose prompt
     prompt = f"I have a {object_type}. I try to {_nl_action(action_name)}."

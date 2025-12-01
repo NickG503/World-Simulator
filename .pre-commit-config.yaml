@@ -1,44 +1,56 @@
 # Pre-commit hooks configuration
-# See https://pre-commit.com for more information
+# Uses only local hooks to avoid pip index issues with custom environments
+#
+# All hooks run using the project's uv-managed environment
 
 repos:
-  # Ruff - Fast Python linter and formatter
-  - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+  - repo: local
     hooks:
-      # Run the formatter
+      # Ruff formatter
       - id: ruff-format
-        args: [--config=pyproject.toml]
-      # Run the linter
-      - id: ruff
-        args: [--fix, --config=pyproject.toml]
+        name: ruff format
+        entry: uv run ruff format --check
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: [src/, tests/]
 
-  # General file checks
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      # Remove trailing whitespace
+      # Ruff linter
+      - id: ruff-lint
+        name: ruff lint
+        entry: uv run ruff check
+        language: system
+        types: [python]
+        pass_filenames: false
+        args: [src/, tests/]
+
+      # Trailing whitespace
       - id: trailing-whitespace
+        name: trailing whitespace
+        entry: python -c "import sys; [exit(1) if l.rstrip() != l.rstrip('\n\r') else None for f in sys.argv[1:] for l in open(f)]"
+        language: system
+        types: [text]
         exclude: ^(.*\.md|.*\.txt)$
-      # Ensure files end with newline
+
+      # End of file fixer
       - id: end-of-file-fixer
+        name: end of file fixer
+        entry: python -c "import sys; [open(f,'a').write('\n') if open(f,'rb').read()[-1:] not in (b'\n',b'') else None for f in sys.argv[1:]]"
+        language: system
+        types: [text]
         exclude: ^(.*\.txt)$
+
       # Check YAML syntax
       - id: check-yaml
+        name: check yaml
+        entry: uv run python -c "import yaml, sys; [yaml.safe_load(open(f)) for f in sys.argv[1:]]"
+        language: system
+        types: [yaml]
         exclude: ^kb/
-      # Check for large files
-      - id: check-added-large-files
-        args: [--maxkb=1000]
-      # Check for merge conflicts
-      - id: check-merge-conflict
-      # Check for case conflicts
-      - id: check-case-conflict
 
-  # Knowledge base YAML validation (separate, less strict)
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v4.6.0
-    hooks:
-      - id: check-yaml
-        name: check-yaml-kb
-        args: [--allow-multiple-documents]
-        files: ^kb/.*\.ya?ml$
+      # Check large files
+      - id: check-large-files
+        name: check large files
+        entry: python -c "import sys,os; [exit(1) if os.path.getsize(f)>1000000 else None for f in sys.argv[1:]]"
+        language: system
+        types: [file]

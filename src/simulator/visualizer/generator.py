@@ -1,0 +1,832 @@
+"""
+HTML Visualization Generator for Simulation Trees.
+
+This module generates interactive HTML visualizations from simulation history YAML files.
+Features:
+- Graph-based node visualization with circles
+- Click on nodes to expand and see state details
+- Prepared for branching trees (multiple children per node)
+- Side panel for detailed state view
+"""
+
+from __future__ import annotations
+
+import json
+import webbrowser
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import yaml
+
+
+def load_tree_from_yaml(file_path: str) -> Dict[str, Any]:
+    """Load simulation tree from YAML file."""
+    with open(file_path, "r") as f:
+        return yaml.safe_load(f)
+
+
+def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) -> str:
+    """Generate interactive HTML visualization with graph-based layout."""
+
+    simulation_id = tree_data.get("simulation_id", "Unknown")
+    object_type = tree_data.get("object_type", "Unknown")
+    created_at = tree_data.get("created_at", "Unknown")
+    cli_command = tree_data.get("cli_command", "")
+
+    # Convert to JSON for JavaScript
+    tree_json = json.dumps(tree_data, indent=2)
+
+    html = f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Simulation: {simulation_id}</title>
+    <style>
+        * {{
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }}
+
+        :root {{
+            --bg-dark: #0d1117;
+            --bg-card: #161b22;
+            --border: #30363d;
+            --text: #c9d1d9;
+            --text-dim: #8b949e;
+            --accent-cyan: #58a6ff;
+            --accent-green: #3fb950;
+            --accent-red: #f85149;
+            --accent-gold: #d29922;
+            --accent-purple: #a371f7;
+        }}
+
+        body {{
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+            background: var(--bg-dark);
+            color: var(--text);
+            min-height: 100vh;
+            overflow: hidden;
+        }}
+
+        .container {{
+            display: grid;
+            grid-template-columns: 1fr 400px;
+            grid-template-rows: auto 1fr;
+            height: 100vh;
+        }}
+
+        header {{
+            grid-column: 1 / -1;
+            padding: 16px 24px;
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            align-items: center;
+            gap: 24px;
+        }}
+
+        .logo {{
+            font-size: 1.5em;
+            font-weight: 600;
+            background: linear-gradient(135deg, var(--accent-cyan), var(--accent-green));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }}
+
+        .meta {{
+            color: var(--text-dim);
+            font-size: 0.9em;
+            display: flex;
+            gap: 20px;
+        }}
+
+        .meta span {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+
+        .cli-command {{
+            margin-top: 8px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.3);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+            font-size: 0.85em;
+            color: var(--accent-cyan);
+            overflow-x: auto;
+            white-space: nowrap;
+        }}
+
+        .cli-command::before {{
+            content: '$ ';
+            color: var(--accent-green);
+        }}
+
+        .graph-container {{
+            position: relative;
+            overflow: auto;
+            background:
+                radial-gradient(circle at 50% 50%, rgba(88, 166, 255, 0.03) 0%, transparent 50%),
+                var(--bg-dark);
+        }}
+
+        #graph {{
+            min-width: 100%;
+            min-height: 100%;
+        }}
+
+        .detail-panel {{
+            background: var(--bg-card);
+            border-left: 1px solid var(--border);
+            overflow-y: auto;
+            padding: 20px;
+        }}
+
+        .detail-panel.empty {{
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+            color: var(--text-dim);
+        }}
+
+        .empty-icon {{
+            font-size: 4em;
+            margin-bottom: 16px;
+            opacity: 0.3;
+        }}
+
+        .detail-header {{
+            margin-bottom: 20px;
+            padding-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }}
+
+        .detail-header h2 {{
+            font-size: 1.2em;
+            color: var(--accent-cyan);
+            margin-bottom: 8px;
+        }}
+
+        .detail-header .action {{
+            font-size: 1.1em;
+            color: var(--text);
+        }}
+
+        .detail-header .action.success {{
+            color: var(--accent-green);
+        }}
+
+        .detail-header .action.failed {{
+            color: var(--accent-red);
+        }}
+
+        .detail-header .branch {{
+            color: var(--text-dim);
+            font-size: 0.9em;
+            margin-top: 6px;
+        }}
+
+        .section {{
+            margin-bottom: 24px;
+        }}
+
+        .section-title {{
+            font-size: 0.85em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+
+        .section-title::before {{
+            content: '';
+            width: 3px;
+            height: 14px;
+            background: var(--accent-cyan);
+            border-radius: 2px;
+        }}
+
+        .attr-list {{
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }}
+
+        .attr-item {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            border: 1px solid transparent;
+        }}
+
+        .attr-item.changed {{
+            border-color: var(--accent-gold);
+            background: rgba(210, 153, 34, 0.1);
+        }}
+
+        .attr-item.relevant {{
+            border-color: var(--accent-green);
+            background: rgba(63, 185, 80, 0.1);
+        }}
+
+        .attr-name {{
+            color: var(--text-dim);
+            font-size: 0.9em;
+        }}
+
+        .attr-value {{
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }}
+
+        .value {{
+            font-weight: 500;
+            color: var(--text);
+            padding: 2px 8px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 4px;
+        }}
+
+        .trend {{
+            font-size: 0.8em;
+            padding: 2px 6px;
+            border-radius: 3px;
+        }}
+
+        .trend.up {{
+            color: var(--accent-green);
+            background: rgba(63, 185, 80, 0.2);
+        }}
+
+        .trend.down {{
+            color: var(--accent-red);
+            background: rgba(248, 81, 73, 0.2);
+        }}
+
+        .change-item {{
+            display: grid;
+            grid-template-columns: 1fr auto auto auto;
+            gap: 8px;
+            align-items: center;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.2);
+            border-radius: 6px;
+            margin-bottom: 6px;
+        }}
+
+        .change-before {{
+            color: var(--text-dim);
+            text-decoration: line-through;
+        }}
+
+        .change-arrow {{
+            color: var(--accent-gold);
+        }}
+
+        .change-after {{
+            color: var(--accent-green);
+            font-weight: 500;
+        }}
+
+        .expand-btn {{
+            color: var(--accent-cyan);
+            cursor: pointer;
+            font-size: 0.85em;
+            margin-top: 8px;
+        }}
+
+        .expand-btn:hover {{
+            text-decoration: underline;
+        }}
+
+        .hidden {{
+            display: none !important;
+        }}
+
+        /* SVG Styles */
+        .node {{
+            cursor: pointer;
+        }}
+
+        .node-circle {{
+            stroke-width: 3;
+            transition: stroke-width 0.15s ease, filter 0.15s ease;
+        }}
+
+        .node:hover .node-circle {{
+            stroke-width: 5;
+            filter: drop-shadow(0 0 6px currentColor);
+        }}
+
+        .node.root .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-gold);
+        }}
+
+        .node.success .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-green);
+        }}
+
+        .node.failed .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-red);
+        }}
+
+        .node.selected .node-circle {{
+            stroke-width: 4;
+            filter: drop-shadow(0 0 8px currentColor);
+        }}
+
+        .node-label {{
+            font-family: inherit;
+            font-size: 11px;
+            fill: var(--text);
+            text-anchor: middle;
+            pointer-events: none;
+        }}
+
+        .node-action {{
+            font-family: inherit;
+            font-size: 10px;
+            fill: var(--text-dim);
+            text-anchor: middle;
+            pointer-events: none;
+        }}
+
+        .edge {{
+            stroke: var(--border);
+            stroke-width: 2;
+            fill: none;
+        }}
+
+        .edge.active {{
+            stroke: var(--accent-cyan);
+            stroke-width: 3;
+        }}
+
+        /* Tooltip */
+        .tooltip {{
+            position: absolute;
+            background: var(--bg-card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px 16px;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            z-index: 100;
+            max-width: 300px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }}
+
+        .tooltip.visible {{
+            opacity: 1;
+        }}
+
+        .tooltip-title {{
+            font-weight: 600;
+            color: var(--accent-cyan);
+            margin-bottom: 4px;
+        }}
+
+        .tooltip-action {{
+            color: var(--text);
+        }}
+
+        .tooltip-hint {{
+            color: var(--text-dim);
+            font-size: 0.85em;
+            margin-top: 8px;
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <div style="flex-grow: 1;">
+                <div style="display: flex; align-items: center; gap: 24px;">
+                    <div class="logo">Simulation Tree</div>
+                    <div class="meta">
+                        <span>ID: {simulation_id}</span>
+                        <span>Object: {object_type}</span>
+                        <span>Date: {created_at}</span>
+                    </div>
+                </div>
+                {f'<div class="cli-command">{cli_command}</div>' if cli_command else ""}
+            </div>
+        </header>
+
+        <div class="graph-container">
+            <svg id="graph"></svg>
+            <div class="tooltip" id="tooltip"></div>
+        </div>
+
+        <div class="detail-panel empty" id="detail-panel">
+            <div class="empty-icon">◉</div>
+            <p>Click a node to view details</p>
+        </div>
+    </div>
+
+    <script>
+        const treeData = {tree_json};
+
+        let selectedNodeId = null;
+        const NODE_RADIUS = 28;
+        const LEVEL_HEIGHT = 120;
+        const NODE_SPACING = 100;
+
+        // Calculate tree layout
+        function calculateLayout() {{
+            const nodes = treeData.nodes || {{}};
+            const rootId = treeData.root_id;
+            const layout = {{}};
+
+            // Build adjacency list
+            const children = {{}};
+            for (const [id, node] of Object.entries(nodes)) {{
+                children[id] = node.children_ids || [];
+            }}
+
+            // Calculate positions using BFS
+            let maxWidth = 0;
+            const queue = [[rootId, 0, 0]]; // [nodeId, level, index]
+            const levelCounts = {{}};
+            const levelNodes = {{}};
+
+            // First pass: count nodes per level
+            const visited = new Set();
+            const bfsQueue = [rootId];
+            const nodeLevels = {{}};
+            nodeLevels[rootId] = 0;
+
+            while (bfsQueue.length > 0) {{
+                const nodeId = bfsQueue.shift();
+                if (visited.has(nodeId)) continue;
+                visited.add(nodeId);
+
+                const level = nodeLevels[nodeId];
+                levelCounts[level] = (levelCounts[level] || 0) + 1;
+                levelNodes[level] = levelNodes[level] || [];
+                levelNodes[level].push(nodeId);
+
+                for (const childId of children[nodeId] || []) {{
+                    if (!visited.has(childId)) {{
+                        nodeLevels[childId] = level + 1;
+                        bfsQueue.push(childId);
+                    }}
+                }}
+            }}
+
+            // Second pass: assign positions
+            const levelIndices = {{}};
+            for (const [level, nodeIds] of Object.entries(levelNodes)) {{
+                const count = nodeIds.length;
+                const totalWidth = (count - 1) * NODE_SPACING;
+                const startX = -totalWidth / 2;
+
+                nodeIds.forEach((nodeId, idx) => {{
+                    layout[nodeId] = {{
+                        x: startX + idx * NODE_SPACING,
+                        y: parseInt(level) * LEVEL_HEIGHT + NODE_RADIUS + 40
+                    }};
+                    maxWidth = Math.max(maxWidth, Math.abs(layout[nodeId].x));
+                }});
+            }}
+
+            return {{ layout, maxWidth, maxLevel: Math.max(...Object.keys(levelNodes).map(Number)) }};
+        }}
+
+        function renderGraph() {{
+            const svg = document.getElementById('graph');
+            const {{ layout, maxWidth, maxLevel }} = calculateLayout();
+
+            // Set SVG size
+            const width = Math.max(800, maxWidth * 2 + 200);
+            const height = (maxLevel + 1) * LEVEL_HEIGHT + 100;
+            svg.setAttribute('viewBox', `${{-width/2}} 0 ${{width}} ${{height}}`);
+            svg.style.width = width + 'px';
+            svg.style.height = height + 'px';
+
+            let html = '';
+
+            // Draw edges first (so they're behind nodes)
+            const nodes = treeData.nodes || {{}};
+            for (const [nodeId, node] of Object.entries(nodes)) {{
+                const pos = layout[nodeId];
+                if (!pos) continue;
+
+                for (const childId of node.children_ids || []) {{
+                    const childPos = layout[childId];
+                    if (!childPos) continue;
+
+                    // Curved path
+                    const midY = (pos.y + childPos.y) / 2;
+                    const pathD = `M${{pos.x}},${{pos.y + NODE_RADIUS}} ` +
+                                  `Q${{pos.x}},${{midY}} ${{childPos.x}},${{childPos.y - NODE_RADIUS}}`;
+                    html += `<path class="edge" d="${{pathD}}" />`;
+                }}
+            }}
+
+            // Draw nodes
+            for (const [nodeId, node] of Object.entries(nodes)) {{
+                const pos = layout[nodeId];
+                if (!pos) continue;
+
+                const isRoot = !node.parent_id;
+                const isSelected = nodeId === selectedNodeId;
+                const status = node.action_status || 'ok';
+                const statusClass = isRoot ? 'root' : (status === 'ok' ? 'success' : 'failed');
+
+                html += `
+                    <g class="node ${{statusClass}} ${{isSelected ? 'selected' : ''}}"
+                       data-node-id="${{nodeId}}"
+                       transform="translate(${{pos.x}}, ${{pos.y}})"
+                       onclick="selectNode('${{nodeId}}')"
+                       onmouseenter="showTooltip(event, '${{nodeId}}')"
+                       onmouseleave="hideTooltip()">
+                        <circle class="node-circle" r="${{NODE_RADIUS}}" cx="0" cy="0" />
+                        <text class="node-label" y="4">${{nodeId.replace('state', 'S')}}</text>
+                        <text class="node-action" y="${{NODE_RADIUS + 16}}">${{node.action_name || 'Initial'}}</text>
+                    </g>
+                `;
+            }}
+
+            svg.innerHTML = html;
+        }}
+
+        function selectNode(nodeId) {{
+            selectedNodeId = nodeId;
+            renderGraph();
+            renderDetail(nodeId);
+        }}
+
+        function renderDetail(nodeId) {{
+            const panel = document.getElementById('detail-panel');
+            const node = treeData.nodes[nodeId];
+
+            if (!node) {{
+                panel.className = 'detail-panel empty';
+                panel.innerHTML = `<div class="empty-icon">◉</div><p>Node not found</p>`;
+                return;
+            }}
+
+            panel.className = 'detail-panel';
+
+            const snapshot = node.snapshot?.object_state || {{}};
+            const changes = node.changes || [];
+            const changedAttrs = new Set(changes.map(c => {{
+                let attr = c.attribute || '';
+                if (attr.endsWith('.trend')) attr = attr.slice(0, -6);
+                return attr;
+            }}));
+
+            const isRoot = !node.parent_id;
+            const status = node.action_status || 'ok';
+            const statusClass = isRoot ? '' : (status === 'ok' ? 'success' : 'failed');
+
+            let html = `
+                <div class="detail-header">
+                    <h2>${{nodeId}}</h2>
+                    <div class="action ${{statusClass}}">${{node.action_name || 'Initial State'}}</div>
+            `;
+
+            if (node.branch_condition) {{
+                const bc = node.branch_condition;
+                const op = bc.operator === 'equals' ? '==' : bc.operator;
+                html += `<div class="branch">${{bc.attribute}} ${{op}} ${{bc.value}}</div>`;
+            }}
+
+            if (node.action_error) {{
+                html += `<div style="color: var(--accent-red); margin-top: 8px; ` +
+                        `font-size: 0.9em;">${{node.action_error}}</div>`;
+            }}
+
+            html += '</div>';
+
+            // Changes section (if any)
+            if (changes.length > 0) {{
+                html += `
+                    <div class="section">
+                        <div class="section-title">Changes</div>
+                        <div class="change-list">
+                `;
+
+                for (const change of changes) {{
+                    html += `
+                        <div class="change-item">
+                            <span class="attr-name">${{change.attribute}}</span>
+                            <span class="change-before">${{change.before || '—'}}</span>
+                            <span class="change-arrow">→</span>
+                            <span class="change-after">${{change.after || '—'}}</span>
+                        </div>
+                    `;
+                }}
+
+                html += '</div></div>';
+            }}
+
+            // State section
+            html += `
+                <div class="section">
+                    <div class="section-title">World State</div>
+                    <div class="attr-list" id="attr-list">
+            `;
+
+            const parts = snapshot.parts || {{}};
+            const globalAttrs = snapshot.global_attributes || {{}};
+
+            const relevantAttrs = [];
+            const otherAttrs = [];
+
+            // Process parts
+            for (const [partName, partData] of Object.entries(parts)) {{
+                const attrs = partData.attributes || {{}};
+                for (const [attrName, attrData] of Object.entries(attrs)) {{
+                    const fullPath = `${{partName}}.${{attrName}}`;
+                    const isChanged = changedAttrs.has(fullPath);
+                    const entry = {{ path: fullPath, data: attrData, isChanged }};
+
+                    if (isChanged || changedAttrs.size === 0) {{
+                        relevantAttrs.push(entry);
+                    }} else {{
+                        otherAttrs.push(entry);
+                    }}
+                }}
+            }}
+
+            // Process global attributes
+            for (const [attrName, attrData] of Object.entries(globalAttrs)) {{
+                const isChanged = changedAttrs.has(attrName);
+                const entry = {{ path: attrName, data: attrData, isChanged }};
+
+                if (isChanged || changedAttrs.size === 0) {{
+                    relevantAttrs.push(entry);
+                }} else {{
+                    otherAttrs.push(entry);
+                }}
+            }}
+
+            // Render relevant attributes
+            for (const {{ path, data, isChanged }} of relevantAttrs) {{
+                html += renderAttrItem(path, data, isChanged, true);
+            }}
+
+            html += '</div>';
+
+            // Other attributes (expandable)
+            if (otherAttrs.length > 0) {{
+                html += `
+                    <div class="expand-btn" onclick="toggleOthers()">
+                        Show ${{otherAttrs.length}} other attributes ▼
+                    </div>
+                    <div class="attr-list hidden" id="other-attrs">
+                `;
+
+                for (const {{ path, data }} of otherAttrs) {{
+                    html += renderAttrItem(path, data, false, false);
+                }}
+
+                html += '</div>';
+            }}
+
+            html += '</div>';
+
+            panel.innerHTML = html;
+        }}
+
+        function renderAttrItem(path, data, isChanged, isRelevant) {{
+            const itemClass = isChanged ? 'changed' : (isRelevant ? 'relevant' : '');
+
+            let trendHtml = '';
+            if (data.trend && data.trend !== 'none') {{
+                const trendClass = data.trend === 'up' ? 'up' : 'down';
+                const trendIcon = data.trend === 'up' ? '↑' : '↓';
+                trendHtml = `<span class="trend ${{trendClass}}">${{trendIcon}} ${{data.trend}}</span>`;
+            }}
+
+            return `
+                <div class="attr-item ${{itemClass}}">
+                    <span class="attr-name">${{path}}</span>
+                    <div class="attr-value">
+                        <span class="value">${{data.value || '—'}}</span>
+                        ${{trendHtml}}
+                    </div>
+                </div>
+            `;
+        }}
+
+        function toggleOthers() {{
+            const el = document.getElementById('other-attrs');
+            const btn = document.querySelector('.expand-btn');
+            el.classList.toggle('hidden');
+
+            if (el.classList.contains('hidden')) {{
+                btn.textContent = btn.textContent.replace('▲', '▼');
+            }} else {{
+                btn.textContent = btn.textContent.replace('▼', '▲');
+            }}
+        }}
+
+        function showTooltip(event, nodeId) {{
+            const node = treeData.nodes[nodeId];
+            if (!node) return;
+
+            const tooltip = document.getElementById('tooltip');
+            const isRoot = !node.parent_id;
+
+            tooltip.innerHTML = `
+                <div class="tooltip-title">${{nodeId}}</div>
+                <div class="tooltip-action">${{node.action_name || 'Initial State'}}</div>
+                <div class="tooltip-hint">Click to view details</div>
+            `;
+
+            const rect = event.target.getBoundingClientRect();
+            const containerRect = document.querySelector('.graph-container').getBoundingClientRect();
+
+            tooltip.style.left = (rect.right - containerRect.left + 10) + 'px';
+            tooltip.style.top = (rect.top - containerRect.top) + 'px';
+            tooltip.classList.add('visible');
+        }}
+
+        function hideTooltip() {{
+            document.getElementById('tooltip').classList.remove('visible');
+        }}
+
+        // Initial render
+        renderGraph();
+
+        // Auto-select root
+        if (treeData.root_id) {{
+            selectNode(treeData.root_id);
+        }}
+    </script>
+</body>
+</html>
+"""
+
+    if output_path:
+        with open(output_path, "w") as f:
+            f.write(html)
+
+    return html
+
+
+def generate_visualization(input_path: str, output_path: Optional[str] = None) -> str:
+    """
+    Generate HTML visualization from a simulation tree YAML file.
+
+    Args:
+        input_path: Path to the simulation tree YAML file
+        output_path: Optional output path for the HTML file (auto-generated if not provided)
+
+    Returns:
+        Path to the generated HTML file
+    """
+    # Load tree data
+    tree_data = load_tree_from_yaml(input_path)
+
+    # Generate output path if not provided
+    if not output_path:
+        input_file = Path(input_path)
+        output_path = str(input_file.parent / f"{input_file.stem}_visualization.html")
+
+    # Generate HTML
+    generate_html(tree_data, output_path)
+
+    return output_path
+
+
+def open_visualization(html_path: str) -> None:
+    """Open the visualization in the default web browser."""
+    webbrowser.open(f"file://{Path(html_path).absolute()}")
+
+
+if __name__ == "__main__":
+    import sys
+
+    if len(sys.argv) < 2:
+        print("Usage: python -m simulator.visualizer.generator <history.yaml> [output.html]")
+        sys.exit(1)
+
+    input_file = sys.argv[1]
+    output_file = sys.argv[2] if len(sys.argv) > 2 else None
+
+    result = generate_visualization(input_file, output_file)
+    print(f"Generated: {result}")
+
+    # Auto-open
+    open_visualization(result)

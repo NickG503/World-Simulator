@@ -1,37 +1,26 @@
+# Premium mode action for TV
+# Simplified: single attribute check in precondition, flat if-elif-else in effects
+
 action: premium_mode
 object_type: tv
 
 parameters: {}
 
+# Single precondition: screen must be on
 preconditions:
   - type: attribute_check
     target: screen.power
     operator: equals
     value: on
-  - type: or
-    conditions:
-      - type: attribute_check
-        target: power_source.voltage
-        operator: equals
-        value: high
-      - type: attribute_check
-        target: network.wifi_connected
-        operator: equals
-        value: on
 
+# Effects with flat conditional based on single attribute (power_source.voltage)
 effects:
   - type: conditional
     condition:
-      type: and
-      conditions:
-        - type: attribute_check
-          target: cooling.temperature
-          operator: not_equals
-          value: hot
-        - type: attribute_check
-          target: audio.channel
-          operator: not_equals
-          value: low
+      type: attribute_check
+      target: power_source.voltage
+      operator: equals
+      value: high
     then:
       - type: set_attribute
         target: screen.brightness

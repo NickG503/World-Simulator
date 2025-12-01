@@ -1,22 +1,17 @@
+# Factory reset action for TV
+# Simplified precondition: only check screen.power
+
 action: factory_reset
 object_type: tv
 
-parameters:
-  force:
-    type: choice
-    choices: [force]
-    required: false
+parameters: {}
 
+# Simplified precondition: screen must be off to reset
 preconditions:
-  - type: or
-    conditions:
-      - type: attribute_check
-        target: screen.power
-        operator: equals
-        value: off
-      - type: parameter_equals
-        parameter: force
-        value: force
+  - type: attribute_check
+    target: screen.power
+    operator: equals
+    value: off
 
 effects:
   - type: set_attribute

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-"""Higher-level helpers used by CLI commands."""
+"""Higher-level helpers used by CLI commands.
+
+Simplified for tree-based simulation: No interactive prompts.
+"""
 
 from typing import Dict, Iterable
 
 from simulator.core.engine.transition_engine import TransitionEngine
-from simulator.core.prompt import UnknownValueResolver
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.io.loaders.object_loader import instantiate_default
 
@@ -15,6 +17,7 @@ def resolve_action(
     object_name: str,
     action_name: str,
 ):
+    """Resolve an action for an object type."""
     obj = registries.objects.get(object_name)
     action = registries.create_behavior_enhanced_action(object_name, action_name)
     return obj, action
@@ -26,15 +29,14 @@ def apply_action(
     action_name: str,
     parameters: Dict[str, str],
     console,
-    interactive: bool = True,
+    interactive: bool = False,  # Ignored, kept for API compatibility
 ):
+    """Apply a single action to an object instance."""
     obj_type, action = resolve_action(registries, object_name, action_name)
     if not action:
         return obj_type, action, None, None
 
     instance = instantiate_default(obj_type, registries)
-    resolver = UnknownValueResolver(registries, console)
-    resolver.resolve_unknowns(instance, interactive=interactive)
 
     engine = TransitionEngine(registries)
     result = engine.apply_action(instance, action, parameters)
@@ -47,11 +49,8 @@ def run_simulation(
     actions: Iterable[dict],
     simulation_id: str | None,
     verbose: bool,
-    *,
-    interactive: bool = False,
-    unknown_paths: list[str] | None = None,
-    parameter_resolver=None,
 ):
+    """Run a simulation using the SimulationRunner."""
     from simulator.core.simulation_runner import create_simulation_runner
 
     runner = create_simulation_runner(registries)
@@ -60,9 +59,6 @@ def run_simulation(
         list(actions),
         simulation_id,
         verbose=verbose,
-        interactive=interactive,
-        unknown_paths=unknown_paths,
-        parameter_resolver=parameter_resolver,
     )
     return history, runner
 
