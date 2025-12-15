@@ -5,7 +5,7 @@ from __future__ import annotations
 Simplified for tree-based simulation: No interactive prompts.
 """
 
-from typing import Dict, Iterable
+from typing import Dict
 
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.registries.registry_manager import RegistryManager
@@ -43,28 +43,7 @@ def apply_action(
     return obj_type, action, instance, result
 
 
-def run_simulation(
-    registries: RegistryManager,
-    object_type: str,
-    actions: Iterable[dict],
-    simulation_id: str | None,
-    verbose: bool,
-):
-    """Run a simulation using the SimulationRunner."""
-    from simulator.core.simulation_runner import create_simulation_runner
-
-    runner = create_simulation_runner(registries)
-    history = runner.run_simulation(
-        object_type,
-        list(actions),
-        simulation_id,
-        verbose=verbose,
-    )
-    return history, runner
-
-
 __all__ = [
     "apply_action",
-    "run_simulation",
     "resolve_action",
 ]

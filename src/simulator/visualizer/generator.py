@@ -747,15 +747,25 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             const relevantAttrs = [];
             const otherAttrs = [];
 
+            // Helper to check if an attribute is "relevant" (should be highlighted)
+            // Relevant = attribute has changes, OR it's the root node (show all)
+            const isAttrRelevant = (path) => {{
+                if (changedAttrs.size > 0) {{
+                    return changedAttrs.has(path);
+                }}
+                // For root node (no action), show all as relevant
+                return isRoot;
+            }};
+
             // Process parts
             for (const [partName, partData] of Object.entries(parts)) {{
                 const attrs = partData.attributes || {{}};
                 for (const [attrName, attrData] of Object.entries(attrs)) {{
                     const fullPath = `${{partName}}.${{attrName}}`;
-                    const isChanged = changedAttrs.has(fullPath);
-                    const entry = {{ path: fullPath, data: attrData, isChanged }};
+                    const isRelevant = isAttrRelevant(fullPath);
+                    const entry = {{ path: fullPath, data: attrData, isChanged: isRelevant }};
 
-                    if (isChanged || changedAttrs.size === 0) {{
+                    if (isRelevant) {{
                         relevantAttrs.push(entry);
                     }} else {{
                         otherAttrs.push(entry);
@@ -765,10 +775,10 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
             // Process global attributes
             for (const [attrName, attrData] of Object.entries(globalAttrs)) {{
-                const isChanged = changedAttrs.has(attrName);
-                const entry = {{ path: attrName, data: attrData, isChanged }};
+                const isRelevant = isAttrRelevant(attrName);
+                const entry = {{ path: attrName, data: attrData, isChanged: isRelevant }};
 
-                if (isChanged || changedAttrs.size === 0) {{
+                if (isRelevant) {{
                     relevantAttrs.push(entry);
                 }} else {{
                     otherAttrs.push(entry);

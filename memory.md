@@ -312,6 +312,8 @@ sim visualize <history.yaml> --no-open    # Don't auto-open browser
 - [x] Trend arrows (↑/↓) displayed in visualization
 - [x] Branch type styling (if/elif/else nodes colored differently)
 - [x] Comprehensive branching tests (50+ tests)
+- [x] Failed branch state propagation - constrained values persist to subsequent actions
+- [x] Delta display for failed actions - shows only branch_condition attribute as relevant
 
 ### Planned Features
 - [ ] Interactive branch exploration in visualization

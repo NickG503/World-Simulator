@@ -177,6 +177,7 @@ class TransitionEngine:
             ParameterEquals,
             ParameterValid,
         )
+        from simulator.utils.error_formatting import format_precondition_error
 
         try:
             if isinstance(condition, AttributeCondition):
@@ -186,16 +187,12 @@ class TransitionEngine:
                 else:
                     expected_value = condition.value
 
-                op_map = {
-                    "equals": "==",
-                    "not_equals": "!=",
-                    "lt": "<",
-                    "lte": "<=",
-                    "gt": ">",
-                    "gte": ">=",
-                }
-                op_symbol = op_map.get(condition.operator, condition.operator)
-                return f"{condition.target.to_string()} {op_symbol} {expected_value} (actual: {actual_value})"
+                return format_precondition_error(
+                    attr_path=condition.target.to_string(),
+                    operator=condition.operator,
+                    expected_value=expected_value,
+                    actual_value=actual_value,
+                )
 
             elif isinstance(condition, ParameterEquals):
                 actual_value = eval_ctx.parameters.get(condition.parameter)

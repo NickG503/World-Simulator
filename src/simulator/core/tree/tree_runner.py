@@ -207,13 +207,19 @@ class TreeSimulationRunner:
             results = []
             for child_id in parent_children:
                 child_node = tree.nodes[child_id]
-                # For failed branches, instance doesn't change
-                child_instance = instance
                 if child_node.action_status == NodeStatus.OK.value:
                     # Apply action to get updated instance for success branch
                     engine_result = self.engine.apply_action(instance, result.action, parameters)
-                    if engine_result.after:
-                        child_instance = engine_result.after
+                    child_instance = engine_result.after if engine_result.after else instance
+                else:
+                    # For failed branches, constrain instance to the value that caused the failure
+                    # The branch_condition tells us which attribute was narrowed and to what value
+                    bc = child_node.branch_condition
+                    if bc and bc.attribute:
+                        values = bc.value if isinstance(bc.value, list) else [bc.value]
+                        child_instance = self._clone_instance_with_values(instance, bc.attribute, values)
+                    else:
+                        child_instance = instance
                 results.append(ActionResult(node=child_node, instance=child_instance, action=result.action))
             return results
 
@@ -1038,7 +1044,19 @@ class TreeSimulationRunner:
 
         # Apply effects for this branch using the engine
         action_result = self.engine.apply_action(new_instance, action, parameters)
-        changes = action_result.changes if action_result else []
+        raw_changes = action_result.changes if action_result else []
+
+        # Build changes list from raw changes
+        changes = self._build_changes_list_from_raw(raw_changes)
+
+        # Add narrowing changes for the constrained attributes
+        # For precond_attr: narrowed from parent's value to precond_values
+        narrowing = self._compute_narrowing_change(parent_node.snapshot, precond_attr, precond_values)
+        if precond_attr != postcond_attr:
+            # Also add narrowing for postcond_attr if different
+            postcond_vals = postcond_value if isinstance(postcond_value, list) else [postcond_value]
+            narrowing.extend(self._compute_narrowing_change(parent_node.snapshot, postcond_attr, postcond_vals))
+        changes = narrowing + changes  # Put narrowing first
 
         # Use the resulting instance after effects are applied
         result_instance = action_result.after if action_result and action_result.after else new_instance
@@ -1074,7 +1092,7 @@ class TreeSimulationRunner:
             action_parameters=parameters,
             action_status=NodeStatus.OK.value,
             branch_condition=branch_condition,
-            changes=self._build_changes_list_from_raw(changes),
+            changes=changes,
         )
 
     def _set_attribute_values(self, instance: ObjectInstance, attr_path: str, values: List[str]) -> None:
@@ -1239,6 +1257,10 @@ class TreeSimulationRunner:
         result = self.engine.apply_action(modified_instance, action, parameters)
         changes = self._build_changes_list(result.changes)
 
+        # Add narrowing change if the value actually narrowed
+        narrowing = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+        changes = narrowing + changes  # Put narrowing first
+
         # Capture the new state (pass parent snapshot for trend-based value set computation)
         new_snapshot = self._capture_snapshot_with_values(
             result.after if result.after else modified_instance,
@@ -1284,6 +1306,12 @@ class TreeSimulationRunner:
         operator = "in" if len(values) > 1 else "equals"
         value = values if len(values) > 1 else values[0]
 
+        # Build detailed error message matching the engine's format
+        error_msg = self._build_precondition_error(action, attr_path, values)
+
+        # Include the narrowing as a change if the value actually changed
+        changes = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+
         return TreeNode(
             id=tree.generate_node_id(),
             snapshot=new_snapshot,
@@ -1291,7 +1319,7 @@ class TreeSimulationRunner:
             action_name=action.name,
             action_parameters=parameters,
             action_status=NodeStatus.REJECTED.value,
-            action_error="Precondition failed",
+            action_error=error_msg,
             branch_condition=BranchCondition(
                 attribute=attr_path,
                 operator=operator,
@@ -1299,7 +1327,7 @@ class TreeSimulationRunner:
                 source="precondition",
                 branch_type="fail",
             ),
-            changes=[],
+            changes=changes,
         )
 
     def _create_branch_case_node(
@@ -1322,6 +1350,10 @@ class TreeSimulationRunner:
         # Apply the action
         result = self.engine.apply_action(modified_instance, action, parameters)
         changes = self._build_changes_list(result.changes)
+
+        # Add narrowing change if the value actually narrowed
+        narrowing = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+        changes = narrowing + changes  # Put narrowing first
 
         # Capture new state (pass parent snapshot for trend-based value set computation)
         new_snapshot = self._capture_snapshot_with_values(
@@ -1678,6 +1710,68 @@ class TreeSimulationRunner:
             for c in changes
             if c.kind != "info" and not c.attribute.startswith("[")
         ]
+
+    def _build_precondition_error(self, action: Action, attr_path: str, actual_values: List[str]) -> str:
+        """Build detailed precondition error message using shared utility."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.utils.error_formatting import format_precondition_error
+
+        # Find the precondition that checks this attribute
+        for condition in action.preconditions:
+            if isinstance(condition, AttributeCondition):
+                if condition.target.to_string() == attr_path:
+                    actual = actual_values[0] if len(actual_values) == 1 else actual_values
+                    msg = format_precondition_error(
+                        attr_path=attr_path,
+                        operator=condition.operator,
+                        expected_value=condition.value,
+                        actual_value=actual,
+                    )
+                    return f"Precondition failed: {msg}"
+
+        # Fallback if condition not found
+        actual_str = actual_values[0] if len(actual_values) == 1 else "{" + ", ".join(actual_values) + "}"
+        return f"Precondition failed: {attr_path} (actual: {actual_str})"
+
+    def _compute_narrowing_change(
+        self, parent_snapshot: WorldSnapshot, attr_path: str, new_values: List[str]
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute the change entry for attribute value narrowing during branching.
+
+        Only returns a change if the value actually narrowed (e.g., from value set to single value,
+        or from 'unknown' to a specific value).
+
+        Returns:
+            List with single change dict, or empty list if no narrowing occurred.
+        """
+        # Get parent's value for this attribute
+        parent_value = parent_snapshot.get_attribute_value(attr_path)
+
+        # Format the new value
+        if len(new_values) == 1:
+            new_value = new_values[0]
+        else:
+            new_value = new_values  # Keep as list for value sets
+
+        # Format the parent value for comparison
+        if isinstance(parent_value, list):
+            parent_display = parent_value
+        else:
+            parent_display = parent_value
+
+        # Only include as change if values are different
+        if parent_display != new_value:
+            return [
+                {
+                    "attribute": attr_path,
+                    "before": parent_display,
+                    "after": new_value,
+                    "kind": "value",
+                }
+            ]
+
+        return []
 
     # =========================================================================
     # Serialization
