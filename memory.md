@@ -327,21 +327,38 @@ sim visualize <history.yaml> --no-open    # Don't auto-open browser
 
 ### Run a Simple Simulation
 ```bash
-python -m simulator.cli.app simulate --obj flashlight turn_on turn_off
+sim simulate --obj flashlight --actions turn_on turn_off
 ```
 
 ### Apply Single Action
 ```bash
-python -m simulator.cli.app apply flashlight turn_on
+sim apply flashlight turn_on
 ```
 
 ### Validate Knowledge Base
 ```bash
-python -m simulator.cli.app validate
+sim validate
 ```
 
 ### View Object Definition
 ```bash
-python -m simulator.cli.app show object flashlight
+sim show object flashlight
 ```
+
+### Simulation with Initial Values
+```bash
+sim simulate --obj flashlight --set battery.level=low --actions turn_on turn_off --name flashlight_low
+```
+
+### Branching on Unknown Values
+```bash
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on --name flashlight_unknown
+```
+
+### Multi-Level Branching (Three-Action Cycle)
+```bash
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off turn_on --name flashlight_cycle_branch
+```
+
+*For comprehensive examples, see [EXAMPLES.md](EXAMPLES.md)*
 

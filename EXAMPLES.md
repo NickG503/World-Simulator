@@ -199,6 +199,36 @@ This creates a tree with **25 nodes** showing cascading branches.
 sim visualize outputs/histories/flashlight_double_branch.yaml -o outputs/visualizations/flashlight_double_branch.html
 ```
 
+### Flashlight: Turn On → Off → On (Three-Action Cycle with Branching)
+
+```bash
+sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off turn_on --name flashlight_cycle_branch
+```
+
+**What happens:**
+1. **Action 1 (`turn_on`)**: Battery is unknown → splits into 5 branches by postcondition:
+   - battery=full → brightness=high, trend=down
+   - battery=high → brightness=high, trend=down
+   - battery=medium → brightness=medium, trend=down
+   - battery=low → brightness=low, trend=down
+   - battery=empty → FAIL (precondition)
+
+2. **Action 2 (`turn_off`)**: Applies to ALL branches (including failed ones):
+   - Success branches: bulb turns off, brightness=none, trend cleared
+   - Failed branch: stays failed (world unchanged)
+
+3. **Action 3 (`turn_on`)**: Each success branch now has battery constrained by trend (e.g., battery was `high` with `trend=down` → now `{empty, low, medium, high}`):
+   - Each branch splits again based on postcondition (if/elif/else on battery level)
+   - Branches where battery became `empty` fail the precondition
+   - Other branches succeed with varying brightness
+
+This demonstrates how the **trend** mechanism creates value sets that cause branching on subsequent actions.
+
+### Visualize Three-Action Cycle
+```bash
+sim visualize outputs/histories/flashlight_cycle_branch.yaml -o outputs/visualizations/flashlight_cycle_branch.html
+```
+
 ---
 
 ## Quick Test All Examples

@@ -207,19 +207,21 @@ class TreeSimulationRunner:
             results = []
             for child_id in parent_children:
                 child_node = tree.nodes[child_id]
-                if child_node.action_status == NodeStatus.OK.value:
-                    # Apply action to get updated instance for success branch
-                    engine_result = self.engine.apply_action(instance, result.action, parameters)
-                    child_instance = engine_result.after if engine_result.after else instance
+                # First, constrain the instance with the branch_condition values
+                bc = child_node.branch_condition
+                if bc and bc.attribute:
+                    values = bc.value if isinstance(bc.value, list) else [bc.value]
+                    constrained_instance = self._clone_instance_with_values(instance, bc.attribute, values)
                 else:
-                    # For failed branches, constrain instance to the value that caused the failure
-                    # The branch_condition tells us which attribute was narrowed and to what value
-                    bc = child_node.branch_condition
-                    if bc and bc.attribute:
-                        values = bc.value if isinstance(bc.value, list) else [bc.value]
-                        child_instance = self._clone_instance_with_values(instance, bc.attribute, values)
-                    else:
-                        child_instance = instance
+                    constrained_instance = instance.deep_copy()
+
+                if child_node.action_status == NodeStatus.OK.value:
+                    # Apply action to the CONSTRAINED instance for success branch
+                    engine_result = self.engine.apply_action(constrained_instance, result.action, parameters)
+                    child_instance = engine_result.after if engine_result.after else constrained_instance
+                else:
+                    # For failed branches, keep the constrained instance (action wasn't applied)
+                    child_instance = constrained_instance
                 results.append(ActionResult(node=child_node, instance=child_instance, action=result.action))
             return results
 
@@ -1138,12 +1140,31 @@ class TreeSimulationRunner:
                     # If snapshot already has a set (from trend), preserve it
 
     def _build_changes_list_from_raw(self, raw_changes: List[Any]) -> List[Dict[str, Any]]:
-        """Convert raw effect changes to the serializable format."""
+        """Convert raw effect changes to the serializable format.
+
+        Filters out:
+        - Info entries
+        - Internal entries (starting with '[')
+        - No-op changes where before == after
+        """
         changes = []
         for change in raw_changes:
             if isinstance(change, dict):
+                # Skip no-op changes
+                if change.get("before") == change.get("after"):
+                    continue
+                # Skip internal entries
+                attr = change.get("attribute", "")
+                if attr.startswith("[") or change.get("kind") == "info":
+                    continue
                 changes.append(change)
             elif hasattr(change, "attribute") and hasattr(change, "before") and hasattr(change, "after"):
+                # Skip no-op changes
+                if change.before == change.after:
+                    continue
+                # Skip internal entries
+                if change.attribute.startswith("[") or getattr(change, "kind", "value") == "info":
+                    continue
                 changes.append(
                     {
                         "attribute": change.attribute,
@@ -1699,7 +1720,13 @@ class TreeSimulationRunner:
                     attr_inst.last_known_value = value if value != "unknown" else None
 
     def _build_changes_list(self, changes: List[Any]) -> List[Dict[str, Any]]:
-        """Build serializable changes list from DiffEntry objects."""
+        """Build serializable changes list from DiffEntry objects.
+
+        Filters out:
+        - Info entries
+        - Internal entries (starting with '[')
+        - No-op changes where before == after
+        """
         return [
             {
                 "attribute": c.attribute,
@@ -1708,7 +1735,7 @@ class TreeSimulationRunner:
                 "kind": c.kind,
             }
             for c in changes
-            if c.kind != "info" and not c.attribute.startswith("[")
+            if c.kind != "info" and not c.attribute.startswith("[") and c.before != c.after  # Filter out no-op changes
         ]
 
     def _build_precondition_error(self, action: Action, attr_path: str, actual_values: List[str]) -> str:

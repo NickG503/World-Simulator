@@ -104,6 +104,10 @@ echo "Flashlight double turn_on (two levels of branching)..."
 uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_on --name flashlight_double_branch
 
 echo ""
+echo "Flashlight turn_on → turn_off → turn_on (three-action cycle with branching)..."
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off turn_on --name flashlight_cycle_branch
+
+echo ""
 echo "=========================================="
 echo "GENERATING VISUALIZATIONS"
 echo "=========================================="
