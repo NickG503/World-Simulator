@@ -1,0 +1,10 @@
+action: roll_color
+object_type: generic
+description: "Generic roll_color action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

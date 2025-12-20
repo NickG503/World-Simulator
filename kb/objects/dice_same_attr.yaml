@@ -68,9 +68,12 @@ behaviors:
             target: prize.level
             value: big
 
-  # Reset the dice
+  # Reset the dice - resets everything including face
   reset:
     effects:
+      - type: set_attribute
+        target: cube.face
+        value: "3"  # Reset to default face
       - type: set_attribute
         target: prize.result
         value: none

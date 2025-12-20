@@ -1,0 +1,98 @@
+# Dice object for demonstrating DOUBLE MERGE
+# Has TWO independent unknown attributes: face and color
+# Each causes branching, and reset merges all branches
+#
+# Simulation: roll_face → reset → roll_color → reset
+#
+# Layer 1 (roll_face): face unknown → 3 branches
+# Layer 2 (reset): ALL 3 merge into 1 (all attributes reset)
+# Layer 3 (roll_color): color unknown → 3 branches
+# Layer 4 (reset): ALL 3 merge into 1 again
+#
+# Visual result: TWO "many parents → single node" patterns!
+
+type: dice_double_merge
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: "green"
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+
+behaviors:
+  # Roll face - branches on face value (3 branches when unknown)
+  roll_face:
+    preconditions:
+      - type: attribute_check
+        target: cube.face
+        operator: in
+        value: ["3", "5", "6"]
+    effects:
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.face
+          operator: equals
+          value: "6"
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+        else:
+          - type: set_attribute
+            target: prize.level
+            value: small
+
+  # Roll color - branches on color value (3 branches when unknown)
+  roll_color:
+    preconditions:
+      - type: attribute_check
+        target: cube.color
+        operator: in
+        value: ["green", "blue", "red"]
+    effects:
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.color
+          operator: equals
+          value: "red"
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+        else:
+          - type: set_attribute
+            target: prize.level
+            value: small
+
+  # Reset face - Only resets face and prize, NOT color
+  reset_face:
+    effects:
+      - type: set_attribute
+        target: cube.face
+        value: "3"
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+  # Reset color - Resets color and prize
+  reset_color:
+    effects:
+      - type: set_attribute
+        target: cube.color
+        value: "green"
+      - type: set_attribute
+        target: prize.level
+        value: none

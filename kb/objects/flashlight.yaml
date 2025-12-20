@@ -110,8 +110,13 @@ behaviors:
             target: bulb.brightness
             value: low
 
-  # Turn off: Simple, no conditions
+  # Turn off: Only works if switch is on
   turn_off:
+    preconditions:
+      - type: attribute_check
+        target: switch.position
+        operator: equals
+        value: "on"
     effects:
       - type: set_attribute
         target: switch.position

@@ -205,6 +205,12 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             display: flex;
             align-items: center;
             gap: 8px;
+            cursor: pointer;
+            user-select: none;
+        }}
+
+        .section-title:hover {{
+            color: var(--text);
         }}
 
         .section-title::before {{
@@ -213,6 +219,25 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             height: 14px;
             background: var(--accent-cyan);
             border-radius: 2px;
+        }}
+
+        .section-title::after {{
+            content: '▼';
+            margin-left: auto;
+            font-size: 0.7em;
+            transition: transform 0.2s ease;
+        }}
+
+        .section.collapsed .section-title::after {{
+            transform: rotate(-90deg);
+        }}
+
+        .section.collapsed .section-content {{
+            display: none;
+        }}
+
+        .section-content {{
+            transition: max-height 0.2s ease;
         }}
 
         .attr-list {{
@@ -361,22 +386,6 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             filter: drop-shadow(0 0 8px currentColor);
         }}
 
-        .node.branching .node-circle {{
-            stroke-dasharray: 4 2;
-        }}
-
-        .node.branch-if .node-circle {{
-            fill: rgba(63, 185, 80, 0.1);
-        }}
-
-        .node.branch-elif .node-circle {{
-            fill: rgba(88, 166, 255, 0.1);
-        }}
-
-        .node.branch-else .node-circle {{
-            fill: rgba(163, 113, 247, 0.1);
-        }}
-
         .node-label {{
             font-family: inherit;
             font-size: 11px;
@@ -472,6 +481,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         const treeData = {tree_json};
 
         let selectedNodeId = null;
+        const sectionStates = {{}};  // Track collapsed state per node
         const NODE_RADIUS = 28;
         const LEVEL_HEIGHT = 120;
         const NODE_SPACING = 80;
@@ -579,7 +589,10 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             const levelActions = {{}};
 
             // Draw edges first (so they're behind nodes)
+            // For DAG support, we draw edges from parent to child by iterating children
+            // and checking parent_ids (which may contain multiple parents for merged nodes)
             const nodes = treeData.nodes || {{}};
+
             for (const [nodeId, node] of Object.entries(nodes)) {{
                 const pos = layout[nodeId];
                 if (!pos) continue;
@@ -588,7 +601,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     const childPos = layout[childId];
                     if (!childPos) continue;
 
-                    // Curved path
+                    // Curved path - all edges use same style
                     const midY = (pos.y + childPos.y) / 2;
                     const pathD = `M${{pos.x}},${{pos.y + NODE_RADIUS}} ` +
                                   `Q${{pos.x}},${{midY}} ${{childPos.x}},${{childPos.y - NODE_RADIUS}}`;
@@ -625,21 +638,14 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 const pos = layout[nodeId];
                 if (!pos) continue;
 
-                const isRoot = !node.parent_id;
+                // DAG support: check parent_ids array
+                const parentIds = node.parent_ids || (node.parent_id ? [node.parent_id] : []);
+                const isRoot = parentIds.length === 0;
                 const isSelected = nodeId === selectedNodeId;
                 const status = node.action_status || 'ok';
                 const statusClass = isRoot ? 'root' : (status === 'ok' ? 'success' : 'failed');
 
-                // Check if this is a branching node (has multiple children)
-                const isBranching = (node.children_ids || []).length > 1;
-                const branchingClass = isBranching ? 'branching' : '';
-
-                // Get branch type if available
-                const branchType = node.branch_condition?.branch_type || '';
-                const branchTypeClass = branchType ? `branch-${{branchType}}` : '';
-
-                const classes = `node ${{statusClass}} ${{isSelected ? 'selected' : ''}}` +
-                               ` ${{branchingClass}} ${{branchTypeClass}}`;
+                const classes = `node ${{statusClass}} ${{isSelected ? 'selected' : ''}}`;
                 html += `
                     <g class="${{classes.trim()}}"
                        data-node-id="${{nodeId}}"
@@ -686,7 +692,10 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 return attr;
             }}));
 
-            const isRoot = !node.parent_id;
+            // DAG support: check parent_ids array
+            const parentIds = node.parent_ids || (node.parent_id ? [node.parent_id] : []);
+            const isRoot = parentIds.length === 0;
+            const isMerged = parentIds.length > 1;
             const status = node.action_status || 'ok';
             const statusClass = isRoot ? '' : (status === 'ok' ? 'success' : 'failed');
 
@@ -710,34 +719,19 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                         `font-size: 0.9em;">${{node.action_error}}</div>`;
             }}
 
-            html += '</div>';
-
-            // Changes section (if any)
-            if (changes.length > 0) {{
-                html += `
-                    <div class="section">
-                        <div class="section-title">Changes</div>
-                        <div class="change-list">
-                `;
-
-                for (const change of changes) {{
-                    html += `
-                        <div class="change-item">
-                            <span class="attr-name">${{change.attribute}}</span>
-                            <span class="change-before">${{formatValue(change.before) || '—'}}</span>
-                            <span class="change-arrow">→</span>
-                            <span class="change-after">${{formatValue(change.after) || '—'}}</span>
-                        </div>
-                    `;
-                }}
-
-                html += '</div></div>';
+            // Show merged node info
+            if (isMerged) {{
+                html += `<div style="color: var(--text-dim); margin-top: 8px; ` +
+                        `font-size: 0.9em;">Merged node (${{parentIds.length}} parents)</div>`;
             }}
 
-            // State section
+            html += '</div>';
+
+            // SECTION 1: World State (first, collapsed by default)
             html += `
-                <div class="section">
-                    <div class="section-title">World State</div>
+                <div class="section collapsed">
+                    <div class="section-title" onclick="toggleSection(this)">World State</div>
+                    <div class="section-content">
                     <div class="attr-list" id="attr-list">
             `;
 
@@ -790,7 +784,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 html += renderAttrItem(path, data, isChanged, true);
             }}
 
-            html += '</div>';
+            html += '</div>';  // close attr-list
 
             // Other attributes (expandable)
             if (otherAttrs.length > 0) {{
@@ -808,9 +802,114 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 html += '</div>';
             }}
 
-            html += '</div>';
+            html += '</div></div>';  // close section-content and section (World State)
+
+            // SECTION 2+: Changes sections (collapsed by default)
+            if (isMerged) {{
+                // Primary parent changes (first parent)
+                if (changes.length > 0) {{
+                    const primaryParent = parentIds[0];
+                    const pLabel = primaryParent.replace('state', 'S');
+                    html += `
+                        <div class="section collapsed">
+                            <div class="section-title" onclick="toggleSection(this)">` +
+                            `Changes from ${{pLabel}}</div>
+                            <div class="section-content">
+                                <div class="change-list">
+                    `;
+                    for (const change of changes) {{
+                        html += `
+                            <div class="change-item">
+                                <span class="attr-name">${{change.attribute}}</span>
+                                <span class="change-before">${{formatValue(change.before) || '—'}}</span>
+                                <span class="change-arrow">→</span>
+                                <span class="change-after">${{formatValue(change.after) || '—'}}</span>
+                            </div>
+                        `;
+                    }}
+                    html += '</div></div></div>';
+                }}
+
+                // Additional parent changes from incoming_edges
+                if (node.incoming_edges && node.incoming_edges.length > 0) {{
+                    for (const edge of node.incoming_edges) {{
+                        const edgeChanges = (edge.changes || []).filter(c => {{
+                            const attr = c.attribute || '';
+                            return !attr.startsWith('[') && !attr.endsWith(']');
+                        }});
+                        if (edgeChanges.length > 0) {{
+                            const eLabel = edge.parent_id.replace('state', 'S');
+                            html += `
+                                <div class="section collapsed">
+                                    <div class="section-title" onclick="toggleSection(this)">` +
+                                    `Changes from ${{eLabel}}</div>
+                                    <div class="section-content">
+                                        <div class="change-list">
+                            `;
+                            for (const change of edgeChanges) {{
+                                html += `
+                                    <div class="change-item">
+                                        <span class="attr-name">${{change.attribute}}</span>
+                                        <span class="change-before">${{formatValue(change.before) || '—'}}</span>
+                                        <span class="change-arrow">→</span>
+                                        <span class="change-after">${{formatValue(change.after) || '—'}}</span>
+                                    </div>
+                                `;
+                            }}
+                            html += '</div></div></div>';
+                        }}
+                    }}
+                }}
+            }} else if (changes.length > 0) {{
+                html += `
+                    <div class="section collapsed">
+                        <div class="section-title" onclick="toggleSection(this)">Changes</div>
+                        <div class="section-content">
+                            <div class="change-list">
+                `;
+
+                for (const change of changes) {{
+                    html += `
+                        <div class="change-item">
+                            <span class="attr-name">${{change.attribute}}</span>
+                            <span class="change-before">${{formatValue(change.before) || '—'}}</span>
+                            <span class="change-arrow">→</span>
+                            <span class="change-after">${{formatValue(change.after) || '—'}}</span>
+                        </div>
+                    `;
+                }}
+
+                html += '</div></div></div>';
+            }}
 
             panel.innerHTML = html;
+
+            // Restore section states if we have saved states for this node
+            if (sectionStates[nodeId]) {{
+                const sections = document.querySelectorAll('.section');
+                const states = sectionStates[nodeId];
+                sections.forEach((s, i) => {{
+                    if (i < states.length) {{
+                        if (states[i]) {{
+                            s.classList.add('collapsed');
+                        }} else {{
+                            s.classList.remove('collapsed');
+                        }}
+                    }}
+                }});
+            }}
+        }}
+
+        function toggleSection(titleEl) {{
+            const section = titleEl.parentElement;
+            section.classList.toggle('collapsed');
+            // Save section state for current node
+            if (selectedNodeId) {{
+                const sections = document.querySelectorAll('.section');
+                const states = [];
+                sections.forEach(s => states.push(s.classList.contains('collapsed')));
+                sectionStates[selectedNodeId] = states;
+            }}
         }}
 
         function formatValue(value) {{
@@ -870,11 +969,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             if (!node) return;
 
             const tooltip = document.getElementById('tooltip');
-            const isRoot = !node.parent_id;
+            const parentIds = node.parent_ids || (node.parent_id ? [node.parent_id] : []);
+            const isMerged = parentIds.length > 1;
+
+            let mergedHint = '';
+            if (isMerged) {{
+                mergedHint = `<div style="color: var(--text-dim);">Merged (${{parentIds.length}} parents)</div>`;
+            }}
 
             tooltip.innerHTML = `
                 <div class="tooltip-title">${{nodeId}}</div>
                 <div class="tooltip-action">${{node.action_name || 'Initial State'}}</div>
+                ${{mergedHint}}
                 <div class="tooltip-hint">Click to view details</div>
             `;
 

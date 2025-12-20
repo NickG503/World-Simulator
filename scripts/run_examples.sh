@@ -108,6 +108,30 @@ echo "Flashlight turn_on → turn_off → turn_on (three-action cycle with branc
 uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off turn_on --name flashlight_cycle_branch
 
 echo ""
+echo "8. DAG STATE DEDUPLICATION (NODE MERGING)"
+echo "=========================================="
+
+echo ""
+echo "Flashlight 4-action cycle (heavy merging)..."
+uv run sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn_off turn_on turn_off --name flashlight_4cycle
+
+echo ""
+echo "Dice multi-round game (convergence after reset)..."
+uv run sim simulate --obj dice_same_attr --set cube.face=unknown --actions check_win reset check_win --name dice_multiround
+
+echo ""
+echo "Dice 5-action chain (multi-layer merging)..."
+uv run sim simulate --obj dice_same_attr --set cube.face=unknown --actions check_win reset check_win reset check_win --name dice_5actions
+
+echo ""
+echo "9. DOUBLE MERGE (TWO VISIBLE MERGE POINTS)"
+echo "=========================================="
+
+echo ""
+echo "Dice double merge (two independent attributes, two merge points)..."
+uv run sim simulate --obj dice_double_merge --set cube.face=unknown cube.color=unknown --actions roll_face reset_face roll_color reset_color --name dice_double_merge
+
+echo ""
 echo "=========================================="
 echo "GENERATING VISUALIZATIONS"
 echo "=========================================="

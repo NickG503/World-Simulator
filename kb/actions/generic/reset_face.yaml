@@ -1,0 +1,10 @@
+action: reset_face
+object_type: generic
+description: "Generic reset_face action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

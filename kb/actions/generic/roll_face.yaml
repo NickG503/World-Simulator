@@ -1,0 +1,10 @@
+action: roll_face
+object_type: generic
+description: "Generic roll_face action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

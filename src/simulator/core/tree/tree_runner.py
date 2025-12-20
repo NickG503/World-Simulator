@@ -39,18 +39,24 @@ from simulator.core.actions.action import Action
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
-from simulator.core.simulation_runner import (
-    ActionRequest,
-    AttributeSnapshot,
-    ObjectStateSnapshot,
-    PartStateSnapshot,
-)
+from simulator.core.simulation_runner import ActionRequest
 from simulator.core.tree.models import (
     BranchCondition,
     NodeStatus,
     SimulationTree,
     TreeNode,
     WorldSnapshot,
+)
+from simulator.core.tree.node_factory import (
+    compute_narrowing_change,
+    create_or_merge_node,
+)
+from simulator.core.tree.snapshot_utils import (
+    capture_snapshot,
+    capture_snapshot_with_values,
+    get_all_space_values,
+    get_attribute_space_id,
+    snapshot_with_constrained_values,
 )
 
 logger = logging.getLogger(__name__)
@@ -146,6 +152,13 @@ class TreeSimulationRunner:
         for request in action_requests:
             new_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
 
+            # Create a fresh state cache for this layer (DAG deduplication)
+            # Key: state hash, Value: (node, instance) tuple
+            layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
+
+            # Track which nodes we've already added to new_leaves (avoid duplicates)
+            seen_node_ids: set = set()
+
             for current_node, current_instance in leaves:
                 # Process action on this branch
                 results = self._process_action_multi(
@@ -155,17 +168,25 @@ class TreeSimulationRunner:
                     action_name=request.name,
                     parameters=request.parameters,
                     verbose=verbose,
+                    layer_state_cache=layer_state_cache,
                 )
 
-                # Each result becomes a new leaf
+                # Each result becomes a new leaf (but deduplicate merged nodes)
                 for result in results:
-                    new_leaves.append((result.node, result.instance or current_instance))
+                    if result.node.id not in seen_node_ids:
+                        new_leaves.append((result.node, result.instance or current_instance))
+                        seen_node_ids.add(result.node.id)
 
                 if verbose:
                     for result in results:
                         logger.info("Created node: %s", result.node.describe())
 
             leaves = new_leaves
+
+            if verbose and layer_state_cache:
+                merged_count = sum(1 for n, _ in layer_state_cache.values() if n.has_multiple_parents)
+                if merged_count > 0:
+                    logger.info("Layer deduplication: %d nodes merged", merged_count)
 
         return tree
 
@@ -181,6 +202,7 @@ class TreeSimulationRunner:
         action_name: str,
         parameters: Dict[str, str],
         verbose: bool = False,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List["ActionResult"]:
         """
         Process a single action and return results for ALL branches.
@@ -188,9 +210,17 @@ class TreeSimulationRunner:
         This ensures subsequent actions are applied to all branches,
         including failed branches (where the world state doesn't change).
 
+        DAG Deduplication:
+        - Uses layer_state_cache to track nodes by state hash
+        - If a duplicate state is found, merges into existing node
+        - Adds an incoming edge to the existing node instead of creating new one
+
         Returns:
             List of ActionResult, one for each branch created
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
         result = self._process_action(
             tree=tree,
             instance=instance,
@@ -198,6 +228,7 @@ class TreeSimulationRunner:
             action_name=action_name,
             parameters=parameters,
             verbose=verbose,
+            layer_state_cache=layer_state_cache,
         )
 
         # Check if multiple children were created (branching occurred)
@@ -236,6 +267,7 @@ class TreeSimulationRunner:
         action_name: str,
         parameters: Dict[str, str],
         verbose: bool = False,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> "ActionResult":
         """
         Process a single action and create resulting node(s).
@@ -244,6 +276,8 @@ class TreeSimulationRunner:
         - If precondition has unknown attribute → 2 branches (success/fail)
         - If postcondition has unknown attribute → N+1 branches (if/elif/else)
 
+        DAG: Uses layer_state_cache for node deduplication.
+
         Args:
             tree: The simulation tree
             instance: Current object instance
@@ -251,10 +285,13 @@ class TreeSimulationRunner:
             action_name: Name of action to execute
             parameters: Action parameters
             verbose: Log progress
+            layer_state_cache: Optional cache for deduplication
 
         Returns:
             ActionResult with the new node and optionally updated instance
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
         # Resolve action
         action = self.registry_manager.create_behavior_enhanced_action(instance.type.name, action_name)
 
@@ -299,6 +336,7 @@ class TreeSimulationRunner:
                 parameters=parameters,
                 precond_attr=precond_unknown,
                 postcond_attr=postcond_unknown,  # May be None or same as precond_attr
+                layer_state_cache=layer_state_cache,
             )
             if verbose:
                 logger.info("Created %d combined branches", len(child_nodes))
@@ -314,6 +352,7 @@ class TreeSimulationRunner:
                     parent_node=parent_node,
                     action=action,
                     parameters=parameters,
+                    layer_state_cache=layer_state_cache,
                 )
             elif postcond_unknown:
                 # Branch on postcondition: one branch per if/elif + else
@@ -326,6 +365,7 @@ class TreeSimulationRunner:
                     parameters=parameters,
                     attr_path=postcond_unknown,
                     parent_snapshot=parent_snapshot,
+                    layer_state_cache=layer_state_cache,
                 )
                 if verbose:
                     logger.info("Created %d postcondition branches", len(child_nodes))
@@ -337,6 +377,7 @@ class TreeSimulationRunner:
                     parent_node=parent_node,
                     action=action,
                     parameters=parameters,
+                    layer_state_cache=layer_state_cache,
                 )
 
         # Add the node(s) to tree
@@ -379,11 +420,13 @@ class TreeSimulationRunner:
         parent_node: TreeNode,
         action: Action,
         parameters: Dict[str, str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List[TreeNode]:
         """
         Apply an action in linear mode (Phase 1).
 
         Always returns exactly one node representing the action outcome.
+        Uses layer_state_cache for DAG deduplication.
 
         Args:
             tree: Simulation tree for node ID generation
@@ -391,10 +434,14 @@ class TreeSimulationRunner:
             parent_node: Parent node
             action: Action to apply
             parameters: Action parameters
+            layer_state_cache: Optional cache for deduplication
 
         Returns:
-            List containing single TreeNode
+            List containing single TreeNode (may be existing node if deduplicated)
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
         result = self.engine.apply_action(instance, action, parameters)
 
         # Build changes list
@@ -402,60 +449,64 @@ class TreeSimulationRunner:
 
         if result.status == "ok":
             # Success - capture new state (preserve value sets from parent)
-            new_snapshot = (
-                self._capture_snapshot(result.after, parent_node.snapshot) if result.after else parent_node.snapshot
-            )
-
+            if result.after:
+                new_snapshot = capture_snapshot(result.after, self.registry_manager, parent_node.snapshot)
+            else:
+                new_snapshot = parent_node.snapshot
             branch_condition = self._extract_postcondition_branch(action, instance)
-
-            return [
-                TreeNode(
-                    id=tree.generate_node_id(),
-                    snapshot=new_snapshot,
-                    parent_id=parent_node.id,
-                    action_name=action.name,
-                    action_parameters=parameters,
-                    action_status=NodeStatus.OK.value,
-                    branch_condition=branch_condition,
-                    changes=changes,
-                )
-            ]
+            node = create_or_merge_node(
+                tree=tree,
+                parent_node=parent_node,
+                snapshot=new_snapshot,
+                action_name=action.name,
+                parameters=parameters,
+                status=NodeStatus.OK.value,
+                error=None,
+                branch_condition=branch_condition,
+                base_changes=changes,
+                result_instance=result.after if result.after else instance,
+                layer_state_cache=layer_state_cache,
+            )
+            return [node]
 
         elif result.status == "rejected":
-            # Precondition failed
+            # Precondition failed - snapshot unchanged
             branch_condition = self._extract_precondition_failure(action, instance, result.reason)
-
-            return [
-                TreeNode(
-                    id=tree.generate_node_id(),
-                    snapshot=parent_node.snapshot,  # State unchanged
-                    parent_id=parent_node.id,
-                    action_name=action.name,
-                    action_parameters=parameters,
-                    action_status=NodeStatus.REJECTED.value,
-                    action_error=result.reason,
-                    branch_condition=branch_condition,
-                    changes=[],
-                )
-            ]
+            node = create_or_merge_node(
+                tree=tree,
+                parent_node=parent_node,
+                snapshot=parent_node.snapshot,
+                action_name=action.name,
+                parameters=parameters,
+                status=NodeStatus.REJECTED.value,
+                error=result.reason,
+                branch_condition=branch_condition,
+                base_changes=[],
+                result_instance=instance,
+                layer_state_cache=layer_state_cache,
+            )
+            return [node]
 
         else:
             # Constraint violation or other error
-            new_snapshot = (
-                self._capture_snapshot(result.after, parent_node.snapshot) if result.after else parent_node.snapshot
+            if result.after:
+                new_snapshot = capture_snapshot(result.after, self.registry_manager, parent_node.snapshot)
+            else:
+                new_snapshot = parent_node.snapshot
+            node = create_or_merge_node(
+                tree=tree,
+                parent_node=parent_node,
+                snapshot=new_snapshot,
+                action_name=action.name,
+                parameters=parameters,
+                status=result.status,
+                error=result.reason or "; ".join(result.violations),
+                branch_condition=None,
+                base_changes=changes,
+                result_instance=result.after if result.after else instance,
+                layer_state_cache=layer_state_cache,
             )
-            return [
-                TreeNode(
-                    id=tree.generate_node_id(),
-                    snapshot=new_snapshot,
-                    parent_id=parent_node.id,
-                    action_name=action.name,
-                    action_parameters=parameters,
-                    action_status=result.status,
-                    action_error=result.reason or "; ".join(result.violations),
-                    changes=changes,
-                )
-            ]
+            return [node]
 
     # =========================================================================
     # Phase 2 Extension Points (Branching)
@@ -612,84 +663,6 @@ class TreeSimulationRunner:
 
         return options
 
-    # =========================================================================
-    # Value Set Computation (Phase 2)
-    # =========================================================================
-
-    def _compute_value_set_from_trend(self, current_value: str, trend: str, space_id: str) -> List[str]:
-        """
-        Compute possible values based on trend direction.
-
-        Args:
-            current_value: Current known value (e.g., "medium")
-            trend: Trend direction ("up" or "down")
-            space_id: ID of the qualitative space
-
-        Returns:
-            List of possible values based on trend.
-            - trend "down" from "medium" → ["empty", "low", "medium"]
-            - trend "up" from "medium" → ["medium", "high", "full"]
-
-        If the space or current value is not found, returns [current_value].
-        """
-        try:
-            space = self.registry_manager.spaces.get(space_id)
-            if not space:
-                return [current_value]
-
-            levels = list(space.levels)  # Ordered from low to high
-            if current_value not in levels:
-                return [current_value]
-
-            current_idx = levels.index(current_value)
-
-            if trend == "down":
-                # All values at or below current (from lowest to current)
-                return levels[: current_idx + 1]
-            elif trend == "up":
-                # All values at or above current (from current to highest)
-                return levels[current_idx:]
-            else:
-                return [current_value]
-        except Exception:
-            return [current_value]
-
-    def _get_attribute_space_id(self, instance: ObjectInstance, attr_path: str) -> Optional[str]:
-        """
-        Get the space ID for an attribute.
-
-        Args:
-            instance: Object instance
-            attr_path: Attribute path like "battery.level"
-
-        Returns:
-            Space ID or None if not found
-        """
-        try:
-            parts = attr_path.split(".")
-            if len(parts) == 2:
-                part_name, attr_name = parts
-                part_inst = instance.parts.get(part_name)
-                if part_inst:
-                    attr_inst = part_inst.attributes.get(attr_name)
-                    if attr_inst:
-                        return attr_inst.spec.space_id
-            elif len(parts) == 1:
-                attr_inst = instance.global_attributes.get(parts[0])
-                if attr_inst:
-                    return attr_inst.spec.space_id
-        except Exception:
-            pass
-        return None
-
-    def _get_all_space_values(self, space_id: str) -> List[str]:
-        """Get all values in a space, ordered."""
-        try:
-            space = self.registry_manager.spaces.get(space_id)
-            return list(space.levels) if space else []
-        except Exception:
-            return []
-
     def _get_precondition_condition(self, action: Action):
         """Get the first precondition condition that checks an attribute."""
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
@@ -768,7 +741,7 @@ class TreeSimulationRunner:
             List of 2 TreeNodes [success_node, fail_node]
         """
         condition = self._get_precondition_condition(action)
-        space_id = self._get_attribute_space_id(instance, attr_path)
+        space_id = get_attribute_space_id(instance, attr_path)
 
         if not condition or not space_id:
             # Fallback to linear execution
@@ -783,7 +756,7 @@ class TreeSimulationRunner:
 
         if not possible_values:
             # Fall back to all space values (for explicit "unknown")
-            possible_values = self._get_all_space_values(space_id)
+            possible_values = get_all_space_values(space_id, self.registry_manager)
 
         if not possible_values:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters)
@@ -830,6 +803,7 @@ class TreeSimulationRunner:
         parameters: Dict[str, str],
         precond_attr: str,
         postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List[TreeNode]:
         """
         Create branches considering BOTH precondition and postcondition.
@@ -842,6 +816,8 @@ class TreeSimulationRunner:
            - If postcond_attr == precond_attr: intersect with pass values
            - If postcond_attr != precond_attr: split by postcondition cases
 
+        Uses layer_state_cache for DAG deduplication.
+
         Args:
             tree: Simulation tree
             instance: Current object instance
@@ -850,15 +826,18 @@ class TreeSimulationRunner:
             parameters: Action parameters
             precond_attr: Attribute path checked in precondition
             postcond_attr: Attribute path checked in postcondition (may be None or same)
+            layer_state_cache: Optional cache for deduplication
 
         Returns:
             List of branches: 1 fail + N success sub-branches
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
         condition = self._get_precondition_condition(action)
-        space_id = self._get_attribute_space_id(instance, precond_attr)
+        space_id = get_attribute_space_id(instance, precond_attr)
 
         if not condition or not space_id:
-            return self._apply_action_linear(tree, instance, parent_node, action, parameters)
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
         # Get possible values from parent snapshot or space
         possible_values: List[str] = []
@@ -868,10 +847,10 @@ class TreeSimulationRunner:
                 possible_values = list(snapshot_value)
 
         if not possible_values:
-            possible_values = self._get_all_space_values(space_id)
+            possible_values = get_all_space_values(space_id, self.registry_manager)
 
         if not possible_values:
-            return self._apply_action_linear(tree, instance, parent_node, action, parameters)
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
         # Partition into passing and failing values
         pass_values = [v for v in possible_values if self._evaluate_condition_for_value(condition, v)]
@@ -891,6 +870,7 @@ class TreeSimulationRunner:
                     parameters=parameters,
                     attr_path=precond_attr,
                     values=pass_values,
+                    layer_state_cache=layer_state_cache,
                 )
                 branches.append(success_node)
             else:
@@ -904,6 +884,7 @@ class TreeSimulationRunner:
                     precond_attr=precond_attr,
                     precond_pass_values=pass_values,
                     postcond_attr=postcond_attr,
+                    layer_state_cache=layer_state_cache,
                 )
                 branches.extend(success_branches)
 
@@ -916,6 +897,7 @@ class TreeSimulationRunner:
                 parameters=parameters,
                 attr_path=precond_attr,
                 values=fail_values,
+                layer_state_cache=layer_state_cache,
             )
             branches.append(fail_node)
 
@@ -931,6 +913,7 @@ class TreeSimulationRunner:
         precond_attr: str,
         precond_pass_values: List[str],
         postcond_attr: str,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List[TreeNode]:
         """
         Create N branches for postcondition, constrained by precondition pass values.
@@ -938,9 +921,13 @@ class TreeSimulationRunner:
         If same attribute: intersect postcondition cases with pass values.
         If different attribute: each postcondition branch has full pass values for precond_attr.
 
+        Uses layer_state_cache for DAG deduplication.
+
         Returns:
             List of N TreeNodes for success branches
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
         # Get postcondition cases from action structure
         postcond_cases = self._get_postcondition_branch_options(action, instance, postcond_attr)
 
@@ -955,6 +942,7 @@ class TreeSimulationRunner:
                     parameters=parameters,
                     attr_path=precond_attr,
                     values=precond_pass_values,
+                    layer_state_cache=layer_state_cache,
                 )
             ]
 
@@ -1004,6 +992,7 @@ class TreeSimulationRunner:
                 postcond_value=constrained_postcond_value,
                 branch_type=branch_type,
                 effects=effects,
+                layer_state_cache=layer_state_cache,
             )
             branches.append(node)
 
@@ -1022,8 +1011,15 @@ class TreeSimulationRunner:
         postcond_value: Union[str, List[str]],
         branch_type: str,
         effects: List[Any],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> TreeNode:
-        """Create a node for a postcondition case with effects applied."""
+        """Create a node for a postcondition case with effects applied.
+
+        Uses layer_state_cache for DAG deduplication.
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
         from copy import deepcopy
 
         # Clone instance and set the first pass value for action application
@@ -1053,18 +1049,18 @@ class TreeSimulationRunner:
 
         # Add narrowing changes for the constrained attributes
         # For precond_attr: narrowed from parent's value to precond_values
-        narrowing = self._compute_narrowing_change(parent_node.snapshot, precond_attr, precond_values)
+        narrowing = compute_narrowing_change(parent_node.snapshot, precond_attr, precond_values)
         if precond_attr != postcond_attr:
             # Also add narrowing for postcond_attr if different
             postcond_vals = postcond_value if isinstance(postcond_value, list) else [postcond_value]
-            narrowing.extend(self._compute_narrowing_change(parent_node.snapshot, postcond_attr, postcond_vals))
+            narrowing.extend(compute_narrowing_change(parent_node.snapshot, postcond_attr, postcond_vals))
         changes = narrowing + changes  # Put narrowing first
 
         # Use the resulting instance after effects are applied
         result_instance = action_result.after if action_result and action_result.after else new_instance
 
         # Capture snapshot then update with constrained values
-        snapshot = self._capture_snapshot(result_instance, parent_node.snapshot)
+        snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
 
         # Update the snapshot with the constrained value set for this branch
         self._update_snapshot_attribute(snapshot, precond_attr, precond_values)
@@ -1086,15 +1082,18 @@ class TreeSimulationRunner:
             branch_type=branch_type,
         )
 
-        return TreeNode(
-            id=tree.generate_node_id(),
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
             snapshot=snapshot,
-            parent_id=parent_node.id,
             action_name=action.name,
-            action_parameters=parameters,
-            action_status=NodeStatus.OK.value,
+            parameters=parameters,
+            status=NodeStatus.OK.value,
+            error=None,
             branch_condition=branch_condition,
-            changes=changes,
+            base_changes=changes,
+            result_instance=result_instance,
+            layer_state_cache=layer_state_cache,
         )
 
     def _set_attribute_values(self, instance: ObjectInstance, attr_path: str, values: List[str]) -> None:
@@ -1184,6 +1183,7 @@ class TreeSimulationRunner:
         parameters: Dict[str, str],
         attr_path: str,
         parent_snapshot: Optional[WorldSnapshot] = None,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List[TreeNode]:
         """
         Create N+1 branches for postcondition: one for each if/elif case + else.
@@ -1195,6 +1195,8 @@ class TreeSimulationRunner:
         If parent_snapshot has a value SET for attr_path, we constrain branches
         to only those values.
 
+        Uses layer_state_cache for DAG deduplication.
+
         Args:
             tree: Simulation tree
             instance: Current object instance
@@ -1203,16 +1205,19 @@ class TreeSimulationRunner:
             parameters: Action parameters
             attr_path: Path to the unknown attribute
             parent_snapshot: Optional parent snapshot (for constraining value sets)
+            layer_state_cache: Optional cache for deduplication
 
         Returns:
             List of N+1 TreeNodes
         """
+        if layer_state_cache is None:
+            layer_state_cache = {}
         # Get all branch options from action structure
         options = self._get_postcondition_branch_options(action, instance, attr_path)
 
         if not options:
             # No conditional effects, use linear execution
-            return self._apply_action_linear(tree, instance, parent_node, action, parameters)
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
         # Get constrained values from parent snapshot (if value set exists)
         constrained_values: Optional[List[str]] = None
@@ -1255,6 +1260,7 @@ class TreeSimulationRunner:
                 value=value,
                 branch_type=branch_type,
                 effects=effects,
+                layer_state_cache=layer_state_cache,
             )
             branches.append(node)
 
@@ -1269,8 +1275,15 @@ class TreeSimulationRunner:
         parameters: Dict[str, str],
         attr_path: str,
         values: List[str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> TreeNode:
-        """Create a success branch node (precondition passed)."""
+        """Create a success branch node (precondition passed).
+
+        Uses layer_state_cache for DAG deduplication.
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
         # Clone instance with the constrained values
         modified_instance = self._clone_instance_with_values(instance, attr_path, values)
 
@@ -1279,14 +1292,15 @@ class TreeSimulationRunner:
         changes = self._build_changes_list(result.changes)
 
         # Add narrowing change if the value actually narrowed
-        narrowing = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+        narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
         changes = narrowing + changes  # Put narrowing first
 
         # Capture the new state (pass parent snapshot for trend-based value set computation)
-        new_snapshot = self._capture_snapshot_with_values(
+        new_snapshot = capture_snapshot_with_values(
             result.after if result.after else modified_instance,
             attr_path,
             values,
+            self.registry_manager,
             parent_node.snapshot,
         )
 
@@ -1294,21 +1308,26 @@ class TreeSimulationRunner:
         operator = "in" if len(values) > 1 else "equals"
         value = values if len(values) > 1 else values[0]
 
-        return TreeNode(
-            id=tree.generate_node_id(),
+        branch_condition = BranchCondition(
+            attribute=attr_path,
+            operator=operator,
+            value=value,
+            source="precondition",
+            branch_type="success",
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
             snapshot=new_snapshot,
-            parent_id=parent_node.id,
             action_name=action.name,
-            action_parameters=parameters,
-            action_status=NodeStatus.OK.value,
-            branch_condition=BranchCondition(
-                attribute=attr_path,
-                operator=operator,
-                value=value,
-                source="precondition",
-                branch_type="success",
-            ),
-            changes=changes,
+            parameters=parameters,
+            status=NodeStatus.OK.value,
+            error=None,
+            branch_condition=branch_condition,
+            base_changes=changes,
+            result_instance=result.after if result.after else modified_instance,
+            layer_state_cache=layer_state_cache,
         )
 
     def _create_branch_fail_node(
@@ -1319,10 +1338,20 @@ class TreeSimulationRunner:
         parameters: Dict[str, str],
         attr_path: str,
         values: List[str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> TreeNode:
-        """Create a fail branch node (precondition failed)."""
-        # Capture snapshot with constrained values (state unchanged, but values narrowed)
-        new_snapshot = self._snapshot_with_constrained_values(parent_node.snapshot, attr_path, values)
+        """Create a fail branch node (precondition failed).
+
+        Uses layer_state_cache for DAG deduplication.
+        Also enforces constraints (e.g., if battery=empty, bulb turns off).
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        # Capture snapshot with constrained values and enforce constraints
+        new_snapshot, constraint_changes = snapshot_with_constrained_values(
+            parent_node.snapshot, attr_path, values, self.registry_manager
+        )
 
         operator = "in" if len(values) > 1 else "equals"
         value = values if len(values) > 1 else values[0]
@@ -1331,24 +1360,39 @@ class TreeSimulationRunner:
         error_msg = self._build_precondition_error(action, attr_path, values)
 
         # Include the narrowing as a change if the value actually changed
-        changes = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+        changes = compute_narrowing_change(parent_node.snapshot, attr_path, values)
 
-        return TreeNode(
-            id=tree.generate_node_id(),
+        # Add constraint-induced changes (already in before/after format)
+        for cc in constraint_changes:
+            changes.append(
+                {
+                    "attribute": cc["attribute"],
+                    "before": cc["before"],
+                    "after": cc["after"],
+                    "kind": cc.get("kind", "constraint"),
+                }
+            )
+
+        branch_condition = BranchCondition(
+            attribute=attr_path,
+            operator=operator,
+            value=value,
+            source="precondition",
+            branch_type="fail",
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
             snapshot=new_snapshot,
-            parent_id=parent_node.id,
             action_name=action.name,
-            action_parameters=parameters,
-            action_status=NodeStatus.REJECTED.value,
-            action_error=error_msg,
-            branch_condition=BranchCondition(
-                attribute=attr_path,
-                operator=operator,
-                value=value,
-                source="precondition",
-                branch_type="fail",
-            ),
-            changes=changes,
+            parameters=parameters,
+            status=NodeStatus.REJECTED.value,
+            error=error_msg,
+            branch_condition=branch_condition,
+            base_changes=changes,
+            result_instance=None,  # No changes made for failed nodes
+            layer_state_cache=layer_state_cache,
         )
 
     def _create_branch_case_node(
@@ -1362,8 +1406,15 @@ class TreeSimulationRunner:
         value: Union[str, List[str]],
         branch_type: str,
         effects: Any,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> TreeNode:
-        """Create a branch node for a postcondition case (if/elif/else)."""
+        """Create a branch node for a postcondition case (if/elif/else).
+
+        Uses layer_state_cache for DAG deduplication.
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
         # Clone instance with the specific value(s)
         values = value if isinstance(value, list) else [value]
         modified_instance = self._clone_instance_with_values(instance, attr_path, values)
@@ -1373,34 +1424,40 @@ class TreeSimulationRunner:
         changes = self._build_changes_list(result.changes)
 
         # Add narrowing change if the value actually narrowed
-        narrowing = self._compute_narrowing_change(parent_node.snapshot, attr_path, values)
+        narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
         changes = narrowing + changes  # Put narrowing first
 
         # Capture new state (pass parent snapshot for trend-based value set computation)
-        new_snapshot = self._capture_snapshot_with_values(
+        new_snapshot = capture_snapshot_with_values(
             result.after if result.after else modified_instance,
             attr_path,
             values,
+            self.registry_manager,
             parent_node.snapshot,
         )
 
         operator = "in" if isinstance(value, list) else "equals"
 
-        return TreeNode(
-            id=tree.generate_node_id(),
+        branch_condition = BranchCondition(
+            attribute=attr_path,
+            operator=operator,
+            value=value,
+            source="postcondition",
+            branch_type=branch_type,
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
             snapshot=new_snapshot,
-            parent_id=parent_node.id,
             action_name=action.name,
-            action_parameters=parameters,
-            action_status=NodeStatus.OK.value,
-            branch_condition=BranchCondition(
-                attribute=attr_path,
-                operator=operator,
-                value=value,
-                source="postcondition",
-                branch_type=branch_type,
-            ),
-            changes=changes,
+            parameters=parameters,
+            status=NodeStatus.OK.value,
+            error=None,
+            branch_condition=branch_condition,
+            base_changes=changes,
+            result_instance=result.after if result.after else modified_instance,
+            layer_state_cache=layer_state_cache,
         )
 
     def _clone_instance_with_values(
@@ -1433,77 +1490,6 @@ class TreeSimulationRunner:
 
         return new_instance
 
-    def _capture_snapshot_with_values(
-        self,
-        instance: ObjectInstance,
-        attr_path: str,
-        values: List[str],
-        parent_snapshot: Optional[WorldSnapshot] = None,
-    ) -> WorldSnapshot:
-        """
-        Capture a snapshot, preserving trend-based value sets.
-
-        The `values` parameter is used for branch condition tracking, but the
-        snapshot's actual value is computed by `_capture_snapshot` which considers
-        trends. If a trend produces a value SET, we preserve it rather than
-        overriding with a single value.
-
-        Only override the value if:
-        - `_capture_snapshot` returned a single value (no active trend), OR
-        - We need to constrain to multiple explicit values
-        """
-        snapshot = self._capture_snapshot(instance, parent_snapshot)
-
-        # Check if _capture_snapshot already computed a value set from trend
-        # If so, don't override it - the trend-based set is more accurate
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            if part_name in snapshot.object_state.parts:
-                attr = snapshot.object_state.parts[part_name].attributes.get(attr_name)
-                if attr:
-                    # Only override if snapshot has single value AND we have multiple constraint values
-                    # OR if snapshot has single value and we want a single value
-                    current_is_set = isinstance(attr.value, list)
-                    if not current_is_set:
-                        # Snapshot has single value, can override with constraint
-                        attr.value = values[0] if len(values) == 1 else values
-                    # If snapshot already has a set (from trend), preserve it
-        elif len(parts) == 1:
-            attr = snapshot.object_state.global_attributes.get(parts[0])
-            if attr:
-                current_is_set = isinstance(attr.value, list)
-                if not current_is_set:
-                    attr.value = values[0] if len(values) == 1 else values
-
-        return snapshot
-
-    def _snapshot_with_constrained_values(
-        self, snapshot: WorldSnapshot, attr_path: str, values: List[str]
-    ) -> WorldSnapshot:
-        """
-        Create a copy of a snapshot with attribute values constrained.
-
-        Used for fail branches where state doesn't change but values are narrowed.
-        """
-        from copy import deepcopy
-
-        new_snapshot = deepcopy(snapshot)
-
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            if part_name in new_snapshot.object_state.parts:
-                attr = new_snapshot.object_state.parts[part_name].attributes.get(attr_name)
-                if attr:
-                    attr.value = values[0] if len(values) == 1 else values
-        elif len(parts) == 1:
-            attr = new_snapshot.object_state.global_attributes.get(parts[0])
-            if attr:
-                attr.value = values[0] if len(values) == 1 else values
-
-        return new_snapshot
-
     # =========================================================================
     # Node Creation Helpers
     # =========================================================================
@@ -1512,7 +1498,7 @@ class TreeSimulationRunner:
         """Create the root node with initial state."""
         return TreeNode(
             id=tree.generate_node_id(),  # state0
-            snapshot=self._capture_snapshot(instance),
+            snapshot=capture_snapshot(instance, self.registry_manager),
             action_name=None,  # Root has no action
         )
 
@@ -1528,8 +1514,8 @@ class TreeSimulationRunner:
         """Create an error node for action failures."""
         return TreeNode(
             id=tree.generate_node_id(),
-            snapshot=self._capture_snapshot(instance, parent_node.snapshot),
-            parent_id=parent_node.id,
+            snapshot=capture_snapshot(instance, self.registry_manager, parent_node.snapshot),
+            parent_ids=[parent_node.id],
             action_name=action_name,
             action_parameters=parameters,
             action_status=NodeStatus.ERROR.value,
@@ -1595,93 +1581,6 @@ class TreeSimulationRunner:
                     pass
 
         return None
-
-    # =========================================================================
-    # State Capture
-    # =========================================================================
-
-    def _capture_snapshot(
-        self, obj_instance: ObjectInstance, parent_snapshot: Optional[WorldSnapshot] = None
-    ) -> WorldSnapshot:
-        """
-        Capture the current object state as a WorldSnapshot.
-
-        When an attribute has an active trend (not "none"), its value becomes a
-        value SET representing all possible values the trend could produce.
-        - trend "down" from "medium" → ["empty", "low", "medium"]
-        - trend "up" from "low" → ["low", "medium", "high", "full"]
-
-        Value sets are preserved from parent snapshot if the action only clears
-        the trend without setting a new specific value.
-        """
-        parts: Dict[str, PartStateSnapshot] = {}
-
-        for part_name, part_instance in obj_instance.parts.items():
-            attrs: Dict[str, AttributeSnapshot] = {}
-            for attr_name, attr_instance in part_instance.attributes.items():
-                attr_path = f"{part_name}.{attr_name}"
-                value = self._compute_value_with_trend(attr_instance, attr_path, parent_snapshot)
-                attrs[attr_name] = AttributeSnapshot(
-                    value=value,
-                    trend=attr_instance.trend,
-                    last_known_value=attr_instance.last_known_value,
-                    last_trend_direction=attr_instance.last_trend_direction,
-                    space_id=attr_instance.spec.space_id,
-                )
-            parts[part_name] = PartStateSnapshot(attributes=attrs)
-
-        global_attrs: Dict[str, AttributeSnapshot] = {}
-        for attr_name, attr_instance in obj_instance.global_attributes.items():
-            value = self._compute_value_with_trend(attr_instance, attr_name, parent_snapshot)
-            global_attrs[attr_name] = AttributeSnapshot(
-                value=value,
-                trend=attr_instance.trend,
-                last_known_value=attr_instance.last_known_value,
-                last_trend_direction=attr_instance.last_trend_direction,
-                space_id=attr_instance.spec.space_id,
-            )
-
-        object_state = ObjectStateSnapshot(
-            type=obj_instance.type.name,
-            parts=parts,
-            global_attributes=global_attrs,
-        )
-
-        return WorldSnapshot(object_state=object_state)
-
-    def _compute_value_with_trend(
-        self, attr_instance, attr_path: str, parent_snapshot: Optional[WorldSnapshot] = None
-    ) -> Union[str, List[str]]:
-        """
-        Compute the value for an attribute, considering its trend and parent value set.
-
-        - If the attribute has an active trend (up/down), returns a value set
-        - If parent had a value set and this action didn't set a new concrete value,
-          preserve the value set
-        - Otherwise returns the single current value
-        """
-        current_value = attr_instance.current_value
-        trend = attr_instance.trend
-        space_id = attr_instance.spec.space_id
-
-        # If there's an active trend, compute value set
-        if trend and trend != "none" and current_value != "unknown":
-            if space_id:
-                value_set = self._compute_value_set_from_trend(current_value, trend, space_id)
-                if len(value_set) > 1:
-                    return value_set
-
-        # If parent had a value set and current value matches the original,
-        # preserve the value set (action only cleared trend, didn't set new value)
-        if parent_snapshot:
-            parent_value = parent_snapshot.get_attribute_value(attr_path)
-            if isinstance(parent_value, list) and len(parent_value) > 1:
-                # Check if current value is in the parent's value set
-                # (meaning the action didn't set a specific new value)
-                if current_value in parent_value or current_value == attr_instance.last_known_value:
-                    return parent_value
-
-        return current_value
 
     # =========================================================================
     # Utilities
@@ -1759,46 +1658,6 @@ class TreeSimulationRunner:
         # Fallback if condition not found
         actual_str = actual_values[0] if len(actual_values) == 1 else "{" + ", ".join(actual_values) + "}"
         return f"Precondition failed: {attr_path} (actual: {actual_str})"
-
-    def _compute_narrowing_change(
-        self, parent_snapshot: WorldSnapshot, attr_path: str, new_values: List[str]
-    ) -> List[Dict[str, Any]]:
-        """
-        Compute the change entry for attribute value narrowing during branching.
-
-        Only returns a change if the value actually narrowed (e.g., from value set to single value,
-        or from 'unknown' to a specific value).
-
-        Returns:
-            List with single change dict, or empty list if no narrowing occurred.
-        """
-        # Get parent's value for this attribute
-        parent_value = parent_snapshot.get_attribute_value(attr_path)
-
-        # Format the new value
-        if len(new_values) == 1:
-            new_value = new_values[0]
-        else:
-            new_value = new_values  # Keep as list for value sets
-
-        # Format the parent value for comparison
-        if isinstance(parent_value, list):
-            parent_display = parent_value
-        else:
-            parent_display = parent_value
-
-        # Only include as change if values are different
-        if parent_display != new_value:
-            return [
-                {
-                    "attribute": attr_path,
-                    "before": parent_display,
-                    "after": new_value,
-                    "kind": "value",
-                }
-            ]
-
-        return []
 
     # =========================================================================
     # Serialization

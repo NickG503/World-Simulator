@@ -61,6 +61,31 @@ A simulation engine for modeling object state transitions using a tree-based exe
   - One else branch with remaining values as a set
 - **Maximum branches per action**: 2 × (postcondition_cases + 1)
 
+### 2024-12-19: DAG State Deduplication
+
+**Decision:** Convert tree to DAG by merging nodes with identical world states.
+
+**Rationale:**
+- Reduce exponential node growth in multi-level branching simulations
+- Eliminate redundant computation for convergent paths
+- Preserve all transition paths while reducing memory footprint
+
+**Key Changes:**
+1. Added `IncomingEdge` model to track changes from each parent separately
+2. Changed `TreeNode.parent_id` to `TreeNode.parent_ids: List[str]`
+3. Added `WorldSnapshot.state_hash()` for canonical state representation
+4. Implemented layer-scoped state cache during action processing
+5. Updated visualization to show "Changes from Sx" sections for merged nodes
+
+**Deduplication Rules:**
+- State hash computed from all attribute values and trends (excluding timestamps)
+- Only nodes in the same layer (same action step) can merge
+- Each incoming edge preserves its own: changes, branch_condition, action_status
+- First parent's edge data stored in node fields, additional in `incoming_edges` list
+
+**Results:**
+- `turn_on → turn_off → turn_on` with unknown battery: 26 nodes → 16 nodes (38% reduction)
+
 ---
 
 ## Project Structure
@@ -152,13 +177,23 @@ Immutable state capture at a point in time.
 - `is_attribute_value_set(path)` - Check if value is a set
 - `get_single_value(path)` - Get value as single string
 - `get_all_attribute_paths()` - List all attributes
+- `state_hash()` - Compute canonical hash for deduplication (DAG support)
 
 #### `TreeNode`
-Single node in simulation tree.
-- `is_root`, `is_leaf`, `succeeded`, `failed` properties
+Single node in simulation DAG.
+- `parent_ids: List[str]` - List of parent node IDs (DAG support)
+- `incoming_edges: List[IncomingEdge]` - Additional incoming edges (for merged nodes)
+- `is_root`, `is_leaf`, `succeeded`, `failed`, `has_multiple_parents` properties
+- `parent_id` property - Returns first parent (backward compatibility)
 - `describe()` - Human-readable description
 - `get_changed_attributes()` - List of changed attribute paths
-- `branch_condition` - BranchCondition that led to this node
+- `branch_condition` - BranchCondition that led to this node (primary edge)
+
+#### `IncomingEdge`
+Represents an incoming edge from a parent in a DAG.
+- `parent_id`, `action_name`, `action_parameters`, `action_status`
+- `action_error`, `branch_condition`, `changes`
+- Used when multiple paths lead to the same world state
 
 #### `BranchCondition`
 Describes what condition led to a branch.
@@ -315,9 +350,27 @@ sim visualize <history.yaml> --no-open    # Don't auto-open browser
 - [x] Failed branch state propagation - constrained values persist to subsequent actions
 - [x] Delta display for failed actions - shows only branch_condition attribute as relevant
 
+### Phase 3: DAG State Deduplication (Dec 2024)
+- [x] Converted tree structure to DAG (Directed Acyclic Graph)
+- [x] Layer-scoped state deduplication - nodes with identical world states merge
+- [x] `IncomingEdge` model tracks changes from each parent separately
+- [x] `TreeNode.parent_ids: List[str]` replaces `parent_id: Optional[str]`
+- [x] `WorldSnapshot.state_hash()` for canonical state hashing
+- [x] Visualization shows "Changes from Sx" sections for merged nodes
+- [x] Collapsible sections in visualization (click to expand/collapse)
+- [x] Section state persistence per node
+- [x] Multi-layer merging demonstrated (dice 5-action example: 8 nodes instead of 15+)
+- [x] `turn_off` precondition added: requires `switch.position == on`
+- [x] `dice.reset` now resets `cube.face` to enable convergence demos
+- [x] Constraint enforcement: when battery=empty, bulb automatically turns off
+- [x] **Refactoring**: `tree_runner.py` split into modules (2308→1696 lines, ~27% reduction)
+  - `constraints.py` (225 lines) - constraint enforcement logic
+  - `snapshot_utils.py` (320 lines) - snapshot manipulation utilities
+  - `node_factory.py` (216 lines) - node creation/merging
+- [x] ~40% reduction in nodes for multi-level branching simulations
+
 ### Planned Features
 - [ ] Interactive branch exploration in visualization
-- [ ] Branch pruning/merging strategies
 - [ ] Parallel branch evaluation
 - [ ] Export tree as DOT graph format
 

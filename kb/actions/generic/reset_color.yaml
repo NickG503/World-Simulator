@@ -1,0 +1,10 @@
+action: reset_color
+object_type: generic
+description: "Generic reset_color action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
+

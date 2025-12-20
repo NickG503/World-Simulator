@@ -163,6 +163,53 @@ class WorldSnapshot(BaseModel):
 
         return paths
 
+    def state_hash(self) -> str:
+        """
+        Compute a canonical hash of the world state for deduplication.
+
+        This creates a deterministic string representation of all attribute
+        values and trends that can be used as a dictionary key.
+
+        Excludes:
+        - Timestamps (non-semantic metadata)
+        - space_id (structural, not state)
+        - last_known_value, last_trend_direction (historical, not current state)
+        """
+        import hashlib
+        import json
+
+        state_parts = []
+
+        # Object type
+        state_parts.append(f"type:{self.object_state.type}")
+
+        # Process part attributes in sorted order for determinism
+        for part_name in sorted(self.object_state.parts.keys()):
+            part = self.object_state.parts[part_name]
+            for attr_name in sorted(part.attributes.keys()):
+                attr = part.attributes[attr_name]
+                # Normalize value: convert list to sorted tuple for consistent hashing
+                if isinstance(attr.value, list):
+                    value_repr = json.dumps(sorted(attr.value))
+                else:
+                    value_repr = str(attr.value)
+                trend = attr.trend or "none"
+                state_parts.append(f"{part_name}.{attr_name}:{value_repr}:{trend}")
+
+        # Process global attributes in sorted order
+        for attr_name in sorted(self.object_state.global_attributes.keys()):
+            attr = self.object_state.global_attributes[attr_name]
+            if isinstance(attr.value, list):
+                value_repr = json.dumps(sorted(attr.value))
+            else:
+                value_repr = str(attr.value)
+            trend = attr.trend or "none"
+            state_parts.append(f"global.{attr_name}:{value_repr}:{trend}")
+
+        # Create deterministic string and hash it
+        canonical = "|".join(state_parts)
+        return hashlib.sha256(canonical.encode()).hexdigest()[:16]
+
 
 class BranchCondition(BaseModel):
     """
@@ -244,35 +291,74 @@ class BranchCondition(BaseModel):
         return False
 
 
+class IncomingEdge(BaseModel):
+    """
+    Represents an incoming edge from a parent node in a DAG structure.
+
+    When multiple paths lead to the same world state, we merge nodes
+    and track each incoming edge separately with its own transition metadata.
+    """
+
+    parent_id: str
+    action_name: str
+    action_parameters: Dict[str, str] = Field(default_factory=dict)
+    action_status: str = "ok"
+    action_error: Optional[str] = None
+    branch_condition: Optional[BranchCondition] = None
+    changes: List[Dict[str, Any]] = Field(default_factory=list)
+
+
 class TreeNode(BaseModel):
     """
-    A node in the simulation tree.
+    A node in the simulation DAG.
 
-    Each node represents a world state and the action that led to it.
-    The root node has no parent and no action (it's the initial state).
+    Each node represents a world state and the action(s) that led to it.
+    The root node has no parents and no action (it's the initial state).
+
+    DAG Support:
+    - Multiple parent nodes can lead to the same world state
+    - Each incoming edge tracks its own transition metadata (changes, branch condition)
+    - The primary edge's metadata is stored in action_name, action_status, etc.
+    - Additional edges are stored in incoming_edges list
     """
 
     id: str  # Sequential ID: state0, state1, etc.
     snapshot: WorldSnapshot
-    parent_id: Optional[str] = None
+
+    # DAG support: multiple parents possible
+    parent_ids: List[str] = Field(default_factory=list)
     children_ids: List[str] = Field(default_factory=list)
 
-    # Action information (None for root node)
+    # Incoming edges from multiple parents (for DAG merging)
+    # Each edge tracks: parent_id, action_name, action_status, changes, branch_condition
+    incoming_edges: List[IncomingEdge] = Field(default_factory=list)
+
+    # Action information for the PRIMARY edge (first parent) - None for root node
     action_name: Optional[str] = None
     action_parameters: Dict[str, str] = Field(default_factory=dict)
     action_status: str = "ok"  # ok, rejected, constraint_violated, error
     action_error: Optional[str] = None
 
-    # Branch information - what condition led to this node
+    # Branch information - what condition led to this node (for primary edge)
     branch_condition: Optional[BranchCondition] = None
 
-    # Changes applied in this transition
+    # Changes applied in this transition (for primary edge)
     changes: List[Dict[str, Any]] = Field(default_factory=list)
 
     @property
     def is_root(self) -> bool:
         """Check if this is the root node (initial state)."""
-        return self.parent_id is None
+        return len(self.parent_ids) == 0
+
+    @property
+    def parent_id(self) -> Optional[str]:
+        """Get the primary parent ID (first parent for backward compatibility)."""
+        return self.parent_ids[0] if self.parent_ids else None
+
+    @property
+    def has_multiple_parents(self) -> bool:
+        """Check if this node has multiple incoming edges (merged node)."""
+        return len(self.parent_ids) > 1
 
     @property
     def is_leaf(self) -> bool:
@@ -382,11 +468,11 @@ class SimulationTree(BaseModel):
 
     def add_node(self, node: TreeNode) -> None:
         """
-        Add a node to the tree.
+        Add a node to the DAG.
 
         Automatically handles:
         - Setting root_id for root nodes
-        - Updating parent's children list
+        - Updating parent's children list (all parents for DAG)
         - Tracking current path (Phase 1)
         """
         self.nodes[node.id] = node
@@ -395,11 +481,12 @@ class SimulationTree(BaseModel):
             self.root_id = node.id
             self.current_path = [node.id]
         else:
-            # Update parent's children list
-            if node.parent_id and node.parent_id in self.nodes:
-                parent = self.nodes[node.parent_id]
-                if node.id not in parent.children_ids:
-                    parent.children_ids.append(node.id)
+            # Update all parents' children lists (DAG support)
+            for pid in node.parent_ids:
+                if pid in self.nodes:
+                    parent = self.nodes[pid]
+                    if node.id not in parent.children_ids:
+                        parent.children_ids.append(node.id)
 
             # Add to current path (Phase 1: linear)
             self.current_path.append(node.id)
@@ -412,7 +499,9 @@ class SimulationTree(BaseModel):
         only be called with a single node.
         """
         for node in nodes:
-            node.parent_id = parent_id
+            # Set parent_ids if not already set
+            if parent_id not in node.parent_ids:
+                node.parent_ids.append(parent_id)
             self.nodes[node.id] = node
 
             if parent_id in self.nodes:
@@ -423,6 +512,36 @@ class SimulationTree(BaseModel):
         # Phase 1: Only add first node to current path
         if nodes:
             self.current_path.append(nodes[0].id)
+
+    def add_edge_to_existing_node(self, existing_node_id: str, parent_id: str, edge: IncomingEdge) -> None:
+        """
+        Add an additional incoming edge to an existing node (DAG merging).
+
+        This is called when a new branch would create a duplicate node.
+        Instead of creating a new node, we add an edge from the new parent
+        to the existing node.
+
+        Args:
+            existing_node_id: ID of the existing node to merge into
+            parent_id: ID of the new parent node
+            edge: The incoming edge with transition metadata
+        """
+        node = self.nodes.get(existing_node_id)
+        if not node:
+            return
+
+        # Add parent if not already present
+        if parent_id not in node.parent_ids:
+            node.parent_ids.append(parent_id)
+
+        # Add the incoming edge
+        node.incoming_edges.append(edge)
+
+        # Update parent's children list
+        if parent_id in self.nodes:
+            parent = self.nodes[parent_id]
+            if existing_node_id not in parent.children_ids:
+                parent.children_ids.append(existing_node_id)
 
     # =========================================================================
     # Tree Traversal
@@ -522,6 +641,15 @@ class SimulationTree(BaseModel):
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert tree to dictionary for YAML serialization."""
+        # Custom serialization to handle DAG structure
+        nodes_dict = {}
+        for node_id, node in self.nodes.items():
+            node_data = node.model_dump()
+            # Ensure incoming_edges is included
+            if node.incoming_edges:
+                node_data["incoming_edges"] = [e.model_dump() for e in node.incoming_edges]
+            nodes_dict[node_id] = node_data
+
         return {
             "simulation_id": self.simulation_id,
             "object_type": self.object_type,
@@ -531,13 +659,22 @@ class SimulationTree(BaseModel):
             "actions": self.actions,
             "root_id": self.root_id,
             "current_path": self.current_path,
-            "nodes": {node_id: node.model_dump() for node_id, node in self.nodes.items()},
+            "nodes": nodes_dict,
         }
+
+    def count_merged_nodes(self) -> int:
+        """Count nodes with multiple parents (merged nodes)."""
+        return sum(1 for n in self.nodes.values() if n.has_multiple_parents)
+
+    def count_edges(self) -> int:
+        """Count total number of edges in the DAG."""
+        return sum(len(n.parent_ids) for n in self.nodes.values())
 
 
 __all__ = [
     "BranchCondition",
     "BranchSource",
+    "IncomingEdge",
     "NodeStatus",
     "SimulationTree",
     "TreeNode",
