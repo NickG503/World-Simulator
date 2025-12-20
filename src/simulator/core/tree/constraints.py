@@ -1,38 +1,22 @@
-"""
-Constraint enforcement for tree simulation.
-
-This module handles enforcing object constraints during simulation,
-particularly when branching creates states that may violate constraints.
-"""
+"""Constraint enforcement for tree simulation."""
 
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 
+from simulator.core.attributes import AttributePath
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.tree.models import WorldSnapshot
+from simulator.core.types import ChangeDict
 
 
 def enforce_constraints(
     snapshot: WorldSnapshot,
     object_type_name: str,
     registry_manager: RegistryManager,
-) -> Tuple[WorldSnapshot, List[Dict[str, Any]]]:
-    """
-    Enforce all constraints on a snapshot, modifying it if needed.
-
-    For DependencyConstraints: if condition is true but requires is false,
-    modify the snapshot to make condition false.
-
-    Args:
-        snapshot: The world snapshot to check and modify
-        object_type_name: Name of the object type (to get constraints)
-        registry_manager: Registry manager for accessing object types and spaces
-
-    Returns:
-        Tuple of (modified_snapshot, list of changes made)
-    """
+) -> Tuple[WorldSnapshot, List[ChangeDict]]:
+    """Enforce constraints on snapshot, returning modified snapshot and changes."""
     from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
     from simulator.core.constraints.constraint import DependencyConstraint
 
@@ -40,7 +24,7 @@ def enforce_constraints(
     if not obj_type or not obj_type.compiled_constraints:
         return snapshot, []
 
-    changes: List[Dict[str, Any]] = []
+    changes: List[ChangeDict] = []
     modified = deepcopy(snapshot)
 
     for constraint in obj_type.compiled_constraints:
@@ -98,45 +82,17 @@ def enforce_constraints(
 
 def get_snapshot_value(snapshot: WorldSnapshot, attr_path: str) -> Any:
     """Get attribute value from snapshot."""
-    parts = attr_path.split(".")
-    if len(parts) == 2:
-        part_name, attr_name = parts
-        if part_name in snapshot.object_state.parts:
-            attr = snapshot.object_state.parts[part_name].attributes.get(attr_name)
-            if attr:
-                return attr.value
-    elif len(parts) == 1:
-        attr = snapshot.object_state.global_attributes.get(parts[0])
-        if attr:
-            return attr.value
-    return None
+    return AttributePath.parse(attr_path).get_value_from_snapshot(snapshot)
 
 
 def set_snapshot_value(snapshot: WorldSnapshot, attr_path: str, value: Any) -> None:
     """Set attribute value in snapshot."""
-    parts = attr_path.split(".")
-    if len(parts) == 2:
-        part_name, attr_name = parts
-        if part_name in snapshot.object_state.parts:
-            attr = snapshot.object_state.parts[part_name].attributes.get(attr_name)
-            if attr:
-                attr.value = value
-    elif len(parts) == 1:
-        attr = snapshot.object_state.global_attributes.get(parts[0])
-        if attr:
-            attr.value = value
+    AttributePath.parse(attr_path).set_value_in_snapshot(snapshot, value)
 
 
 def get_snapshot_attr(snapshot: WorldSnapshot, attr_path: str):
     """Get attribute object from snapshot (for accessing space_id, trend, etc.)."""
-    parts = attr_path.split(".")
-    if len(parts) == 2:
-        part_name, attr_name = parts
-        if part_name in snapshot.object_state.parts:
-            return snapshot.object_state.parts[part_name].attributes.get(attr_name)
-    elif len(parts) == 1:
-        return snapshot.object_state.global_attributes.get(parts[0])
-    return None
+    return AttributePath.parse(attr_path).resolve_from_snapshot(snapshot)
 
 
 def _evaluate_condition(condition, value: Any) -> bool:
@@ -186,17 +142,9 @@ def _get_opposite_value(
     return None
 
 
-def _apply_related_effects(snapshot: WorldSnapshot, attr_path: str, new_value: str) -> List[Dict[str, Any]]:
-    """
-    Apply related effects when an attribute changes due to constraint enforcement.
-
-    This handles implicit relationships not captured in explicit constraints.
-    For example: when bulb.state='off', brightness should be 'none'.
-
-    Note: This could be made more generic by defining these relationships in YAML.
-    For now, we handle known cases explicitly.
-    """
-    changes: List[Dict[str, Any]] = []
+def _apply_related_effects(snapshot: WorldSnapshot, attr_path: str, new_value: str) -> List[ChangeDict]:
+    """Apply related effects when an attribute changes due to constraint enforcement."""
+    changes: List[ChangeDict] = []
 
     # When bulb turns off, brightness becomes none
     if attr_path == "bulb.state" and new_value == "off":

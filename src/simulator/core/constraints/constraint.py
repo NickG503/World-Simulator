@@ -9,7 +9,6 @@ from pydantic import BaseModel
 
 from simulator.core.actions.conditions.base import Condition
 from simulator.core.actions.specs import build_condition_from_raw
-from simulator.core.engine.condition_evaluator import ConditionEvaluator
 from simulator.core.engine.context import EvaluationContext
 from simulator.core.objects import ObjectInstance
 
@@ -38,32 +37,21 @@ class DependencyConstraint(Constraint):
     requires: Condition  # Structured condition
 
     def evaluate(self, instance: ObjectInstance, registries=None) -> bool:
-        """Check if dependency constraint is satisfied using structured conditions."""
+        """Check if dependency constraint is satisfied."""
         if registries is None:
             raise ValueError("registries required to evaluate constraints")
-        evaluator = ConditionEvaluator()
         ctx = EvaluationContext(instance=instance, action=None, parameters={}, registries=registries)
-        condition_met = evaluator.evaluate(self.condition, ctx)
-        if not condition_met:
-            # If condition is false, constraint is trivially satisfied
-            return True
-        # Condition is true, so requirement must also be true
-        return evaluator.evaluate(self.requires, ctx)
+        if not self.condition.evaluate(ctx):
+            return True  # Condition false = constraint trivially satisfied
+        return self.requires.evaluate(ctx)
 
     def describe(self) -> str:
         def _cond_to_text(c: Condition) -> str:
             from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+            from simulator.utils.error_formatting import get_operator_symbol
 
             if isinstance(c, AttributeCondition):
-                op_map = {
-                    "equals": "==",
-                    "not_equals": "!=",
-                    "lt": "<",
-                    "lte": "<=",
-                    "gt": ">",
-                    "gte": ">=",
-                }
-                op = op_map.get(c.operator, c.operator)
+                op = get_operator_symbol(c.operator)
                 return f"{c.target.to_string()} {op} {c.value}"
             return c.__class__.__name__
 

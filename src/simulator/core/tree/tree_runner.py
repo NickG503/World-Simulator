@@ -1,34 +1,15 @@
 """
 Tree-based simulation runner.
 
-This module provides the TreeSimulationRunner which executes simulations
-building a tree structure. Each node represents a world state and each
-edge represents an action transition.
-
-Architecture:
-------------
-Phase 1 (Current): Linear execution
-    - All attribute values are known
-    - Single path through tree
-    - Each action produces exactly one child node
-
-Phase 2 (Future): Branching on unknowns
-    - When a precondition checks an unknown attribute:
-        → Branch into success/fail paths
-    - When a postcondition (if/elif/else) checks an unknown attribute:
-        → Branch into N paths (one per condition case + else)
-    - Tree can have multiple leaf nodes representing different world states
-
-The key extension points for Phase 2:
-    1. _should_branch_on_precondition() - determines if branching needed
-    2. _should_branch_on_postcondition() - determines if branching needed
-    3. _create_precondition_branches() - creates success/fail branch nodes
-    4. _create_postcondition_branches() - creates case branch nodes
+Executes simulations building a tree/DAG structure where nodes represent
+world states and edges represent action transitions. Supports branching
+on unknown attributes and merging of equivalent states.
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
@@ -36,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import yaml
 
 from simulator.core.actions.action import Action
+from simulator.core.attributes import AttributePath
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
@@ -49,7 +31,9 @@ from simulator.core.tree.models import (
 )
 from simulator.core.tree.node_factory import (
     compute_narrowing_change,
+    create_error_node,
     create_or_merge_node,
+    create_root_node,
 )
 from simulator.core.tree.snapshot_utils import (
     capture_snapshot,
@@ -63,25 +47,9 @@ logger = logging.getLogger(__name__)
 
 
 class TreeSimulationRunner:
-    """
-    Executes simulation building a tree structure.
-
-    The runner processes actions sequentially, creating nodes for each
-    state transition. In Phase 1, this produces a linear path. In Phase 2,
-    it will produce a tree with branches.
-
-    Attributes:
-        registry_manager: Access to objects, actions, and spaces
-        engine: TransitionEngine for applying actions
-    """
+    """Executes simulations building a tree/DAG structure with branching support."""
 
     def __init__(self, registry_manager: RegistryManager):
-        """
-        Initialize the runner.
-
-        Args:
-            registry_manager: Registry manager with loaded KB
-        """
         self.registry_manager = registry_manager
         self.engine = TransitionEngine(registry_manager)
 
@@ -97,20 +65,7 @@ class TreeSimulationRunner:
         verbose: bool = False,
         initial_values: Optional[Dict[str, str]] = None,
     ) -> SimulationTree:
-        """
-        Run a simulation and build the execution tree.
-
-        Args:
-            object_type: Type of object to simulate (e.g., 'flashlight')
-            actions: List of actions to execute (can be ActionRequest or dict)
-            simulation_id: Optional ID for the simulation (auto-generated if None)
-            verbose: Whether to log detailed progress
-            initial_values: Optional dict of attribute paths to initial values
-                           e.g., {"battery.level": "unknown", "switch.position": "on"}
-
-        Returns:
-            SimulationTree containing all nodes and the execution path
-        """
+        """Run a simulation and build the execution tree."""
         # Generate simulation ID if not provided
         if not simulation_id:
             simulation_id = f"sim_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -136,7 +91,8 @@ class TreeSimulationRunner:
         )
 
         # Create root node with initial state
-        root_node = self._create_root_node(tree, obj_instance)
+        root_snapshot = capture_snapshot(obj_instance, self.registry_manager)
+        root_node = create_root_node(tree, root_snapshot)
         tree.add_node(root_node)
 
         if verbose:
@@ -204,20 +160,7 @@ class TreeSimulationRunner:
         verbose: bool = False,
         layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List["ActionResult"]:
-        """
-        Process a single action and return results for ALL branches.
-
-        This ensures subsequent actions are applied to all branches,
-        including failed branches (where the world state doesn't change).
-
-        DAG Deduplication:
-        - Uses layer_state_cache to track nodes by state hash
-        - If a duplicate state is found, merges into existing node
-        - Adds an incoming edge to the existing node instead of creating new one
-
-        Returns:
-            List of ActionResult, one for each branch created
-        """
+        """Process action and return results for all branches, with DAG deduplication."""
         if layer_state_cache is None:
             layer_state_cache = {}
 
@@ -269,27 +212,7 @@ class TreeSimulationRunner:
         verbose: bool = False,
         layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> "ActionResult":
-        """
-        Process a single action and create resulting node(s).
-
-        Phase 2: Implements branching logic:
-        - If precondition has unknown attribute → 2 branches (success/fail)
-        - If postcondition has unknown attribute → N+1 branches (if/elif/else)
-
-        DAG: Uses layer_state_cache for node deduplication.
-
-        Args:
-            tree: The simulation tree
-            instance: Current object instance
-            parent_node: The node to branch from
-            action_name: Name of action to execute
-            parameters: Action parameters
-            verbose: Log progress
-            layer_state_cache: Optional cache for deduplication
-
-        Returns:
-            ActionResult with the new node and optionally updated instance
-        """
+        """Process action, creating branches for unknown attributes."""
         if layer_state_cache is None:
             layer_state_cache = {}
         # Resolve action
@@ -297,10 +220,11 @@ class TreeSimulationRunner:
 
         if not action:
             # Action not found - create error node
-            node = self._create_error_node(
+            error_snapshot = capture_snapshot(instance, self.registry_manager, parent_node.snapshot)
+            node = create_error_node(
                 tree=tree,
                 parent_node=parent_node,
-                instance=instance,
+                snapshot=error_snapshot,
                 action_name=action_name,
                 parameters=parameters,
                 error=f"Action '{action_name}' not found for {instance.type.name}",
@@ -402,10 +326,11 @@ class TreeSimulationRunner:
             return ActionResult(node=primary_node, instance=new_instance, action=action)
 
         # Should not happen, but handle gracefully
-        error_node = self._create_error_node(
+        error_snapshot = capture_snapshot(instance, self.registry_manager, parent_node.snapshot)
+        error_node = create_error_node(
             tree=tree,
             parent_node=parent_node,
-            instance=instance,
+            snapshot=error_snapshot,
             action_name=action_name,
             parameters=parameters,
             error="No nodes created from action",
@@ -422,19 +347,7 @@ class TreeSimulationRunner:
         parameters: Dict[str, str],
         layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
     ) -> List[TreeNode]:
-        """
-        Apply an action in linear mode (Phase 1).
-
-        Always returns exactly one node representing the action outcome.
-        Uses layer_state_cache for DAG deduplication.
-
-        Args:
-            tree: Simulation tree for node ID generation
-            instance: Current object instance
-            parent_node: Parent node
-            action: Action to apply
-            parameters: Action parameters
-            layer_state_cache: Optional cache for deduplication
+        """Apply action linearly (no branching), returning single node.
 
         Returns:
             List containing single TreeNode (may be existing node if deduplicated)
@@ -1045,7 +958,7 @@ class TreeSimulationRunner:
         raw_changes = action_result.changes if action_result else []
 
         # Build changes list from raw changes
-        changes = self._build_changes_list_from_raw(raw_changes)
+        changes = self._build_changes_list(raw_changes)
 
         # Add narrowing changes for the constrained attributes
         # For precond_attr: narrowed from parent's value to precond_values
@@ -1096,83 +1009,36 @@ class TreeSimulationRunner:
             layer_state_cache=layer_state_cache,
         )
 
-    def _set_attribute_values(self, instance: ObjectInstance, attr_path: str, values: List[str]) -> None:
-        """Set an attribute to a list of values (or single value if list has one element)."""
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            part_inst = instance.parts.get(part_name)
-            if part_inst:
-                attr_inst = part_inst.attributes.get(attr_name)
-                if attr_inst:
-                    # Set to single value or keep as "unknown" if multiple
-                    attr_inst.current_value = values[0] if len(values) == 1 else values[0]
-
     def _set_attribute_value(self, instance: ObjectInstance, attr_path: str, value: str) -> None:
         """Set an attribute to a single value."""
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            part_inst = instance.parts.get(part_name)
-            if part_inst:
-                attr_inst = part_inst.attributes.get(attr_name)
-                if attr_inst:
-                    attr_inst.current_value = value
+        AttributePath.parse(attr_path).set_value_in_instance(instance, value)
 
     def _update_snapshot_attribute(self, snapshot: WorldSnapshot, attr_path: str, values: List[str]) -> None:
-        """
-        Update an attribute value in a snapshot, preserving trend-based value sets.
+        """Update snapshot attribute, preserving existing value sets from trends."""
+        attr = AttributePath.parse(attr_path).resolve_from_snapshot(snapshot)
+        if attr and not isinstance(attr.value, list):
+            attr.value = values[0] if len(values) == 1 else values
 
-        If the snapshot already has a value SET (from trend computation), we don't
-        override it - the trend-based set is more accurate for future branching.
-        """
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            if part_name in snapshot.object_state.parts:
-                attr = snapshot.object_state.parts[part_name].attributes.get(attr_name)
-                if attr:
-                    # Only update if snapshot has single value (no trend-based set)
-                    current_is_set = isinstance(attr.value, list)
-                    if not current_is_set:
-                        attr.value = values[0] if len(values) == 1 else values
-                    # If snapshot already has a set (from trend), preserve it
+    def _normalize_change(self, change: Any) -> Optional[Dict[str, Any]]:
+        """Normalize a change (dict or object) to dict format, filtering invalid entries."""
+        if isinstance(change, dict):
+            attr = change.get("attribute", "")
+            before = change.get("before")
+            after = change.get("after")
+            kind = change.get("kind", "value")
+        elif hasattr(change, "attribute"):
+            attr = change.attribute
+            before = change.before
+            after = change.after
+            kind = getattr(change, "kind", "value")
+        else:
+            return None
 
-    def _build_changes_list_from_raw(self, raw_changes: List[Any]) -> List[Dict[str, Any]]:
-        """Convert raw effect changes to the serializable format.
+        # Filter: no-ops, info entries, internal entries
+        if before == after or kind == "info" or attr.startswith("["):
+            return None
 
-        Filters out:
-        - Info entries
-        - Internal entries (starting with '[')
-        - No-op changes where before == after
-        """
-        changes = []
-        for change in raw_changes:
-            if isinstance(change, dict):
-                # Skip no-op changes
-                if change.get("before") == change.get("after"):
-                    continue
-                # Skip internal entries
-                attr = change.get("attribute", "")
-                if attr.startswith("[") or change.get("kind") == "info":
-                    continue
-                changes.append(change)
-            elif hasattr(change, "attribute") and hasattr(change, "before") and hasattr(change, "after"):
-                # Skip no-op changes
-                if change.before == change.after:
-                    continue
-                # Skip internal entries
-                if change.attribute.startswith("[") or getattr(change, "kind", "value") == "info":
-                    continue
-                changes.append(
-                    {
-                        "attribute": change.attribute,
-                        "before": change.before,
-                        "after": change.after,
-                        "kind": getattr(change, "kind", "value"),
-                    }
-                )
-        return changes
+        return {"attribute": attr, "before": before, "after": after, "kind": kind}
 
     def _create_postcondition_branches(
         self,
@@ -1463,64 +1329,11 @@ class TreeSimulationRunner:
     def _clone_instance_with_values(
         self, instance: ObjectInstance, attr_path: str, values: List[str]
     ) -> ObjectInstance:
-        """
-        Clone an instance and set the attribute to specific value(s).
-
-        For branching, we need to constrain the instance to specific values
-        before applying the action.
-        """
-        # Deep copy the instance
-        from copy import deepcopy
-
-        new_instance = deepcopy(instance)
-
-        # Set the attribute value
-        parts = attr_path.split(".")
-        if len(parts) == 2:
-            part_name, attr_name = parts
-            if part_name in new_instance.parts:
-                attr_inst = new_instance.parts[part_name].attributes.get(attr_name)
-                if attr_inst:
-                    # Set to single value for action evaluation
-                    attr_inst.current_value = values[0] if values else None
-        elif len(parts) == 1:
-            attr_inst = new_instance.global_attributes.get(parts[0])
-            if attr_inst:
-                attr_inst.current_value = values[0] if values else None
-
+        """Clone an instance and constrain an attribute to specific value(s)."""
+        new_instance = instance.deep_copy()
+        if values:
+            AttributePath.parse(attr_path).set_value_in_instance(new_instance, values[0])
         return new_instance
-
-    # =========================================================================
-    # Node Creation Helpers
-    # =========================================================================
-
-    def _create_root_node(self, tree: SimulationTree, instance: ObjectInstance) -> TreeNode:
-        """Create the root node with initial state."""
-        return TreeNode(
-            id=tree.generate_node_id(),  # state0
-            snapshot=capture_snapshot(instance, self.registry_manager),
-            action_name=None,  # Root has no action
-        )
-
-    def _create_error_node(
-        self,
-        tree: SimulationTree,
-        parent_node: TreeNode,
-        instance: ObjectInstance,
-        action_name: str,
-        parameters: Dict[str, str],
-        error: str,
-    ) -> TreeNode:
-        """Create an error node for action failures."""
-        return TreeNode(
-            id=tree.generate_node_id(),
-            snapshot=capture_snapshot(instance, self.registry_manager, parent_node.snapshot),
-            parent_ids=[parent_node.id],
-            action_name=action_name,
-            action_parameters=parameters,
-            action_status=NodeStatus.ERROR.value,
-            action_error=error,
-        )
 
     # =========================================================================
     # Branch Condition Extraction
@@ -1619,23 +1432,13 @@ class TreeSimulationRunner:
                     attr_inst.last_known_value = value if value != "unknown" else None
 
     def _build_changes_list(self, changes: List[Any]) -> List[Dict[str, Any]]:
-        """Build serializable changes list from DiffEntry objects.
-
-        Filters out:
-        - Info entries
-        - Internal entries (starting with '[')
-        - No-op changes where before == after
-        """
-        return [
-            {
-                "attribute": c.attribute,
-                "before": c.before,
-                "after": c.after,
-                "kind": c.kind,
-            }
-            for c in changes
-            if c.kind != "info" and not c.attribute.startswith("[") and c.before != c.after  # Filter out no-op changes
-        ]
+        """Build serializable changes list, filtering info/internal/no-op entries."""
+        result = []
+        for c in changes:
+            normalized = self._normalize_change(c)
+            if normalized:
+                result.append(normalized)
+        return result
 
     def _build_precondition_error(self, action: Action, attr_path: str, actual_values: List[str]) -> str:
         """Build detailed precondition error message using shared utility."""
@@ -1679,24 +1482,13 @@ class TreeSimulationRunner:
             yaml.dump(data, f, default_flow_style=False, indent=2, sort_keys=False)
 
 
+@dataclass
 class ActionResult:
     """Result of processing an action."""
 
-    def __init__(
-        self,
-        node: TreeNode,
-        instance: Optional[ObjectInstance],
-        action: Optional[Action] = None,
-    ):
-        """
-        Args:
-            node: The node created for this action
-            instance: Updated instance if action succeeded, None otherwise
-            action: The action that was processed
-        """
-        self.node = node
-        self.instance = instance
-        self.action = action
+    node: TreeNode
+    instance: Optional[ObjectInstance] = None
+    action: Optional[Action] = None
 
 
 __all__ = ["TreeSimulationRunner", "ActionResult"]

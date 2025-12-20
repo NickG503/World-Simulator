@@ -1,14 +1,9 @@
-"""
-Snapshot utilities for tree simulation.
-
-This module provides functions for creating, modifying, and comparing
-WorldSnapshot objects during simulation.
-"""
+"""Snapshot utilities for tree simulation."""
 
 from __future__ import annotations
 
 from copy import deepcopy
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
@@ -18,6 +13,7 @@ from simulator.core.simulation_runner import (
     PartStateSnapshot,
 )
 from simulator.core.tree.models import WorldSnapshot
+from simulator.core.types import ChangeDict
 
 
 def capture_snapshot(
@@ -173,19 +169,8 @@ def snapshot_with_constrained_values(
     values: List[str],
     registry_manager: RegistryManager,
     enforce_constraints: bool = True,
-) -> Tuple[WorldSnapshot, List[Dict[str, Any]]]:
-    """
-    Create a copy of a snapshot with attribute values constrained.
-
-    Used for fail branches where state doesn't change but values are narrowed.
-    Also enforces constraints after narrowing.
-
-    Args:
-        snapshot: The snapshot to copy and modify
-        attr_path: Attribute path to constrain
-        values: The constrained values
-        registry_manager: For constraint enforcement
-        enforce_constraints: Whether to enforce constraints
+) -> Tuple[WorldSnapshot, List[ChangeDict]]:
+    """Create a copy of snapshot with constrained values, enforcing constraints.
 
     Returns:
         Tuple of (modified snapshot, list of constraint-induced changes)
@@ -206,7 +191,7 @@ def snapshot_with_constrained_values(
         if attr:
             attr.value = values[0] if len(values) == 1 else values
 
-    constraint_changes: List[Dict[str, Any]] = []
+    constraint_changes: List[ChangeDict] = []
     if enforce_constraints:
         object_type_name = new_snapshot.object_state.type
         new_snapshot, constraint_changes = do_enforce(new_snapshot, object_type_name, registry_manager)

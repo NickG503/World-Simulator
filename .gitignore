@@ -28,9 +28,13 @@ build/
 # OS junk
 .DS_Store
 Thumbs.db
+.!*!*
 
 # Optional (if you don't want lockfiles tracked)
 uv.lock
 
 # Simulation outputs
 outputs/
+
+# Project memory (AI context)
+memory.md

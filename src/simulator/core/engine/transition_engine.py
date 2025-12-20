@@ -18,9 +18,7 @@ from simulator.core.constraints.constraint import Constraint, ConstraintEngine
 from simulator.core.objects import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
 
-from .condition_evaluator import ConditionEvaluator
 from .context import ApplicationContext, EvaluationContext
-from .effect_applier import EffectApplier
 
 
 class DiffEntry(BaseModel):
@@ -74,8 +72,6 @@ class TransitionEngine:
 
     def __init__(self, registry_manager: RegistryManager):
         self.registries = registry_manager
-        self.condition_evaluator = ConditionEvaluator()
-        self.effect_applier = EffectApplier()
         self.constraint_engine = ConstraintEngine()
         self._constraint_cache: Dict[str, List[Constraint]] = {}
 
@@ -135,7 +131,7 @@ class TransitionEngine:
         # Phase 3: Check preconditions (binary: all must pass)
         for condition in action.preconditions:
             try:
-                ok = self.condition_evaluator.evaluate(condition, eval_ctx)
+                ok = condition.evaluate(eval_ctx)
             except Exception:
                 ok = False
 
@@ -154,8 +150,7 @@ class TransitionEngine:
         changes: List[DiffEntry] = []
 
         for effect in action.effects:
-            sc = self.effect_applier.apply(effect, app_ctx, new_instance)
-            for c in sc:
+            for c in effect.apply(app_ctx, new_instance):
                 changes.append(DiffEntry(attribute=c.attribute, before=c.before, after=c.after, kind=c.kind))
 
         # Phase 5: Check constraints on the new state

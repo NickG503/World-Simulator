@@ -1,13 +1,8 @@
-"""
-Node factory for tree simulation.
-
-This module provides functions for creating and merging TreeNode objects,
-including the DAG deduplication logic.
-"""
+"""Node factory for tree simulation - creating and merging TreeNode objects."""
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple
 
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.tree.models import (
@@ -18,6 +13,7 @@ from simulator.core.tree.models import (
     TreeNode,
     WorldSnapshot,
 )
+from simulator.core.types import ChangeDict
 
 
 def create_or_merge_node(
@@ -29,36 +25,11 @@ def create_or_merge_node(
     status: str,
     error: Optional[str],
     branch_condition: Optional[BranchCondition],
-    base_changes: List[Dict[str, Any]],
+    base_changes: List[ChangeDict],
     result_instance: Optional[ObjectInstance],
     layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]],
 ) -> TreeNode:
-    """
-    Create a new node or merge with existing if same state exists in cache.
-
-    This is the unified entry point for all node creation, handling:
-    - State hash computation
-    - Cache lookup for deduplication
-    - IncomingEdge creation for merged nodes
-    - TreeNode creation for new nodes
-    - Full diff computation including value set narrowing
-
-    Args:
-        tree: Simulation tree
-        parent_node: Parent node
-        snapshot: World snapshot for this node
-        action_name: Name of action that led here
-        parameters: Action parameters
-        status: Action status (ok, rejected, constraint_violated, error)
-        error: Error message if any
-        branch_condition: Branch condition if any
-        base_changes: Base changes from transition engine
-        result_instance: Object instance after action (None for failed actions)
-        layer_state_cache: Cache for deduplication
-
-    Returns:
-        The node (new or existing merged)
-    """
+    """Create a new node or merge with existing if same state found in cache."""
     # Compute full changes including value set narrowing
     full_changes = compute_snapshot_diff(parent_node.snapshot, snapshot, base_changes)
 
@@ -130,22 +101,9 @@ def create_error_node(
 def compute_snapshot_diff(
     parent_snapshot: WorldSnapshot,
     new_snapshot: WorldSnapshot,
-    base_changes: List[Dict[str, Any]],
-) -> List[Dict[str, Any]]:
-    """
-    Compute all changes between parent and new snapshot, including value set narrowing.
-
-    This augments the base_changes (from the transition engine) with any additional
-    changes due to value sets being narrowed to single values.
-
-    Args:
-        parent_snapshot: The parent node's snapshot (may have value sets)
-        new_snapshot: The new node's snapshot (after action applied)
-        base_changes: Changes already computed by the transition engine
-
-    Returns:
-        Complete list of changes including value set narrowing
-    """
+    base_changes: List[ChangeDict],
+) -> List[ChangeDict]:
+    """Compute changes between snapshots, including value set narrowing."""
     # Get attributes already in base_changes
     changed_attrs = {c["attribute"] for c in base_changes if "attribute" in c}
 
@@ -187,18 +145,8 @@ def compute_narrowing_change(
     parent_snapshot: WorldSnapshot,
     attr_path: str,
     new_values: List[str],
-) -> List[Dict[str, Any]]:
-    """
-    Compute change when a value set is narrowed.
-
-    Args:
-        parent_snapshot: Parent snapshot with potentially wider value set
-        attr_path: Attribute path being narrowed
-        new_values: The narrowed value(s)
-
-    Returns:
-        List with change dict if narrowing occurred, empty list otherwise
-    """
+) -> List[ChangeDict]:
+    """Compute change when a value set is narrowed. Returns empty list if no narrowing."""
     parent_value = parent_snapshot.get_attribute_value(attr_path)
 
     # Check if this is actually narrowing a value set

@@ -1,10 +1,8 @@
-"""
-Shared error message formatting utilities.
-"""
+"""Shared error message formatting utilities."""
 
 from typing import List, Union
 
-# Operator symbol mapping
+# Canonical operator symbol mapping - import this instead of duplicating
 OPERATOR_SYMBOLS = {
     "equals": "==",
     "not_equals": "!=",
@@ -15,6 +13,11 @@ OPERATOR_SYMBOLS = {
     "in": "in",
     "not_in": "not in",
 }
+
+
+def get_operator_symbol(operator: str) -> str:
+    """Get display symbol for an operator name."""
+    return OPERATOR_SYMBOLS.get(operator, operator)
 
 
 def format_precondition_error(

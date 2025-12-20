@@ -78,17 +78,9 @@ class AttributeCondition(Condition):
 
     def describe(self) -> str:
         """Human-readable description of this condition."""
-        op_map = {
-            "equals": "==",
-            "not_equals": "!=",
-            "in": "in",
-            "not_in": "not in",
-            "lt": "<",
-            "lte": "<=",
-            "gt": ">",
-            "gte": ">=",
-        }
-        op_symbol = op_map.get(self.operator, self.operator)
+        from simulator.utils.error_formatting import get_operator_symbol
+
+        op_symbol = get_operator_symbol(self.operator)
         if hasattr(self.value, "name"):
             value_str = self.value.name
         elif isinstance(self.value, list):

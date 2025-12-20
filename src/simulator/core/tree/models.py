@@ -1,32 +1,10 @@
 """
 Tree-based simulation data models.
 
-These models represent the tree structure for simulation execution:
 - WorldSnapshot: Immutable state of the world at a point in time
 - BranchCondition: Describes what condition led to a specific branch
 - TreeNode: A node in the simulation tree (represents a world state)
-- SimulationTree: The complete tree structure with all nodes
-
-Architecture for Future Branching:
-----------------------------------
-Phase 1 (Current): Linear execution
-    - All values known
-    - Single path through tree
-    - Each action produces exactly one child node
-
-Phase 2 (Future): Branching on unknowns
-    - Precondition branches: When precondition attribute is unknown
-        → Creates 2 branches: success (attribute satisfies condition) / fail
-    - Postcondition branches: When postcondition attribute is unknown
-        → Creates N+1 branches: one for each if/elif case + one for else
-    - Max branches per action = 2 × (postcondition_cases + 1)
-
-Tree Structure:
-    state0 (Initial)
-    └── state1 (turn_on succeeded)
-        ├── state2a (battery.level == high → brightness = high)
-        ├── state2b (battery.level == medium → brightness = medium)
-        └── state2c (battery.level in {low, empty} → brightness = low)
+- SimulationTree: The complete tree/DAG structure with all nodes
 """
 
 from __future__ import annotations
@@ -38,13 +16,6 @@ from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field, field_validator
 
 from simulator.core.simulation_runner import ObjectStateSnapshot
-
-
-class BranchSource(str, Enum):
-    """Source of a branch condition."""
-
-    PRECONDITION = "precondition"
-    POSTCONDITION = "postcondition"
 
 
 class NodeStatus(str, Enum):
@@ -252,17 +223,9 @@ class BranchCondition(BaseModel):
 
     def describe(self) -> str:
         """Human-readable description of the branch condition."""
-        op_map = {
-            "equals": "==",
-            "not_equals": "!=",
-            "lt": "<",
-            "lte": "<=",
-            "gt": ">",
-            "gte": ">=",
-            "in": "in",
-            "not_in": "not in",
-        }
-        op_symbol = op_map.get(self.operator, self.operator)
+        from simulator.utils.error_formatting import get_operator_symbol
+
+        op_symbol = get_operator_symbol(self.operator)
         value_str = self.get_value_display()
         return f"{self.attribute} {op_symbol} {value_str}"
 
@@ -673,7 +636,6 @@ class SimulationTree(BaseModel):
 
 __all__ = [
     "BranchCondition",
-    "BranchSource",
     "IncomingEdge",
     "NodeStatus",
     "SimulationTree",
