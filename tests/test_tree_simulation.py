@@ -1093,17 +1093,17 @@ class TestCombinedBranching:
             initial_values={"battery.level": "unknown"},
         )
 
-        # With flat if-elif structure (full/high/medium/low), should have 6 nodes:
+        # With flat if-elif structure ({full,high}/medium/low), should have 5 nodes:
         # - state0: root
-        # - state1-4: success branches (full, high, medium, low)
-        # - state5: fail (precondition fail with empty)
-        assert len(tree.nodes) == 6
+        # - state1-3: success branches ({full,high}, medium, low)
+        # - state4: fail (precondition fail with empty)
+        assert len(tree.nodes) == 5
 
         # Check that we have success branches first, then fail branch
         success_nodes = [n for n in tree.nodes.values() if n.action_status == "ok" and n.action_name]
         fail_nodes = [n for n in tree.nodes.values() if n.action_status == "rejected"]
 
-        assert len(success_nodes) == 4  # Four postcondition branches (full, high, medium, low)
+        assert len(success_nodes) == 3  # Three postcondition branches ({full,high}, medium, low)
         assert len(fail_nodes) == 1  # One fail branch
 
         # Verify fail node has empty as its value
@@ -1134,8 +1134,8 @@ class TestCombinedBranching:
 
     def test_combined_branching_each_value_separate(self, registry_manager):
         """
-        With flat if-elif structure, each value gets its own branch
-        with correct effects applied.
+        With flat if-elif structure, each condition gets its own branch
+        with correct effects applied. {full, high} are combined via 'in' operator.
         """
         runner = TreeSimulationRunner(registry_manager)
 
@@ -1151,12 +1151,14 @@ class TestCombinedBranching:
             n for n in tree.nodes.values() if n.branch_condition and n.branch_condition.source == "postcondition"
         ]
 
-        # Should have 4 branches: full, high, medium, low
-        assert len(postcond_branches) == 4
+        # Should have 3 branches: {full,high}, medium, low
+        assert len(postcond_branches) == 3
 
-        # Each value should have its own branch
-        branch_values = {n.branch_condition.value for n in postcond_branches}
-        assert branch_values == {"full", "high", "medium", "low"}
+        # Check that we have the expected branch values
+        # One branch should have a list value (from 'in' operator)
+        list_branches = [n for n in postcond_branches if isinstance(n.branch_condition.value, list)]
+        assert len(list_branches) == 1
+        assert set(list_branches[0].branch_condition.value) == {"full", "high"}
 
     def test_branches_continue_to_next_action(self, registry_manager):
         """All branches (including fail) should continue to subsequent actions."""
@@ -1173,14 +1175,13 @@ class TestCombinedBranching:
         )
 
         # After turn_on with unknown battery:
-        # - 4 success branches (full, high, medium, low)
+        # - 3 success branches ({full,high}, medium, low)
         # - 1 fail branch (empty)
-        # After turn_off applied to all 5:
-        # - Should have 5 turn_off nodes
-        # Total: 1 (root) + 5 (turn_on branches) + 5 (turn_off from each branch) = 11
+        # After turn_off applied to all 4:
+        # - Should have 4 turn_off nodes
 
         turn_off_nodes = [n for n in tree.nodes.values() if n.action_name == "turn_off"]
-        assert len(turn_off_nodes) == 5, "turn_off should be applied to all 5 branches"
+        assert len(turn_off_nodes) == 4, "turn_off should be applied to all 4 branches"
 
     def test_linear_when_values_known(self, registry_manager):
         """When values are known, no branching occurs."""

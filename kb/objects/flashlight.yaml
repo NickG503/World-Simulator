@@ -65,24 +65,13 @@ behaviors:
         target: battery.level
         direction: down
       # Flat if-elif-else for brightness based on battery.level
-      # IF battery.level == full -> brightness = high
+      # IF battery.level in {full, high} -> brightness = high
       - type: conditional
         condition:
           type: attribute_check
           target: battery.level
-          operator: equals
-          value: full
-        then:
-          - type: set_attribute
-            target: bulb.brightness
-            value: high
-      # ELIF battery.level == high -> brightness = high
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: battery.level
-          operator: equals
-          value: high
+          operator: in
+          value: [full, high]
         then:
           - type: set_attribute
             target: bulb.brightness
