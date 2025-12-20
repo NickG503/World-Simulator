@@ -482,6 +482,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
         let selectedNodeId = null;
         const sectionStates = {{}};  // Track collapsed state per node
+        const otherAttrsStates = {{}};  // Track "other attributes" expanded state per node
         const NODE_RADIUS = 28;
         const LEVEL_HEIGHT = 120;
         const NODE_SPACING = 80;
@@ -898,6 +899,16 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     }}
                 }});
             }}
+
+            // Restore "other attributes" expanded state
+            if (otherAttrsStates[nodeId]) {{
+                const el = document.getElementById('other-attrs');
+                const btn = document.querySelector('.expand-btn');
+                if (el && btn) {{
+                    el.classList.remove('hidden');
+                    btn.textContent = btn.textContent.replace('▼', '▲');
+                }}
+            }}
         }}
 
         function toggleSection(titleEl) {{
@@ -961,6 +972,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 btn.textContent = btn.textContent.replace('▲', '▼');
             }} else {{
                 btn.textContent = btn.textContent.replace('▼', '▲');
+            }}
+
+            // Save state for current node
+            if (selectedNodeId) {{
+                otherAttrsStates[selectedNodeId] = !el.classList.contains('hidden');
             }}
         }}
 
