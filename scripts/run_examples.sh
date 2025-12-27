@@ -132,6 +132,46 @@ echo "Dice double merge (two independent attributes, two merge points)..."
 uv run sim simulate --obj dice_double_merge --set cube.face=unknown cube.color=unknown --actions roll_face reset_face roll_color reset_color --name dice_double_merge
 
 echo ""
+echo "10. COMPARISON OPERATORS (>=, >, <=, <)"
+echo "=========================================="
+
+echo ""
+echo "Power level > low (expands to {medium, high})..."
+uv run sim simulate --obj compound_test --set power.level=unknown --actions maintain --name comparison_gt
+
+echo ""
+echo "11. AND COMPOUND CONDITIONS"
+echo "=========================================="
+
+echo ""
+echo "AND condition: power=on AND temperature=cold (one attribute unknown)..."
+uv run sim simulate --obj compound_test --set power.state=on temperature.value=unknown --actions heat_up --name and_one_unknown
+
+echo ""
+echo "AND condition: power=unknown AND temperature=unknown (both unknown, De Morgan's law)..."
+uv run sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions heat_up --name and_both_unknown
+
+echo ""
+echo "AND with comparison: power.level >= medium AND safety=off..."
+uv run sim simulate --obj compound_test --set power.state=on power.level=unknown safety.locked=unknown --actions boost --name and_with_comparison
+
+echo ""
+echo "12. OR COMPOUND CONDITIONS"
+echo "=========================================="
+
+echo ""
+echo "OR condition: power=on OR temperature=hot (creates 2 success branches)..."
+uv run sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions emergency_shutdown --name or_two_unknown
+
+echo ""
+echo "13. MULTI-ACTION WITH COMPOUND CONDITIONS"
+echo "=========================================="
+
+echo ""
+echo "Sequence: basic_on -> heat_up (compound preconditions in sequence)..."
+uv run sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions basic_on heat_up --name compound_sequence
+
+echo ""
 echo "=========================================="
 echo "GENERATING VISUALIZATIONS"
 echo "=========================================="

@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import yaml
 
@@ -42,6 +42,13 @@ from simulator.core.tree.snapshot_utils import (
     get_attribute_space_id,
     snapshot_with_constrained_values,
 )
+
+if TYPE_CHECKING:
+    from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+    from simulator.core.actions.conditions.logical_conditions import (
+        AndCondition,
+        OrCondition,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -440,28 +447,90 @@ class TreeSimulationRunner:
         Returns:
             Attribute path if unknown/multi-valued, None if all known single values
         """
+        for condition in action.preconditions:
+            unknown = self._find_unknown_in_condition(condition, instance, parent_snapshot)
+            if unknown:
+                return unknown
+        return None
+
+    def _find_unknown_in_condition(
+        self,
+        condition,
+        instance: ObjectInstance,
+        parent_snapshot: Optional[WorldSnapshot] = None,
+    ) -> Optional[str]:
+        """Recursively find unknown attributes in a condition (including compound)."""
         from simulator.core.actions.conditions.attribute_conditions import (
             AttributeCondition,
         )
+        from simulator.core.actions.conditions.logical_conditions import (
+            AndCondition,
+            OrCondition,
+        )
 
-        for condition in action.preconditions:
-            if isinstance(condition, AttributeCondition):
-                try:
-                    ai = condition.target.resolve(instance)
-                    attr_path = condition.target.to_string()
+        if isinstance(condition, AttributeCondition):
+            try:
+                ai = condition.target.resolve(instance)
+                attr_path = condition.target.to_string()
 
-                    # Check if current value is "unknown"
-                    if ai.current_value == "unknown":
+                # Check if current value is "unknown"
+                if ai.current_value == "unknown":
+                    return attr_path
+
+                # Check if parent snapshot has a value set for this attribute
+                if parent_snapshot:
+                    snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                    if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
                         return attr_path
-
-                    # Check if parent snapshot has a value set for this attribute
-                    if parent_snapshot:
-                        snapshot_value = parent_snapshot.get_attribute_value(attr_path)
-                        if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
-                            return attr_path
-                except Exception:
-                    pass
+            except Exception:
+                pass
+        elif isinstance(condition, (AndCondition, OrCondition)):
+            # Check all sub-conditions
+            for sub_cond in condition.conditions:
+                unknown = self._find_unknown_in_condition(sub_cond, instance, parent_snapshot)
+                if unknown:
+                    return unknown
         return None
+
+    def _get_unknown_attributes_in_condition(
+        self,
+        condition,
+        instance: ObjectInstance,
+        parent_snapshot: Optional[WorldSnapshot] = None,
+    ) -> List[Tuple[str, "AttributeCondition"]]:
+        """Get ALL unknown attributes in a condition (for compound conditions).
+
+        Returns list of (attr_path, condition) tuples for all unknown attributes.
+        """
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+        from simulator.core.actions.conditions.logical_conditions import (
+            AndCondition,
+            OrCondition,
+        )
+
+        unknowns: List[Tuple[str, AttributeCondition]] = []
+
+        if isinstance(condition, AttributeCondition):
+            try:
+                ai = condition.target.resolve(instance)
+                attr_path = condition.target.to_string()
+
+                is_unknown = ai.current_value == "unknown"
+                if not is_unknown and parent_snapshot:
+                    snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                    is_unknown = isinstance(snapshot_value, list) and len(snapshot_value) > 1
+
+                if is_unknown:
+                    unknowns.append((attr_path, condition))
+            except Exception:
+                pass
+        elif isinstance(condition, (AndCondition, OrCondition)):
+            for sub_cond in condition.conditions:
+                unknowns.extend(self._get_unknown_attributes_in_condition(sub_cond, instance, parent_snapshot))
+
+        return unknowns
 
     def _get_unknown_postcondition_attribute(
         self, action: Action, instance: ObjectInstance, parent_snapshot: Optional[WorldSnapshot] = None
@@ -478,30 +547,13 @@ class TreeSimulationRunner:
         Returns:
             Attribute path if unknown/multi-valued, None if all known single values
         """
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
         from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 
         for effect in action.effects:
             if isinstance(effect, ConditionalEffect):
-                cond = effect.condition
-                if isinstance(cond, AttributeCondition):
-                    try:
-                        ai = cond.target.resolve(instance)
-                        attr_path = cond.target.to_string()
-
-                        # Check if current value is "unknown"
-                        if ai.current_value == "unknown":
-                            return attr_path
-
-                        # Check if parent snapshot has a value set for this attribute
-                        if parent_snapshot:
-                            snapshot_value = parent_snapshot.get_attribute_value(attr_path)
-                            if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
-                                return attr_path
-                    except Exception:
-                        pass
+                unknown = self._find_unknown_in_condition(effect.condition, instance, parent_snapshot)
+                if unknown:
+                    return unknown
         return None
 
     def _get_postcondition_branch_options(
@@ -566,6 +618,18 @@ class TreeSimulationRunner:
                         value = cond.value  # Keep as list for value set display
                         options.append((value, branch_type, then_effects))
                         used_values.update(cond.value)
+                    elif cond.operator in ("gte", "lte", "gt", "lt"):
+                        # Comparison operators - expand to value list from space
+                        try:
+                            ai = cond.target.resolve(instance)
+                            space = self.registry_manager.spaces.get(ai.spec.space_id)
+                            if space:
+                                satisfying = space.get_values_for_comparison(str(cond.value), cond.operator)
+                                if satisfying:
+                                    options.append((satisfying, branch_type, then_effects))
+                                    used_values.update(satisfying)
+                        except (ValueError, AttributeError):
+                            pass
 
         # Add else branch with remaining values (if any values not covered)
         if all_values and used_values:
@@ -577,21 +641,63 @@ class TreeSimulationRunner:
         return options
 
     def _get_precondition_condition(self, action: Action):
-        """Get the first precondition condition that checks an attribute."""
+        """Get the first precondition condition that checks an attribute (or compound)."""
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.core.actions.conditions.logical_conditions import (
+            AndCondition,
+            OrCondition,
+        )
 
         for condition in action.preconditions:
-            if isinstance(condition, AttributeCondition):
+            if isinstance(condition, (AttributeCondition, AndCondition, OrCondition)):
                 return condition
         return None
 
-    def _evaluate_condition_for_value(self, condition, value: str) -> bool:
+    def _get_satisfying_values_for_condition(
+        self,
+        condition,
+        instance: ObjectInstance,
+        possible_values: List[str],
+    ) -> List[str]:
+        """Get values from possible_values that satisfy the condition.
+
+        For compound conditions (AND), all sub-conditions must be satisfied.
+        """
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.core.actions.conditions.logical_conditions import (
+            AndCondition,
+            OrCondition,
+        )
+
+        if isinstance(condition, AttributeCondition):
+            return [v for v in possible_values if self._evaluate_condition_for_value(condition, v, instance)]
+        elif isinstance(condition, AndCondition):
+            # For AND, a value passes if it passes ALL sub-conditions that check it
+            # (This is a simplification - proper handling would need to track per-attribute)
+            result = list(possible_values)
+            for sub_cond in condition.conditions:
+                if isinstance(sub_cond, AttributeCondition):
+                    result = [v for v in result if self._evaluate_condition_for_value(sub_cond, v, instance)]
+            return result
+        elif isinstance(condition, OrCondition):
+            # For OR, a value passes if it passes ANY sub-condition
+            result = set()
+            for sub_cond in condition.conditions:
+                if isinstance(sub_cond, AttributeCondition):
+                    result.update(
+                        v for v in possible_values if self._evaluate_condition_for_value(sub_cond, v, instance)
+                    )
+            return list(result)
+        return list(possible_values)
+
+    def _evaluate_condition_for_value(self, condition, value: str, instance: Optional[ObjectInstance] = None) -> bool:
         """
         Check if a specific value would pass a condition.
 
         Args:
             condition: The condition to evaluate
             value: The value to test
+            instance: Optional object instance for resolving qualitative spaces
 
         Returns:
             True if the condition would pass with this value
@@ -615,11 +721,19 @@ class TreeSimulationRunner:
             if isinstance(condition.value, list):
                 return value not in condition.value
             return value != condition.value
-        elif condition.operator in ("gt", ">"):
-            # For qualitative spaces, compare by order
-            return False  # Simplified for now
-        elif condition.operator in ("lt", "<"):
-            return False  # Simplified for now
+        elif condition.operator in ("gt", "gte", "lt", "lte"):
+            # For qualitative spaces, compare by order using the space
+            if instance is None:
+                return False
+            try:
+                ai = condition.target.resolve(instance)
+                space = self.registry_manager.spaces.get(ai.spec.space_id)
+                if space:
+                    satisfying_values = space.get_values_for_comparison(str(condition.value), condition.operator)
+                    return value in satisfying_values
+            except (ValueError, AttributeError):
+                pass
+            return False
         return True
 
     # =========================================================================
@@ -675,8 +789,8 @@ class TreeSimulationRunner:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters)
 
         # Partition values into passing and failing
-        passing_values = [v for v in possible_values if self._evaluate_condition_for_value(condition, v)]
-        failing_values = [v for v in possible_values if not self._evaluate_condition_for_value(condition, v)]
+        passing_values = [v for v in possible_values if self._evaluate_condition_for_value(condition, v, instance)]
+        failing_values = [v for v in possible_values if not self._evaluate_condition_for_value(condition, v, instance)]
 
         branches: List[TreeNode] = []
 
@@ -729,6 +843,10 @@ class TreeSimulationRunner:
            - If postcond_attr == precond_attr: intersect with pass values
            - If postcond_attr != precond_attr: split by postcondition cases
 
+        For AND conditions with multiple unknown attributes:
+        - Success branch constrains ALL attributes to satisfying values
+        - Fail branch keeps original state (action rejected)
+
         Uses layer_state_cache for DAG deduplication.
 
         Args:
@@ -737,19 +855,55 @@ class TreeSimulationRunner:
             parent_node: Parent node
             action: Action being applied
             parameters: Action parameters
-            precond_attr: Attribute path checked in precondition
+            precond_attr: Attribute path checked in precondition (first unknown)
             postcond_attr: Attribute path checked in postcondition (may be None or same)
             layer_state_cache: Optional cache for deduplication
 
         Returns:
             List of branches: 1 fail + N success sub-branches
         """
+        from simulator.core.actions.conditions.logical_conditions import (
+            AndCondition,
+            OrCondition,
+        )
+
         if layer_state_cache is None:
             layer_state_cache = {}
         condition = self._get_precondition_condition(action)
+
+        if not condition:
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
+
+        # Handle AND conditions with multiple attributes
+        if isinstance(condition, AndCondition):
+            return self._create_and_condition_branches(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                condition=condition,
+                postcond_attr=postcond_attr,
+                layer_state_cache=layer_state_cache,
+            )
+
+        # Handle OR conditions (creates multiple success branches)
+        if isinstance(condition, OrCondition):
+            return self._create_or_condition_branches(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                condition=condition,
+                postcond_attr=postcond_attr,
+                layer_state_cache=layer_state_cache,
+            )
+
+        # Simple AttributeCondition - original logic
         space_id = get_attribute_space_id(instance, precond_attr)
 
-        if not condition or not space_id:
+        if not space_id:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
         # Get possible values from parent snapshot or space
@@ -766,8 +920,8 @@ class TreeSimulationRunner:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
         # Partition into passing and failing values
-        pass_values = [v for v in possible_values if self._evaluate_condition_for_value(condition, v)]
-        fail_values = [v for v in possible_values if not self._evaluate_condition_for_value(condition, v)]
+        pass_values = [v for v in possible_values if self._evaluate_condition_for_value(condition, v, instance)]
+        fail_values = [v for v in possible_values if not self._evaluate_condition_for_value(condition, v, instance)]
 
         branches: List[TreeNode] = []
 
@@ -812,6 +966,566 @@ class TreeSimulationRunner:
                 values=fail_values,
                 layer_state_cache=layer_state_cache,
             )
+            branches.append(fail_node)
+
+        return branches
+
+    def _create_and_condition_branches(
+        self,
+        tree: SimulationTree,
+        instance: ObjectInstance,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        condition: "AndCondition",
+        postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> List[TreeNode]:
+        """Create branches for an AND condition with potentially multiple unknown attributes.
+
+        For AND:
+        - Success branches: ALL attributes constrained to satisfying values
+          - If postcond_attr is set, further split by postcondition if/elif/else
+        - Fail branches: One per failing disjunct (De Morgan's law)
+
+        Args:
+            tree: Simulation tree
+            instance: Object instance
+            parent_node: Parent node
+            action: Action being applied
+            parameters: Action parameters
+            condition: AndCondition to branch on
+            postcond_attr: Optional postcondition attribute for further branching
+            layer_state_cache: DAG deduplication cache
+
+        Returns:
+            List of branch nodes
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        # Get satisfying values for all attributes in the AND
+        satisfying = self._get_satisfying_values_for_and_condition(condition, instance, parent_node.snapshot)
+
+        # Check if any attribute has no satisfying values (AND cannot be satisfied)
+        if not satisfying or any(not v for v in satisfying.values()):
+            # All branches fail
+            return self._create_and_fail_branch(
+                tree=tree,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                condition=condition,
+                instance=instance,
+                layer_state_cache=layer_state_cache,
+            )
+
+        branches: List[TreeNode] = []
+
+        # Handle postcondition branching if needed
+        if postcond_attr:
+            # Get postcondition branch options
+            postcond_options = self._get_postcondition_branch_options(action, instance, postcond_attr)
+
+            if postcond_options:
+                # Create branches for each postcondition case, with precondition constraints
+                for postcond_value, branch_type, effects in postcond_options:
+                    # Compute intersection with precondition constraints
+                    postcond_values = postcond_value if isinstance(postcond_value, list) else [postcond_value]
+
+                    # Check if postcond_attr is one of the AND-constrained attributes
+                    if postcond_attr in satisfying:
+                        # Intersect postcondition values with precondition constraints
+                        precond_values = satisfying[postcond_attr]
+                        intersected = [v for v in postcond_values if v in precond_values]
+                        if not intersected:
+                            continue  # This postcondition case doesn't overlap with precondition
+                        postcond_values = intersected
+
+                    # Build combined attr_values
+                    combined_values = dict(satisfying)
+                    combined_values[postcond_attr] = postcond_values
+
+                    # Create the branch node
+                    node = self._create_and_postcond_branch(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_values=combined_values,
+                        postcond_attr=postcond_attr,
+                        postcond_values=postcond_values,
+                        branch_type=branch_type,
+                        layer_state_cache=layer_state_cache,
+                    )
+                    branches.append(node)
+            else:
+                # No postcondition branching needed
+                success_node = self._create_and_success_branch(
+                    tree=tree,
+                    instance=instance,
+                    parent_node=parent_node,
+                    action=action,
+                    parameters=parameters,
+                    attr_values=satisfying,
+                    layer_state_cache=layer_state_cache,
+                )
+                branches.append(success_node)
+        else:
+            # No postcondition branching - single success branch
+            success_node = self._create_and_success_branch(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_values=satisfying,
+                layer_state_cache=layer_state_cache,
+            )
+            branches.append(success_node)
+
+        # Create FAIL branches (one per failing disjunct, by De Morgan's law)
+        fail_nodes = self._create_and_fail_branch(
+            tree=tree,
+            parent_node=parent_node,
+            action=action,
+            parameters=parameters,
+            condition=condition,
+            instance=instance,
+            layer_state_cache=layer_state_cache,
+        )
+        branches.extend(fail_nodes)
+
+        return branches
+
+    def _create_and_postcond_branch(
+        self,
+        tree: SimulationTree,
+        instance: ObjectInstance,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        attr_values: Dict[str, List[str]],
+        postcond_attr: str,
+        postcond_values: List[str],
+        branch_type: str,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> TreeNode:
+        """Create a branch for AND precondition with postcondition constraint.
+
+        Combines precondition AND constraints with postcondition if/elif/else case.
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        # Clone instance with all constrained values
+        modified_instance = self._clone_instance_with_multi_values(instance, attr_values)
+
+        # Apply the action to get effects
+        result = self.engine.apply_action(modified_instance, action, parameters)
+        changes = self._build_changes_list(result.changes)
+
+        # Add narrowing changes for all constrained attributes
+        for attr_path, values in attr_values.items():
+            narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
+            changes = narrowing + changes
+
+        # Capture new state with all constrained values
+        result_instance = result.after if result.after else modified_instance
+        new_snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
+
+        # Update snapshot with constrained value sets
+        for attr_path, values in attr_values.items():
+            self._update_snapshot_attribute(new_snapshot, attr_path, values)
+
+        # Create branch condition showing postcondition path
+        operator = "in" if len(postcond_values) > 1 else "equals"
+        value = postcond_values if len(postcond_values) > 1 else postcond_values[0]
+
+        branch_condition = BranchCondition(
+            attribute=postcond_attr,
+            operator=operator,
+            value=value,
+            source="postcondition",
+            branch_type=branch_type,
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
+            snapshot=new_snapshot,
+            action_name=action.name,
+            parameters=parameters,
+            status=NodeStatus.OK.value,
+            error=None,
+            branch_condition=branch_condition,
+            base_changes=changes,
+            result_instance=result_instance,
+            layer_state_cache=layer_state_cache,
+        )
+
+    def _create_and_success_branch(
+        self,
+        tree: SimulationTree,
+        instance: ObjectInstance,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        attr_values: Dict[str, List[str]],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> TreeNode:
+        """Create a success branch for AND condition with multiple constrained attributes."""
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        # Clone instance with all constrained values
+        modified_instance = self._clone_instance_with_multi_values(instance, attr_values)
+
+        # Apply the action to get effects
+        result = self.engine.apply_action(modified_instance, action, parameters)
+        changes = self._build_changes_list(result.changes)
+
+        # Add narrowing changes for all constrained attributes
+        for attr_path, values in attr_values.items():
+            narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
+            changes = narrowing + changes
+
+        # Capture new state with all constrained values
+        result_instance = result.after if result.after else modified_instance
+        new_snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
+
+        # Update snapshot with constrained value sets
+        for attr_path, values in attr_values.items():
+            self._update_snapshot_attribute(new_snapshot, attr_path, values)
+
+        # Create compound branch condition
+        branch_condition = self._create_compound_branch_condition(
+            attr_values=attr_values,
+            source="precondition",
+            branch_type="success",
+            compound_type="and",
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
+            snapshot=new_snapshot,
+            action_name=action.name,
+            parameters=parameters,
+            status=NodeStatus.OK.value,
+            error=None,
+            branch_condition=branch_condition,
+            base_changes=changes,
+            result_instance=result_instance,
+            layer_state_cache=layer_state_cache,
+        )
+
+    def _create_and_fail_branch(
+        self,
+        tree: SimulationTree,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        condition: "AndCondition",
+        instance: ObjectInstance,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> List[TreeNode]:
+        """Create fail branch(es) for AND condition.
+
+        By De Morgan's law: NOT(A ∈ X AND B ∈ Y) = (A ∉ X) OR (B ∉ Y)
+
+        This means we create MULTIPLE fail branches:
+        - Fail Branch 1: A ∈ complement(X), B = unknown (all possible values)
+        - Fail Branch 2: A = unknown (all possible values), B ∈ complement(Y)
+
+        Each branch represents a distinct world state where the action failed
+        for a different reason.
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        branches: List[TreeNode] = []
+
+        # Get the satisfying values for each attribute (to compute complements)
+        satisfying = self._get_satisfying_values_for_and_condition(condition, instance, parent_node.snapshot)
+
+        # For each attribute, create a fail branch where THAT attribute fails
+        # and other attributes remain unknown
+        for attr_path, passing_values in satisfying.items():
+            # Get all possible values for this attribute
+            space_id = get_attribute_space_id(instance, attr_path)
+            if not space_id:
+                continue
+
+            all_values = get_all_space_values(space_id, self.registry_manager)
+
+            # Get values from parent snapshot (may be constrained by earlier actions)
+            if parent_node and parent_node.snapshot:
+                snapshot_value = parent_node.snapshot.get_attribute_value(attr_path)
+                if isinstance(snapshot_value, list):
+                    all_values = [v for v in all_values if v in snapshot_value]
+
+            # Compute complement: values that FAIL this condition
+            complement_values = [v for v in all_values if v not in passing_values]
+
+            if not complement_values:
+                continue  # This attribute cannot fail (all values pass)
+
+            # Build the fail state: this attribute = complement, others = unknown
+            fail_attr_values: Dict[str, List[str]] = {}
+            for other_attr, other_vals in satisfying.items():
+                if other_attr == attr_path:
+                    fail_attr_values[other_attr] = complement_values
+                else:
+                    # Other attributes remain at their original unknown state
+                    other_space_id = get_attribute_space_id(instance, other_attr)
+                    if other_space_id:
+                        other_all = get_all_space_values(other_space_id, self.registry_manager)
+                        # Constrain to parent snapshot if available
+                        if parent_node and parent_node.snapshot:
+                            other_snapshot_value = parent_node.snapshot.get_attribute_value(other_attr)
+                            if isinstance(other_snapshot_value, list):
+                                other_all = [v for v in other_all if v in other_snapshot_value]
+                        fail_attr_values[other_attr] = other_all
+
+            # Create snapshot with the failed attribute constrained
+            new_snapshot, constraint_changes = snapshot_with_constrained_values(
+                parent_node.snapshot, attr_path, complement_values, self.registry_manager
+            )
+
+            # Build error message for this specific failure
+            error_msg = f"Precondition failed: {attr_path} not in allowed values"
+
+            # Add narrowing changes
+            changes = compute_narrowing_change(parent_node.snapshot, attr_path, complement_values)
+            for cc in constraint_changes:
+                changes.append(
+                    {
+                        "attribute": cc["attribute"],
+                        "before": cc["before"],
+                        "after": cc["after"],
+                        "kind": cc.get("kind", "constraint"),
+                    }
+                )
+
+            # Create branch condition for this specific failure
+            operator = "in" if len(complement_values) > 1 else "equals"
+            value = complement_values if len(complement_values) > 1 else complement_values[0]
+
+            branch_condition = BranchCondition(
+                attribute=attr_path,
+                operator=operator,
+                value=value,
+                source="precondition",
+                branch_type="fail",
+            )
+
+            node = create_or_merge_node(
+                tree=tree,
+                parent_node=parent_node,
+                snapshot=new_snapshot,
+                action_name=action.name,
+                parameters=parameters,
+                status=NodeStatus.REJECTED.value,
+                error=error_msg,
+                branch_condition=branch_condition,
+                base_changes=changes,
+                result_instance=None,
+                layer_state_cache=layer_state_cache,
+            )
+            branches.append(node)
+
+        return branches
+
+    def _create_or_fail_branch(
+        self,
+        tree: SimulationTree,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        condition: "OrCondition",
+        instance: ObjectInstance,
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> Optional[TreeNode]:
+        """Create fail branch for OR condition.
+
+        By De Morgan's law: NOT(A OR B) = NOT(A) AND NOT(B)
+
+        The fail branch has ALL attributes constrained to their complement values
+        (values that fail each disjunct).
+        """
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        # Collect complement values for each attribute in the OR
+        fail_attr_values: Dict[str, List[str]] = {}
+
+        for sub_cond in condition.conditions:
+            if isinstance(sub_cond, AttributeCondition):
+                attr_path = sub_cond.target.to_string()
+                space_id = get_attribute_space_id(instance, attr_path)
+
+                if not space_id:
+                    continue
+
+                # Get possible values
+                possible_values: List[str] = []
+                if parent_node and parent_node.snapshot:
+                    snapshot_value = parent_node.snapshot.get_attribute_value(attr_path)
+                    if isinstance(snapshot_value, list):
+                        possible_values = list(snapshot_value)
+
+                if not possible_values:
+                    possible_values = get_all_space_values(space_id, self.registry_manager)
+
+                # Get values that FAIL this disjunct (complement of satisfying)
+                satisfying = [v for v in possible_values if self._evaluate_condition_for_value(sub_cond, v, instance)]
+                complement = [v for v in possible_values if v not in satisfying]
+
+                if not complement:
+                    # This disjunct is always satisfied - OR can't fail
+                    return None
+
+                fail_attr_values[attr_path] = complement
+
+        if not fail_attr_values:
+            return None
+
+        # Create snapshot with all attributes constrained to failing values
+        new_snapshot = parent_node.snapshot
+        all_changes: List[Dict] = []
+
+        for attr_path, values in fail_attr_values.items():
+            new_snapshot, constraint_changes = snapshot_with_constrained_values(
+                new_snapshot, attr_path, values, self.registry_manager
+            )
+            narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
+            all_changes.extend(narrowing)
+            for cc in constraint_changes:
+                all_changes.append(
+                    {
+                        "attribute": cc["attribute"],
+                        "before": cc["before"],
+                        "after": cc["after"],
+                        "kind": cc.get("kind", "constraint"),
+                    }
+                )
+
+        # Build error message
+        error_msg = f"Precondition failed: {condition.describe()}"
+
+        # Create compound branch condition for fail
+        branch_condition = self._create_compound_branch_condition(
+            attr_values=fail_attr_values,
+            source="precondition",
+            branch_type="fail",
+            compound_type="or",
+        )
+
+        return create_or_merge_node(
+            tree=tree,
+            parent_node=parent_node,
+            snapshot=new_snapshot,
+            action_name=action.name,
+            parameters=parameters,
+            status=NodeStatus.REJECTED.value,
+            error=error_msg,
+            branch_condition=branch_condition,
+            base_changes=all_changes,
+            result_instance=None,
+            layer_state_cache=layer_state_cache,
+        )
+
+    def _create_or_condition_branches(
+        self,
+        tree: SimulationTree,
+        instance: ObjectInstance,
+        parent_node: TreeNode,
+        action: Action,
+        parameters: Dict[str, str],
+        condition: "OrCondition",
+        postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+    ) -> List[TreeNode]:
+        """Create branches for an OR condition with multiple unknown attributes.
+
+        For OR:
+        - Multiple success branches, one per disjunct that can be satisfied
+        - Each success branch constrains different attributes
+        - Fail branch only if NO disjunct can be satisfied
+
+        Args:
+            tree: Simulation tree
+            instance: Object instance
+            parent_node: Parent node
+            action: Action being applied
+            parameters: Action parameters
+            condition: OrCondition to branch on
+            postcond_attr: Optional postcondition attribute for further branching
+            layer_state_cache: DAG deduplication cache
+
+        Returns:
+            List of branch nodes
+        """
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        branches: List[TreeNode] = []
+
+        # For each disjunct in the OR, create a success branch if it can be satisfied
+        for sub_cond in condition.conditions:
+            if isinstance(sub_cond, AttributeCondition):
+                attr_path = sub_cond.target.to_string()
+                space_id = get_attribute_space_id(instance, attr_path)
+
+                if not space_id:
+                    continue
+
+                # Get possible values
+                possible_values: List[str] = []
+                if parent_node and parent_node.snapshot:
+                    snapshot_value = parent_node.snapshot.get_attribute_value(attr_path)
+                    if isinstance(snapshot_value, list):
+                        possible_values = list(snapshot_value)
+
+                if not possible_values:
+                    possible_values = get_all_space_values(space_id, self.registry_manager)
+
+                # Get satisfying values for this disjunct
+                satisfying = [v for v in possible_values if self._evaluate_condition_for_value(sub_cond, v, instance)]
+
+                if satisfying:
+                    # Create success branch with this attribute constrained
+                    # Other attributes remain unknown
+                    success_node = self._create_branch_success_node(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_path=attr_path,
+                        values=satisfying,
+                        layer_state_cache=layer_state_cache,
+                    )
+                    branches.append(success_node)
+
+        # Create FAIL branch: when ALL disjuncts fail simultaneously
+        # By De Morgan: NOT(A OR B) = NOT(A) AND NOT(B)
+        fail_node = self._create_or_fail_branch(
+            tree=tree,
+            parent_node=parent_node,
+            action=action,
+            parameters=parameters,
+            condition=condition,
+            instance=instance,
+            layer_state_cache=layer_state_cache,
+        )
+        if fail_node:
             branches.append(fail_node)
 
         return branches
@@ -1334,6 +2048,156 @@ class TreeSimulationRunner:
         if values:
             AttributePath.parse(attr_path).set_value_in_instance(new_instance, values[0])
         return new_instance
+
+    def _clone_instance_with_multi_values(
+        self, instance: ObjectInstance, attr_values: Dict[str, List[str]]
+    ) -> ObjectInstance:
+        """Clone an instance and constrain multiple attributes to specific values.
+
+        Args:
+            instance: Original instance to clone
+            attr_values: Dict mapping attr_path -> list of possible values
+
+        Returns:
+            Cloned instance with first value set for each attribute
+        """
+        new_instance = instance.deep_copy()
+        for attr_path, values in attr_values.items():
+            if values:
+                AttributePath.parse(attr_path).set_value_in_instance(new_instance, values[0])
+        return new_instance
+
+    def _create_compound_branch_condition(
+        self,
+        attr_values: Dict[str, List[str]],
+        source: str,
+        branch_type: str,
+        compound_type: str = "and",
+    ) -> BranchCondition:
+        """Create a compound BranchCondition for multiple attributes.
+
+        Args:
+            attr_values: Dict mapping attr_path -> list of constrained values
+            source: "precondition" or "postcondition"
+            branch_type: "success", "fail", "if", etc.
+            compound_type: "and" or "or"
+
+        Returns:
+            BranchCondition with sub_conditions for each attribute
+        """
+        sub_conditions = []
+        for attr_path, values in attr_values.items():
+            operator = "in" if len(values) > 1 else "equals"
+            value = values if len(values) > 1 else values[0]
+            sub_conditions.append(
+                BranchCondition(
+                    attribute=attr_path,
+                    operator=operator,
+                    value=value,
+                    source=source,
+                    branch_type=branch_type,
+                )
+            )
+
+        # If only one attribute, return simple condition
+        if len(sub_conditions) == 1:
+            return sub_conditions[0]
+
+        # Return compound condition
+        return BranchCondition(
+            attribute="",  # Not used for compound
+            operator="",  # Not used for compound
+            value="",  # Not used for compound
+            source=source,
+            branch_type=branch_type,
+            compound_type=compound_type,
+            sub_conditions=sub_conditions,
+        )
+
+    def _get_satisfying_values_for_and_condition(
+        self,
+        condition: "AndCondition",
+        instance: ObjectInstance,
+        parent_snapshot: Optional[WorldSnapshot],
+    ) -> Dict[str, List[str]]:
+        """Get satisfying values for each attribute in an AND condition.
+
+        For AND conditions, we need to find values that satisfy each sub-condition.
+
+        Args:
+            condition: AndCondition to evaluate
+            instance: Object instance for space resolution
+            parent_snapshot: Parent snapshot for value sets
+
+        Returns:
+            Dict mapping attr_path -> list of satisfying values
+        """
+        result: Dict[str, List[str]] = {}
+
+        for sub_cond in condition.get_attribute_conditions():
+            attr_path = sub_cond.target.to_string()
+            space_id = get_attribute_space_id(instance, attr_path)
+
+            if not space_id:
+                continue
+
+            # Get possible values from parent snapshot or all space values
+            possible_values: List[str] = []
+            if parent_snapshot:
+                snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                if isinstance(snapshot_value, list):
+                    possible_values = list(snapshot_value)
+
+            if not possible_values:
+                possible_values = get_all_space_values(space_id, self.registry_manager)
+
+            # Filter to values that satisfy this sub-condition
+            satisfying = [v for v in possible_values if self._evaluate_condition_for_value(sub_cond, v, instance)]
+
+            if attr_path in result:
+                # Intersect with existing values for this attribute
+                result[attr_path] = [v for v in result[attr_path] if v in satisfying]
+            else:
+                result[attr_path] = satisfying
+
+        return result
+
+    def _get_failing_values_for_and_condition(
+        self,
+        condition: "AndCondition",
+        instance: ObjectInstance,
+        parent_snapshot: Optional[WorldSnapshot],
+    ) -> Dict[str, List[str]]:
+        """Get all possible values for each attribute when AND fails.
+
+        For a failed AND, we keep all values as they were (unknown).
+        The action is simply rejected; we don't try to compute the complement.
+
+        Returns:
+            Dict mapping attr_path -> all possible values (unchanged)
+        """
+        result: Dict[str, List[str]] = {}
+
+        for sub_cond in condition.get_attribute_conditions():
+            attr_path = sub_cond.target.to_string()
+            space_id = get_attribute_space_id(instance, attr_path)
+
+            if not space_id:
+                continue
+
+            # Get possible values from parent snapshot or all space values
+            possible_values: List[str] = []
+            if parent_snapshot:
+                snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                if isinstance(snapshot_value, list):
+                    possible_values = list(snapshot_value)
+
+            if not possible_values:
+                possible_values = get_all_space_values(space_id, self.registry_manager)
+
+            result[attr_path] = possible_values
+
+        return result
 
     # =========================================================================
     # Branch Condition Extraction

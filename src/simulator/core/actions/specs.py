@@ -21,6 +21,10 @@ from simulator.core.actions.conditions.attribute_conditions import (
     ComparisonOperator,
 )
 from simulator.core.actions.conditions.base import Condition
+from simulator.core.actions.conditions.logical_conditions import (
+    AndCondition,
+    OrCondition,
+)
 from simulator.core.actions.conditions.parameter_conditions import (
     ParameterEquals,
     ParameterValid,
@@ -72,7 +76,43 @@ class AttributeCheckConditionSpec(ConditionSpec):
     value: Any
 
 
+class AndConditionSpec(ConditionSpec):
+    """AND condition combining multiple sub-conditions."""
+
+    type: Literal["and"]
+    conditions: List[ConditionSpec] = Field(default_factory=list)
+
+    @field_validator("conditions", mode="before")
+    @classmethod
+    def _parse_conditions(cls, value: Any) -> List[ConditionSpec]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        # Defer to parse_condition_spec for each item
+        return [parse_condition_spec(item) for item in value]
+
+
+class OrConditionSpec(ConditionSpec):
+    """OR condition combining multiple sub-conditions."""
+
+    type: Literal["or"]
+    conditions: List[ConditionSpec] = Field(default_factory=list)
+
+    @field_validator("conditions", mode="before")
+    @classmethod
+    def _parse_conditions(cls, value: Any) -> List[ConditionSpec]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            value = [value]
+        # Defer to parse_condition_spec for each item
+        return [parse_condition_spec(item) for item in value]
+
+
 ConditionSpec.model_rebuild()
+AndConditionSpec.model_rebuild()
+OrConditionSpec.model_rebuild()
 
 
 class EffectSpec(_BaseSpec):
@@ -129,7 +169,7 @@ def _register_builtin_types() -> None:
     condition_registry = get_condition_registry()
     effect_registry = get_effect_registry()
 
-    # Register condition types - simplified to just attribute checks and parameter conditions
+    # Register condition types
     condition_registry.register(
         "parameter_valid", ParameterValidConditionSpec, lambda spec: _build_parameter_valid(spec)
     )
@@ -139,6 +179,9 @@ def _register_builtin_types() -> None:
     condition_registry.register(
         "attribute_check", AttributeCheckConditionSpec, lambda spec: _build_attribute_condition(spec)
     )
+    # Compound logical conditions
+    condition_registry.register("and", AndConditionSpec, lambda spec: _build_and_condition(spec))
+    condition_registry.register("or", OrConditionSpec, lambda spec: _build_or_condition(spec))
 
     # Register effect types
     effect_registry.register("set_attribute", SetAttributeEffectSpec, lambda spec: _build_set_attribute_effect(spec))
@@ -224,6 +267,18 @@ def _build_attribute_condition(spec: AttributeCheckConditionSpec) -> Condition:
     return AttributeCondition(target=target, operator=spec.operator, value=value)  # type: ignore[arg-type]
 
 
+def _build_and_condition(spec: "AndConditionSpec") -> Condition:
+    """Build AndCondition from spec."""
+    sub_conditions = [build_condition(c) for c in spec.conditions]
+    return AndCondition(conditions=sub_conditions)
+
+
+def _build_or_condition(spec: "OrConditionSpec") -> Condition:
+    """Build OrCondition from spec."""
+    sub_conditions = [build_condition(c) for c in spec.conditions]
+    return OrCondition(conditions=sub_conditions)
+
+
 def _build_set_attribute_effect(spec: SetAttributeEffectSpec) -> Effect:
     """Build SetAttributeEffect from spec."""
     target = AttributeTarget.from_string(spec.target)
@@ -253,6 +308,10 @@ def build_condition(spec: ConditionSpec) -> Condition:
         return _build_parameter_equals(spec)
     if isinstance(spec, AttributeCheckConditionSpec):
         return _build_attribute_condition(spec)
+    if isinstance(spec, AndConditionSpec):
+        return _build_and_condition(spec)
+    if isinstance(spec, OrConditionSpec):
+        return _build_or_condition(spec)
     raise TypeError(f"Unsupported condition spec: {spec}")
 
 
@@ -312,8 +371,10 @@ def parse_preconditions_field(value: Any) -> List[ConditionSpec]:
 
 
 __all__ = [
+    "AndConditionSpec",
     "AttributeCheckConditionSpec",
     "ConditionalEffectSpec",
+    "OrConditionSpec",
     "ParameterEqualsConditionSpec",
     "ParameterValidConditionSpec",
     "SetAttributeEffectSpec",

@@ -12,6 +12,9 @@ This document provides examples organized from simple to complex, demonstrating 
 6. [Same Attribute Branching (Intersection Logic)](#same-attribute-branching-intersection-logic)
 7. [Multi-Level Branching (Complex)](#multi-level-branching-complex)
 8. [DAG State Deduplication (Node Merging)](#dag-state-deduplication-node-merging)
+9. [Comparison Operators](#comparison-operators)
+10. [AND Compound Conditions](#and-compound-conditions)
+11. [OR Compound Conditions](#or-compound-conditions)
 
 ---
 
@@ -322,6 +325,119 @@ state0 ─┬─ S1 ──┐
         └─ S3 ──┘            ├─ S6 ──┼──→ 🔗 S8
                              └─ S7 ──┘
 ```
+
+---
+
+## Comparison Operators
+
+The simulator supports comparison operators (`>=`, `>`, `<=`, `<`) that automatically expand to value sets based on the ordered qualitative space.
+
+### Power Level > Low (Expands to {medium, high})
+
+The `compound_test` object has a `power.level` attribute with space `[low, medium, high]`.
+
+```bash
+sim simulate --obj compound_test --set power.level=unknown --actions maintain --name comparison_gt
+```
+
+**What happens:**
+- The action `maintain` has precondition: `power.level > low`
+- This expands to `power.level IN {medium, high}` based on the qualitative space ordering
+- **SUCCESS branch**: `power.level = {medium, high}` - action succeeds
+- **FAIL branch**: `power.level = low` - precondition failed
+
+---
+
+## AND Compound Conditions
+
+AND conditions require ALL sub-conditions to be true. When multiple attributes are unknown, the simulator applies De Morgan's law for fail branches.
+
+### AND with One Unknown Attribute
+
+```bash
+sim simulate --obj compound_test --set power.state=on temperature.value=unknown --actions heat_up --name and_one_unknown
+```
+
+**What happens:**
+- Precondition: `power.state == on AND temperature.value == cold`
+- `power.state` is known (on), so only `temperature.value` branches:
+  - **SUCCESS**: `temperature = cold` → action succeeds
+  - **FAIL 1**: `temperature = warm` → precondition failed
+  - **FAIL 2**: `temperature = hot` → precondition failed
+
+### AND with Both Attributes Unknown (De Morgan's Law)
+
+```bash
+sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions heat_up --name and_both_unknown
+```
+
+**What happens:**
+- Both `power.state` and `temperature.value` are unknown
+- By De Morgan's law: `NOT(A AND B) = NOT(A) OR NOT(B)`
+- **SUCCESS branch**: `power.state = on, temperature.value = cold` → both conditions satisfied
+- **FAIL branch 1**: `power.state = off` (any temperature) → first condition fails
+- **FAIL branch 2**: `temperature.value = {warm, hot}` (power = on) → second condition fails
+
+### AND with Comparison Operators
+
+```bash
+sim simulate --obj compound_test --set power.state=on power.level=unknown safety.locked=unknown --actions boost --name and_with_comparison
+```
+
+**What happens:**
+- Precondition: `power.level >= medium AND safety.locked == off`
+- `power.level >= medium` expands to `{medium, high}`
+- Branches:
+  - **SUCCESS**: `power.level = {medium, high}, safety.locked = off`
+  - **FAIL 1**: `power.level = low` (safety unknown)
+  - **FAIL 2**: `safety.locked = on` (power level satisfied)
+
+---
+
+## OR Compound Conditions
+
+OR conditions require at least ONE sub-condition to be true. Each satisfiable disjunct creates a separate success branch.
+
+### OR with Two Unknown Attributes (Multiple Branches)
+
+```bash
+sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions emergency_shutdown --name or_two_unknown
+```
+
+**What happens:**
+- Precondition: `power.state == on OR temperature.value == hot`
+- By De Morgan's law: `NOT(A OR B) = NOT(A) AND NOT(B)`
+- Each disjunct that can be satisfied creates a separate success branch:
+  - **SUCCESS 1**: `power.state = on` (temperature still unknown) → first disjunct satisfied
+  - **SUCCESS 2**: `temperature.value = hot` (power.state still unknown) → second disjunct satisfied
+- **FAIL**: `power.state = off AND temperature.value = {cold, warm}` → neither disjunct satisfied
+
+*Note: Unlike AND (where all conditions must hold simultaneously), OR creates independent success branches where only one condition is constrained and others remain unknown. The fail branch constrains ALL attributes to their complement values.*
+
+---
+
+## Multi-Action with Compound Conditions
+
+Compound conditions work across multi-action sequences, with proper value set intersection.
+
+### Sequence: basic_on → heat_up
+
+```bash
+sim simulate --obj compound_test --set power.state=unknown temperature.value=unknown --actions basic_on heat_up --name compound_sequence
+```
+
+**What happens:**
+1. **Action 1 (`basic_on`)**: Requires `power.state == off`, sets `power.state = on`
+   - **SUCCESS**: `power.state = off` → becomes `on`
+   - **FAIL**: `power.state = on` → precondition failed
+
+2. **Action 2 (`heat_up`)**: Requires `power.state == on AND temperature.value == cold`
+   - From SUCCESS of basic_on: `power.state` is now `on`, `temperature.value` still unknown
+   - Branches on `temperature.value`:
+     - **SUCCESS**: `temperature = cold` → action succeeds
+     - **FAIL 1**: `temperature = warm` → precondition failed
+     - **FAIL 2**: `temperature = hot` → precondition failed
+   - From FAIL of basic_on: stays failed (no further actions)
 
 ---
 

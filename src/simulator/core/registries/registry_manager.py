@@ -96,18 +96,34 @@ class RegistryManager(BaseModel):
     def create_behavior_enhanced_action(self, object_name: str, action_name: str):
         """Create an action enhanced with object-specific behavior if available."""
         base_action = self.find_action_for_object(object_name, action_name)
-        if not base_action:
-            return None
 
         # Check if object has custom behavior for this action
         obj_type = self.objects.get(object_name)
         if action_name in obj_type.behaviors:
-            # Merge behavior into action
             behavior = obj_type.behaviors[action_name]
-            enhanced_action = self._merge_action_with_behavior(base_action, behavior)
-            return enhanced_action
+
+            if base_action:
+                # Merge behavior into base action
+                enhanced_action = self._merge_action_with_behavior(base_action, behavior)
+                return enhanced_action
+            else:
+                # Create action directly from behavior (no generic base)
+                return self._create_action_from_behavior(object_name, action_name, behavior)
 
         return base_action
+
+    def _create_action_from_behavior(self, object_name: str, action_name: str, behavior: ObjectBehavior):
+        """Create an action directly from an object behavior (no base action)."""
+        from simulator.core.actions.action import Action
+
+        return Action(
+            name=action_name,
+            object_type=object_name,
+            parameters={},
+            preconditions=behavior.preconditions or [],
+            effects=behavior.effects or [],
+            metadata={},
+        )
 
     def _merge_action_with_behavior(self, base_action: Action, behavior: ObjectBehavior):
         """Merge object behavior with base action."""

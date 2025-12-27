@@ -190,22 +190,35 @@ class BranchCondition(BaseModel):
     - For precondition branches: whether the precondition passed or failed
     - For postcondition branches: which if/elif/else case was matched
 
-    In Phase 2, the value can be a single value or a set of values (for else branches).
+    Supports both simple conditions and compound conditions (AND/OR).
+    For compound conditions:
+    - attribute may be a single attribute or unused (use sub_conditions instead)
+    - compound_type indicates "and" or "or"
+    - sub_conditions contains the individual BranchCondition entries
+
+    For simple conditions:
+    - attribute: the checked attribute path
+    - operator: comparison operator
+    - value: expected value(s)
     """
 
-    attribute: str  # e.g., "battery.level"
-    operator: str  # e.g., "equals", "not_equals", "in"
+    attribute: str  # e.g., "battery.level" (may be empty for compound)
+    operator: str  # e.g., "equals", "not_equals", "in" (may be empty for compound)
     value: Union[str, List[str]]  # Single value OR set of values (for else branch)
     source: Literal["precondition", "postcondition"]
 
     # For postcondition branches with if/elif/else
     branch_type: Literal["if", "elif", "else", "success", "fail"] = "if"
 
+    # For compound conditions (AND/OR)
+    compound_type: Optional[Literal["and", "or"]] = None
+    sub_conditions: Optional[List["BranchCondition"]] = None
+
     @field_validator("operator")
     @classmethod
     def validate_operator(cls, v: str) -> str:
         """Validate operator is supported."""
-        valid_ops = {"equals", "not_equals", "lt", "lte", "gt", "gte", "in", "not_in"}
+        valid_ops = {"equals", "not_equals", "lt", "lte", "gt", "gte", "in", "not_in", ""}
         # Also accept display forms
         if v in valid_ops or v.startswith("not "):
             return v
@@ -214,6 +227,10 @@ class BranchCondition(BaseModel):
     def is_value_set(self) -> bool:
         """Check if the value is a set of possible values."""
         return isinstance(self.value, list)
+
+    def is_compound(self) -> bool:
+        """Check if this is a compound condition."""
+        return self.compound_type is not None
 
     def get_value_display(self) -> str:
         """Get a display string for the value (handles sets)."""
@@ -224,6 +241,12 @@ class BranchCondition(BaseModel):
     def describe(self) -> str:
         """Human-readable description of the branch condition."""
         from simulator.utils.error_formatting import get_operator_symbol
+
+        if self.compound_type and self.sub_conditions:
+            # Compound condition description
+            parts = [sc.describe() for sc in self.sub_conditions]
+            joiner = " AND " if self.compound_type == "and" else " OR "
+            return "(" + joiner.join(parts) + ")"
 
         op_symbol = get_operator_symbol(self.operator)
         value_str = self.get_value_display()
@@ -252,6 +275,10 @@ class BranchCondition(BaseModel):
                 return value not in self.value
             return value != self.value
         return False
+
+
+# Rebuild model for self-referential type
+BranchCondition.model_rebuild()
 
 
 class IncomingEdge(BaseModel):

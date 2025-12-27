@@ -68,3 +68,38 @@ class QualitativeSpace(BaseModel):
             # Include last_known_value and all levels above it
             allowed = self.levels[idx:]
         return list(allowed) if allowed else list(self.levels)
+
+    def get_values_for_comparison(self, value: str, operator: str) -> List[str]:
+        """Return all values from the space that satisfy a comparison operator.
+
+        For ordered qualitative spaces, this expands comparison operators to value sets:
+        - gte (>=): all values from `value` to the end (inclusive)
+        - gt (>): all values after `value` (exclusive)
+        - lte (<=): all values from start to `value` (inclusive)
+        - lt (<): all values before `value` (exclusive)
+
+        Args:
+            value: The reference value to compare against
+            operator: One of "gt", "gte", "lt", "lte"
+
+        Returns:
+            List of values that satisfy the comparison
+
+        Raises:
+            ValueError: If value is not in the space or operator is invalid
+        """
+        if value not in self.levels:
+            raise ValueError(f"Value '{value}' not in space '{self.id}' levels {self.levels}")
+
+        idx = self.levels.index(value)
+
+        if operator == "gte":
+            return list(self.levels[idx:])
+        elif operator == "gt":
+            return list(self.levels[idx + 1 :])
+        elif operator == "lte":
+            return list(self.levels[: idx + 1])
+        elif operator == "lt":
+            return list(self.levels[:idx])
+        else:
+            raise ValueError(f"Invalid comparison operator: {operator}")

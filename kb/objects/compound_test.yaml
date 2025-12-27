@@ -1,0 +1,129 @@
+# Compound Test object definition
+# Demonstrates AND/OR compound conditions and comparison operators
+
+type: compound_test
+parts:
+  power:
+    attributes:
+      state:
+        space: binary_state
+        default: 'off'
+        mutable: true
+      level:
+        space: power_level  # low, medium, high
+        default: medium
+        mutable: true
+  temperature:
+    attributes:
+      value:
+        space: temperature_level  # cold, warm, hot
+        default: cold
+        mutable: true
+  safety:
+    attributes:
+      locked:
+        space: binary_state
+        default: 'off'
+        mutable: true
+
+behaviors:
+  # Simple action requiring power.state == on
+  basic_on:
+    preconditions:
+      - type: attribute_check
+        target: power.state
+        operator: equals
+        value: "off"
+    effects:
+      - type: set_attribute
+        target: power.state
+        value: "on"
+
+  # AND condition: power must be on AND temperature must be cold
+  heat_up:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: power.state
+            operator: equals
+            value: "on"
+          - type: attribute_check
+            target: temperature.value
+            operator: equals
+            value: cold
+    effects:
+      - type: set_attribute
+        target: temperature.value
+        value: warm
+
+  # AND with comparison: power.level >= medium AND safety not locked
+  boost:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: power.level
+            operator: gte
+            value: medium
+          - type: attribute_check
+            target: safety.locked
+            operator: equals
+            value: "off"
+    effects:
+      - type: set_attribute
+        target: power.level
+        value: high
+      - type: set_attribute
+        target: temperature.value
+        value: hot
+
+  # OR condition: either power is on OR temperature is hot
+  emergency_shutdown:
+    preconditions:
+      - type: or
+        conditions:
+          - type: attribute_check
+            target: power.state
+            operator: equals
+            value: "on"
+          - type: attribute_check
+            target: temperature.value
+            operator: equals
+            value: hot
+    effects:
+      - type: set_attribute
+        target: power.state
+        value: "off"
+      - type: set_attribute
+        target: power.level
+        value: low
+
+  # Comparison operator: power.level > low (means medium or high)
+  maintain:
+    preconditions:
+      - type: attribute_check
+        target: power.level
+        operator: gt
+        value: low
+    effects:
+      - type: set_trend
+        target: temperature.value
+        direction: up
+
+  # Reset everything
+  reset:
+    effects:
+      - type: set_attribute
+        target: power.state
+        value: "off"
+      - type: set_attribute
+        target: power.level
+        value: medium
+      - type: set_attribute
+        target: temperature.value
+        value: cold
+      - type: set_attribute
+        target: safety.locked
+        value: "off"
+
