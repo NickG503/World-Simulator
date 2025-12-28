@@ -70,6 +70,11 @@ behaviors:
 
   # Reset the dice - resets everything including face
   reset:
+    preconditions:
+      - type: attribute_check
+        target: prize.result
+        operator: not_equals
+        value: none
     effects:
       - type: set_attribute
         target: cube.face

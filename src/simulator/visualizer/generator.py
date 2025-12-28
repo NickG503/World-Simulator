@@ -190,6 +190,26 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             color: var(--text-dim);
             font-size: 0.9em;
             margin-top: 6px;
+            line-height: 1.5;
+        }}
+
+        .detail-header .branch .compound-connector {{
+            color: var(--accent-purple);
+            font-weight: 600;
+            padding: 0 4px;
+        }}
+
+        .detail-header .branch .attr-name {{
+            color: var(--accent-blue);
+        }}
+
+        .detail-header .branch .operator {{
+            color: var(--accent-yellow);
+            padding: 0 2px;
+        }}
+
+        .detail-header .branch .value-set {{
+            color: var(--accent-cyan);
         }}
 
         .section {{
@@ -708,11 +728,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
             if (node.branch_condition) {{
                 const bc = node.branch_condition;
-                const op = bc.operator === 'equals' ? '==' : (bc.operator === 'in' ? '∈' : bc.operator);
-                const valueDisplay = Array.isArray(bc.value)
-                    ? `<span class="branch-value-set">{{${{bc.value.join(', ')}}}}</span>`
-                    : bc.value;
-                html += `<div class="branch">${{bc.attribute}} == ${{valueDisplay}}</div>`;
+                html += `<div class="branch">${{formatBranchCondition(bc)}}</div>`;
             }}
 
             if (node.action_error) {{
@@ -929,6 +945,59 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 return '{{' + value.join(', ') + '}}';
             }}
             return value || '—';
+        }}
+
+        function getOperatorSymbol(op) {{
+            switch(op) {{
+                case 'equals': return '==';
+                case 'not_equals': return '!=';
+                case 'in': return '∈';
+                case 'not_in': return '∉';
+                case 'gt': return '>';
+                case 'gte': return '>=';
+                case 'lt': return '<';
+                case 'lte': return '<=';
+                default: return op || '==';
+            }}
+        }}
+
+        function formatBranchCondition(bc) {{
+            // Handle compound conditions (AND/OR)
+            if (bc.compound_type && bc.sub_conditions && bc.sub_conditions.length > 0) {{
+                const connectorText = bc.compound_type === 'and' ? 'AND' : 'OR';
+                const connector = `<span class="compound-connector">${{connectorText}}</span>`;
+                const parts = bc.sub_conditions.map(sub => formatBranchCondition(sub));
+                return '(' + parts.join(' ' + connector + ' ') + ')';
+            }}
+
+            // Simple condition
+            const attr = bc.attribute || '';
+            let op = getOperatorSymbol(bc.operator);
+            const isValueSet = Array.isArray(bc.value);
+
+            // If value is a set and operator is equals/not_equals, use ∈/∉ instead
+            if (isValueSet) {{
+                if (bc.operator === 'equals' || bc.operator === 'in') {{
+                    op = '∈';
+                }} else if (bc.operator === 'not_equals' || bc.operator === 'not_in') {{
+                    op = '∉';
+                }}
+            }}
+
+            const valueDisplay = isValueSet
+                ? '{{' + bc.value.join(', ') + '}}'
+                : (bc.value || '');
+
+            if (!attr && !valueDisplay) {{
+                return bc.branch_type || '';
+            }}
+
+            // Format with color classes
+            const attrHtml = `<span class="attr-name">${{attr}}</span>`;
+            const opHtml = `<span class="operator">${{op}}</span>`;
+            const valueHtml = `<span class="value-set">${{valueDisplay}}</span>`;
+
+            return `${{attrHtml}} ${{opHtml}} ${{valueHtml}}`;
         }}
 
         function isValueSet(value) {{

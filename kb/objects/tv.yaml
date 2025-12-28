@@ -77,6 +77,11 @@ constraints:
 
 behaviors:
   turn_on:
+    preconditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: off
     effects:
       - type: set_attribute
         target: button.state
@@ -91,6 +96,11 @@ behaviors:
         target: cooling.temperature
         direction: up
   turn_off:
+    preconditions:
+      - type: attribute_check
+        target: screen.power
+        operator: equals
+        value: on
     effects:
       - type: set_attribute
         target: button.state

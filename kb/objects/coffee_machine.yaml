@@ -1,0 +1,201 @@
+# Coffee Machine - demonstrates comparison operators and AND conditions
+# A realistic espresso machine with water tank, bean hopper, and heater
+
+type: coffee_machine
+parts:
+  water_tank:
+    attributes:
+      level:
+        space: generic_level  # empty, low, medium, high, full
+        default: medium
+        mutable: true
+
+  bean_hopper:
+    attributes:
+      amount:
+        space: bean_amount  # empty, low, medium, high, full
+        default: medium
+        mutable: true
+
+  heater:
+    attributes:
+      temperature:
+        space: simple_temperature  # cold, warm, hot
+        default: cold
+        mutable: true
+
+  status:
+    attributes:
+      ready:
+        space: binary_state  # off, on
+        default: 'off'
+        mutable: true
+
+behaviors:
+  # Comparison operator: heater.temperature < hot
+  # Demonstrates < operator expanding to value set {cold, warm}
+  heat_up:
+    preconditions:
+      - type: attribute_check
+        target: heater.temperature
+        operator: lt
+        value: hot
+    effects:
+      - type: set_trend
+        target: heater.temperature
+        direction: up
+
+  # AND condition with comparison operators
+  # Requires: water.level >= low AND beans.amount >= low
+  # Demonstrates AND + >= operators together
+  brew_espresso:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: water_tank.level
+            operator: gte
+            value: low
+          - type: attribute_check
+            target: bean_hopper.amount
+            operator: gte
+            value: low
+          - type: attribute_check
+            target: heater.temperature
+            operator: equals
+            value: hot
+    effects:
+      - type: set_trend
+        target: water_tank.level
+        direction: down
+      - type: set_trend
+        target: bean_hopper.amount
+        direction: down
+
+  # AND condition with higher thresholds
+  # Requires: water.level >= medium AND beans.amount >= medium
+  brew_large:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: water_tank.level
+            operator: gte
+            value: medium
+          - type: attribute_check
+            target: bean_hopper.amount
+            operator: gte
+            value: medium
+          - type: attribute_check
+            target: heater.temperature
+            operator: equals
+            value: hot
+    effects:
+      - type: set_trend
+        target: water_tank.level
+        direction: down
+      - type: set_trend
+        target: bean_hopper.amount
+        direction: down
+
+  # AND condition in POSTCONDITION with De Morgan's law
+  # If water >= low AND temperature == hot, then status = ready
+  check_ready:
+    preconditions:
+      - type: attribute_check
+        target: status.ready
+        operator: equals
+        value: off
+    effects:
+      - type: conditional
+        condition:
+          type: and
+          conditions:
+            - type: attribute_check
+              target: water_tank.level
+              operator: gte
+              value: low
+            - type: attribute_check
+              target: heater.temperature
+              operator: equals
+              value: hot
+        then:
+          - type: set_attribute
+            target: status.ready
+            value: "on"
+
+  # Refill water tank
+  refill_water:
+    preconditions:
+      - type: attribute_check
+        target: water_tank.level
+        operator: lt
+        value: full
+    effects:
+      - type: set_attribute
+        target: water_tank.level
+        value: full
+
+  # Refill bean hopper
+  refill_beans:
+    preconditions:
+      - type: attribute_check
+        target: bean_hopper.amount
+        operator: lt
+        value: full
+    effects:
+      - type: set_attribute
+        target: bean_hopper.amount
+        value: full
+
+  # Cool down the heater
+  cool_down:
+    preconditions:
+      - type: attribute_check
+        target: heater.temperature
+        operator: gt
+        value: cold
+    effects:
+      - type: set_trend
+        target: heater.temperature
+        direction: down
+
+  # ============================================================
+  # FLAT IF/ELIF/ELSE: Tests nested else handling at one level
+  # ============================================================
+  # if water >= medium: status = on (ready)
+  # elif temp == hot: status = on (warming up)
+  # else: status = off (not ready)
+  check_status:
+    preconditions:
+      - type: attribute_check
+        target: water_tank.level
+        operator: gte
+        value: empty
+    effects:
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: water_tank.level
+          operator: gte
+          value: medium
+        then:
+          - type: set_attribute
+            target: status.ready
+            value: on
+        else:
+          - type: conditional
+            condition:
+              type: attribute_check
+              target: heater.temperature
+              operator: equals
+              value: hot
+            then:
+              - type: set_attribute
+                target: status.ready
+                value: on
+            else:
+              - type: set_attribute
+                target: status.ready
+                value: off
+

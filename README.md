@@ -258,7 +258,7 @@ The simulator operates under several simplifying assumptions that keep branching
 Each action can have at most **one unknown attribute** that determines branching:
 
 - **Preconditions**: If an unknown attribute is checked, we get exactly 2 branches (success + failure). Multiple preconditions can exist, but only one can involve an unknown value.
-  
+
 - **Postconditions**: If conditional effects check an unknown attribute, we get N+1 branches (one per if/elif case + one else branch). All conditionals must check the **same** attribute.
 
 This constraint prevents combinatorial explosion. With two independent unknowns in postconditions, a single action could produce dozens of branches.
@@ -273,7 +273,7 @@ effects:
   - type: conditional
     condition: { target: battery.level, operator: equals, value: full }
     then: [...]
-  - type: conditional  
+  - type: conditional
     condition: { target: battery.level, operator: equals, value: high }
     then: [...]
     else: [...]

@@ -62,3 +62,13 @@ spaces:
   - id: dice_color
     name: Dice Color
     levels: ["green", "red", "yellow", "black", "white"]
+
+  # Slot machine symbols (unordered - for IN operator checks)
+  - id: slot_symbol
+    name: Slot Symbol
+    levels: ["cherry", "lemon", "bar", "bell", "seven"]
+
+  # Coffee machine bean amount
+  - id: bean_amount
+    name: Bean Amount
+    levels: ["empty", "low", "medium", "high", "full"]

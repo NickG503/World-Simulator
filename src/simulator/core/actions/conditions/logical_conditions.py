@@ -63,15 +63,15 @@ class AndCondition(Condition):
         for c in self.conditions:
             if isinstance(c, AttributeCondition):
                 attrs.append(c.target.to_string())
-            elif isinstance(c, AndCondition):
-                # Recursively collect from nested AND conditions
+            elif isinstance(c, (AndCondition, OrCondition)):
+                # Recursively collect from nested conditions
                 attrs.extend(c.get_checked_attributes())
         return attrs
 
     def get_attribute_conditions(self) -> List["AttributeCondition"]:
         """Return all AttributeCondition instances in this AND.
 
-        Flattens nested AND conditions.
+        Flattens nested conditions.
         """
         from .attribute_conditions import AttributeCondition
 
@@ -79,7 +79,7 @@ class AndCondition(Condition):
         for c in self.conditions:
             if isinstance(c, AttributeCondition):
                 result.append(c)
-            elif isinstance(c, AndCondition):
+            elif isinstance(c, (AndCondition, OrCondition)):
                 result.extend(c.get_attribute_conditions())
         return result
 

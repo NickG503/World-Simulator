@@ -79,6 +79,11 @@ behaviors:
 
   # Reset face - Only resets face and prize, NOT color
   reset_face:
+    preconditions:
+      - type: attribute_check
+        target: cube.face
+        operator: not_equals
+        value: "3"
     effects:
       - type: set_attribute
         target: cube.face
@@ -89,6 +94,11 @@ behaviors:
 
   # Reset color - Resets color and prize
   reset_color:
+    preconditions:
+      - type: attribute_check
+        target: cube.color
+        operator: not_equals
+        value: "green"
     effects:
       - type: set_attribute
         target: cube.color

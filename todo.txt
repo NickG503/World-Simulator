@@ -29,15 +29,16 @@ tasks after Dafna meeting -
 clean the code + tests - Done
 change the trend.trend thing - Done
 in the effect also add the change we did - Done
-enable writing only the file name without the need for full path - Done 
+enable writing only the file name without the need for full path - Done
 change the weird eval text in the output text - Done
 add readme - Done
 remove this from the table : [CONDITIONAL_EVAL]  │ evaluating │ FALSE → 'else' branch │ info  │
 │ [CONDITIONAL_EVAL]  │ evaluating │ TRUE → 'then' branch  │ i - Done
 
-Needs to be done: 
+Needs to be done:
 
 remove the failer and ask if we want to continue - Done
 show better structure in both pre and post condition - Done
 remove the unknown and add the options (maybe change the logic itself) -
-show in the table - if else if ... - 
+show in the table - if else if ... -
+ 

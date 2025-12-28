@@ -184,7 +184,7 @@ sim simulate --obj flashlight --set battery.level=unknown --actions turn_on turn
 **What happens:**
 1. **Level 1 (first `turn_on`)**: Battery is unknown → splits into 5 branches by postcondition:
    - battery=full → brightness=high
-   - battery=high → brightness=high  
+   - battery=high → brightness=high
    - battery=medium → brightness=medium
    - battery=low → brightness=low
    - battery=empty → FAIL (precondition)

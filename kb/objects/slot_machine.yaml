@@ -1,0 +1,307 @@
+# Slot Machine - demonstrates IN operator with unordered sets and OR conditions
+# A classic 3-reel slot machine with symbols and prize tracking
+
+type: slot_machine
+parts:
+  reel1:
+    attributes:
+      symbol:
+        space: slot_symbol  # cherry, lemon, bar, bell, seven (unordered)
+        default: cherry
+        mutable: true
+
+  reel2:
+    attributes:
+      symbol:
+        space: slot_symbol
+        default: lemon
+        mutable: true
+
+  reel3:
+    attributes:
+      symbol:
+        space: slot_symbol
+        default: bar
+        mutable: true
+
+  display:
+    attributes:
+      prize:
+        space: prize_level  # none, small, medium, big, jackpot
+        default: none
+        mutable: true
+
+behaviors:
+  # Spin all reels - randomly changes symbols (simulated by setting to cherry)
+  # In a real simulation, you'd start with unknown values to branch on all possibilities
+  spin:
+    preconditions:
+      - type: attribute_check
+        target: display.prize
+        operator: equals
+        value: none
+    effects:
+      - type: set_attribute
+        target: reel1.symbol
+        value: cherry
+      - type: set_attribute
+        target: reel2.symbol
+        value: lemon
+      - type: set_attribute
+        target: reel3.symbol
+        value: bar
+      - type: set_attribute
+        target: display.prize
+        value: none
+
+  # IN operator with unordered set: symbol in {seven, bar}
+  # Checks if first two reels have high-value symbols
+  check_high_symbols:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: reel1.symbol
+            operator: in
+            value: ["seven", "bar"]
+          - type: attribute_check
+            target: reel2.symbol
+            operator: in
+            value: ["seven", "bar"]
+    effects:
+      - type: set_attribute
+        target: display.prize
+        value: medium
+
+  # OR condition in precondition: any reel shows seven
+  # Demonstrates OR with De Morgan's law for fail branch
+  check_any_seven:
+    preconditions:
+      - type: or
+        conditions:
+          - type: attribute_check
+            target: reel1.symbol
+            operator: equals
+            value: seven
+          - type: attribute_check
+            target: reel2.symbol
+            operator: equals
+            value: seven
+          - type: attribute_check
+            target: reel3.symbol
+            operator: equals
+            value: seven
+    effects:
+      - type: set_attribute
+        target: display.prize
+        value: small
+
+  # Jackpot check: all three reels show seven (AND)
+  check_jackpot:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: reel1.symbol
+            operator: equals
+            value: seven
+          - type: attribute_check
+            target: reel2.symbol
+            operator: equals
+            value: seven
+          - type: attribute_check
+            target: reel3.symbol
+            operator: equals
+            value: seven
+    effects:
+      - type: set_attribute
+        target: display.prize
+        value: jackpot
+
+  # OR condition in POSTCONDITION with De Morgan's law for ELSE
+  # If reel1 == seven OR reel2 == bar, award small prize
+  award_prize:
+    preconditions:
+      - type: attribute_check
+        target: display.prize
+        operator: equals
+        value: none
+    effects:
+      - type: conditional
+        condition:
+          type: or
+          conditions:
+            - type: attribute_check
+              target: reel1.symbol
+              operator: equals
+              value: seven
+            - type: attribute_check
+              target: reel2.symbol
+              operator: equals
+              value: bar
+        then:
+          - type: set_attribute
+            target: display.prize
+            value: small
+
+  # IN operator in postcondition: if symbol in fruit set, small prize
+  # Demonstrates IN with unordered set {cherry, lemon}
+  check_fruit:
+    preconditions:
+      - type: attribute_check
+        target: display.prize
+        operator: equals
+        value: none
+    effects:
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: reel1.symbol
+          operator: in
+          value: ["cherry", "lemon"]
+        then:
+          - type: set_attribute
+            target: display.prize
+            value: small
+
+  # Reset the machine
+  reset:
+    preconditions:
+      - type: attribute_check
+        target: display.prize
+        operator: not_equals
+        value: none
+    effects:
+      - type: set_attribute
+        target: reel1.symbol
+        value: cherry
+      - type: set_attribute
+        target: reel2.symbol
+        value: lemon
+      - type: set_attribute
+        target: reel3.symbol
+        value: bar
+      - type: set_attribute
+        target: display.prize
+        value: none
+
+  # ============================================================
+  # COMPLEX EXAMPLE: Precondition (AND) + Postcondition (OR)
+  # ============================================================
+  # Precondition: reel1 == seven AND reel2 in {seven, bar}
+  # Postcondition: if reel3 == seven OR display.prize == none, set prize
+  complex_check:
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: reel1.symbol
+            operator: equals
+            value: seven
+          - type: attribute_check
+            target: reel2.symbol
+            operator: in
+            value: ["seven", "bar"]
+    effects:
+      - type: conditional
+        condition:
+          type: or
+          conditions:
+            - type: attribute_check
+              target: reel3.symbol
+              operator: equals
+              value: seven
+            - type: attribute_check
+              target: display.prize
+              operator: equals
+              value: none
+        then:
+          - type: set_attribute
+            target: display.prize
+            value: big
+        else:
+          - type: set_attribute
+            target: display.prize
+            value: small
+
+  # ============================================================
+  # COMPLEX POSTCONDITION: if (A AND B) then X elif (C OR D) then Y else Z
+  # ============================================================
+  # Tests De Morgan for complex if/elif/else structure in postconditions
+  # ELSE should be: NOT((A AND B) OR (C OR D)) = (NOT A OR NOT B) AND (NOT C AND NOT D)
+  complex_postcondition:
+    preconditions:
+      - type: attribute_check
+        target: display.prize
+        operator: equals
+        value: none
+    effects:
+      # if reel1 == seven AND reel2 == seven: prize = jackpot
+      - type: conditional
+        condition:
+          type: and
+          conditions:
+            - type: attribute_check
+              target: reel1.symbol
+              operator: equals
+              value: seven
+            - type: attribute_check
+              target: reel2.symbol
+              operator: equals
+              value: seven
+        then:
+          - type: set_attribute
+            target: display.prize
+            value: jackpot
+        # elif reel1 == bar OR reel2 == bar: prize = big
+        else:
+          - type: conditional
+            condition:
+              type: or
+              conditions:
+                - type: attribute_check
+                  target: reel1.symbol
+                  operator: equals
+                  value: bar
+                - type: attribute_check
+                  target: reel2.symbol
+                  operator: equals
+                  value: bar
+            then:
+              - type: set_attribute
+                target: display.prize
+                value: big
+            # else: prize = small
+            else:
+              - type: set_attribute
+                target: display.prize
+                value: small
+
+  # ============================================================
+  # NESTED COMPOUND: (A AND B) OR C
+  # ============================================================
+  # Condition: (reel1 == seven AND reel2 == seven) OR reel3 == seven
+  # If any of these combinations is true, award jackpot
+  nested_compound:
+    preconditions:
+      - type: or
+        conditions:
+          - type: and
+            conditions:
+              - type: attribute_check
+                target: reel1.symbol
+                operator: equals
+                value: seven
+              - type: attribute_check
+                target: reel2.symbol
+                operator: equals
+                value: seven
+          - type: attribute_check
+            target: reel3.symbol
+            operator: equals
+            value: seven
+    effects:
+      - type: set_attribute
+        target: display.prize
+        value: jackpot
+

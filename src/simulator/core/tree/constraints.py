@@ -96,7 +96,15 @@ def get_snapshot_attr(snapshot: WorldSnapshot, attr_path: str):
 
 
 def _evaluate_condition(condition, value: Any) -> bool:
-    """Evaluate a simple attribute condition against a value."""
+    """Evaluate a simple attribute condition against a value.
+
+    For value sets (uncertain values), we use OPTIMISTIC evaluation:
+    - For `equals`: True if the expected value is possible (in the set)
+    - For `not_equals`: True if a non-forbidden value is possible
+
+    This prevents constraints from being too aggressive with uncertain states.
+    The branching system already handles the different possibilities.
+    """
     from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
 
     if not isinstance(condition, AttributeCondition):
@@ -105,12 +113,16 @@ def _evaluate_condition(condition, value: Any) -> bool:
     expected = condition.value
     op = condition.operator
 
-    # Handle value sets
+    # Handle value sets - use OPTIMISTIC evaluation
+    # Don't fire constraints pessimistically on uncertain states
     if isinstance(value, list):
         if op == "equals":
+            # For equals: True if expected is a possibility
             return expected in value
         elif op == "not_equals":
-            return expected not in value or len(value) > 1
+            # For not_equals: True if there's ANY non-forbidden value
+            # This is optimistic - assume the non-forbidden value could be true
+            return any(v != expected for v in value)
     else:
         if op == "equals":
             return value == expected

@@ -20,6 +20,7 @@ def capture_snapshot(
     obj_instance: ObjectInstance,
     registry_manager: RegistryManager,
     parent_snapshot: Optional[WorldSnapshot] = None,
+    enforce_constraints_flag: bool = True,
 ) -> WorldSnapshot:
     """
     Capture the current object state as a WorldSnapshot.
@@ -32,14 +33,19 @@ def capture_snapshot(
     Value sets are preserved from parent snapshot if the action only clears
     the trend without setting a new specific value.
 
+    Constraints are enforced by default to ensure consistency.
+
     Args:
         obj_instance: The object instance to snapshot
         registry_manager: Registry for accessing spaces
         parent_snapshot: Optional parent snapshot for value set preservation
+        enforce_constraints_flag: Whether to enforce object constraints
 
     Returns:
-        WorldSnapshot representing the current state
+        WorldSnapshot representing the current state (with constraints enforced)
     """
+    from simulator.core.tree.constraints import enforce_constraints
+
     parts: Dict[str, PartStateSnapshot] = {}
 
     for part_name, part_instance in obj_instance.parts.items():
@@ -73,7 +79,13 @@ def capture_snapshot(
         global_attributes=global_attrs,
     )
 
-    return WorldSnapshot(object_state=object_state)
+    snapshot = WorldSnapshot(object_state=object_state)
+
+    # Enforce constraints if requested
+    if enforce_constraints_flag:
+        snapshot, _ = enforce_constraints(snapshot, obj_instance.type.name, registry_manager)
+
+    return snapshot
 
 
 def compute_value_with_trend(
