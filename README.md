@@ -249,26 +249,115 @@ Each merged node tracks **incoming edges** from multiple parents, preserving the
 
 ---
 
-## Current Assumptions
+## Branching Semantics
 
-The simulator operates under several simplifying assumptions that keep branching tractable:
+The simulator handles uncertainty through systematic branching, exploring all possible outcomes in parallel.
 
-### Single Unknown Per Decision Point
+### Simple Conditions
 
-Each action can have at most **one unknown attribute** that determines branching:
+For actions with **simple attribute checks** (single condition on one attribute):
 
-- **Preconditions**: If an unknown attribute is checked, we get exactly 2 branches (success + failure). Multiple preconditions can exist, but only one can involve an unknown value.
+- **Precondition unknown**: 2 branches (success + failure)
+- **Postcondition unknown**: N+1 branches (one per if/elif case + one else branch)
+- **Both unknown (same attribute)**: Intersection logic reduces total branches
 
-- **Postconditions**: If conditional effects check an unknown attribute, we get N+1 branches (one per if/elif case + one else branch). All conditionals must check the **same** attribute.
+### Compound Conditions (AND/OR)
 
-This constraint prevents combinatorial explosion. With two independent unknowns in postconditions, a single action could produce dozens of branches.
+The simulator supports **compound conditions** that check multiple attributes simultaneously. When compound conditions involve unknown attributes, **De Morgan's law** determines how branches are created.
+
+#### AND Conditions
+
+An AND condition requires **all** sub-conditions to be true:
+
+```yaml
+preconditions:
+  - type: and
+    conditions:
+      - { type: attribute_check, target: water_tank.level, operator: not_equals, value: empty }
+      - { type: attribute_check, target: bean_hopper.amount, operator: not_equals, value: empty }
+      - { type: attribute_check, target: heater.temperature, operator: equals, value: hot }
+```
+
+**Branching behavior with unknowns:**
+
+- **Success branch (1)**: All attributes constrained to satisfying values
+- **Fail branches (N)**: De Morgan's law: `¬(A ∧ B ∧ C) = ¬A ∨ ¬B ∨ ¬C`
+  - One fail branch per unknown attribute, each showing one way the AND can fail
+
+```
+Coffee Machine: brew_espresso (water=unknown, beans=unknown, temp=hot)
+                              │
+        ┌─────────────────────┼─────────────────────┐
+        ▼                     ▼                     ▼
+    SUCCESS               FAIL (water)          FAIL (beans)
+  water ∈ {low,med,high}   water = empty        beans = empty
+  beans ∈ {low,med,high}   beans = unknown      water = unknown
+```
+
+#### OR Conditions
+
+An OR condition requires **at least one** sub-condition to be true:
+
+```yaml
+preconditions:
+  - type: or
+    conditions:
+      - { type: attribute_check, target: reel1.symbol, operator: equals, value: seven }
+      - { type: attribute_check, target: reel2.symbol, operator: equals, value: seven }
+      - { type: attribute_check, target: reel3.symbol, operator: equals, value: seven }
+```
+
+**Branching behavior with unknowns:**
+
+- **Success branches (N)**: One per satisfiable disjunct, each constraining its attribute
+- **Fail branch (1)**: De Morgan's law: `¬(A ∨ B ∨ C) = ¬A ∧ ¬B ∧ ¬C`
+  - All attributes constrained to their complement values simultaneously
+
+```
+Slot Machine: check_any_seven (reel1=unknown, reel2=unknown, reel3=unknown)
+                              │
+    ┌─────────────────────────┼─────────────────────────┐
+    ▼                         ▼                         ▼
+SUCCESS (reel1)          SUCCESS (reel2)             FAIL
+reel1 = seven            reel2 = seven           reel1 ∈ {cherry,lemon,bar}
+                                                 reel2 ∈ {cherry,lemon,bar}
+                                                 reel3 ∈ {cherry,lemon,bar}
+```
+
+### Comparison Operators
+
+Beyond `equals` and `not_equals`, the simulator supports **comparison operators** on ordered spaces:
+
+| Operator | Meaning | Example Expansion |
+|----------|---------|-------------------|
+| `>=` | Greater than or equal | `level >= low` → `{low, medium, high, full}` |
+| `>` | Greater than | `level > low` → `{medium, high, full}` |
+| `<=` | Less than or equal | `level <= medium` → `{empty, low, medium}` |
+| `<` | Less than | `level < hot` → `{cold, warm}` |
+
+These operators automatically expand to value sets based on the qualitative space's ordering.
+
+### IN Operator
+
+The `in` and `not_in` operators check membership in a set of values:
+
+```yaml
+# Check if symbol is a high-value symbol
+- type: attribute_check
+  target: reel1.symbol
+  operator: in
+  value: [seven, bar]
+```
+
+When branching on unknown values with `in`:
+- **Success branch**: Attribute constrained to the specified set
+- **Fail branch**: Attribute constrained to complement of the set
 
 ### Flat Conditional Structure
 
-Postcondition effects use a **flat if-elif-else structure** with no nested conditionals:
+Postcondition effects use a **flat if-elif-else structure**:
 
 ```yaml
-# Supported: flat structure
 effects:
   - type: conditional
     condition: { target: battery.level, operator: equals, value: full }
@@ -277,20 +366,13 @@ effects:
     condition: { target: battery.level, operator: equals, value: high }
     then: [...]
     else: [...]
-
-# NOT supported: nested ifs inside then/else blocks
 ```
+
+**Note**: Nested conditionals inside `then`/`else` blocks are not recursively branched. Compound conditions at the **top level** of conditionals (e.g., `if (A AND B)`) do branch correctly with full De Morgan application.
 
 ### No Clarification Questions
 
-When facing uncertainty, the simulator **always branches** rather than asking the user for clarification. Every possible outcome is explored in parallel.
-
-### Branch Counting
-
-For a single action with unknowns:
-- Unknown in precondition only → 2 branches (success/fail)
-- Unknown in postcondition only → N+1 branches (N cases + else)
-- Both unknown (same attribute) → intersection logic reduces total branches
+When facing uncertainty, the simulator **always branches** rather than asking for clarification. Every possible outcome is explored in parallel.
 
 ---
 
@@ -315,12 +397,16 @@ TreeNode:
 
 ```python
 BranchCondition:
-    attribute: str               # "battery.level"
-    operator: str                # "equals", "in", "not_equals"
+    attribute: str               # "battery.level" (empty for compound)
+    operator: str                # "equals", "in", "not_equals", ">=", "<", etc.
     value: str | List[str]       # "high" or ["low", "medium"]
     source: str                  # "precondition" or "postcondition"
     branch_type: str             # "if", "elif", "else", "success", "fail"
+    compound_type: str | None    # "and" or "or" for compound conditions
+    sub_conditions: List[BranchCondition] | None  # Parts of compound condition
 ```
+
+For compound conditions, `attribute` is empty and `sub_conditions` contains the individual attribute checks.
 
 ### ChangeDict
 
@@ -493,9 +579,30 @@ uv run pre-commit run --all-files
 See **[EXAMPLES.md](EXAMPLES.md)** for comprehensive usage examples including:
 
 - Multi-action simulations
-- Branching scenarios
+- Branching scenarios with unknown values
+- Comparison operators (`>=`, `<=`, `>`, `<`)
+- AND/OR compound conditions with De Morgan branching
+- IN operator for set membership
 - Value set exploration
 - DAG merging demonstrations
+
+### Quick Examples
+
+```bash
+# Coffee machine: AND condition with comparison operators
+uv run sim simulate --obj coffee_machine \
+  --set water_tank.level=unknown bean_hopper.amount=unknown heater.temperature=hot \
+  --actions brew_espresso --viz
+
+# Slot machine: OR condition (any seven wins)
+uv run sim simulate --obj slot_machine \
+  --set reel1.symbol=unknown reel2.symbol=unknown reel3.symbol=unknown \
+  --actions check_any_seven --viz
+
+# Comparison operator: temperature < hot
+uv run sim simulate --obj coffee_machine \
+  --set heater.temperature=unknown --actions heat_up --viz
+```
 
 ---
 
@@ -527,33 +634,7 @@ Visualizations save alongside as `*_visualization.html`.
 
 ## Future Ideas
 
-Potential expansions, roughly ordered by implementation complexity:
-
-### Multiple Unknowns in Preconditions
-
-Currently limited to one unknown attribute per precondition check. Since preconditions are binary (pass/fail), supporting multiple unknowns is straightforward - we still produce only 2 branches, but the success branch carries constraints on multiple attributes as value sets.
-
-### Multiple Unknowns in Postconditions
-
-When different conditionals check different unknown attributes, branch by grouping:
-- Identify which attributes each if/elif condition checks
-- Create branches for each unique attribute combination
-- Collect remaining possibilities into the else branch as multi-attribute value sets
-
-This would produce nodes where multiple attributes have value sets simultaneously.
-
-### Nested Conditional Flattening
-
-Nested if-statements can theoretically be flattened to equivalent flat structures:
-
-```
-if A:             if A and B: X
-  if B: X    →    elif A and not B: Y
-  else: Y         else: Z
-else: Z
-```
-
-The simulator could auto-flatten nested YAML structures during loading.
+Potential expansions for further development:
 
 ### Clarification Questions with Pruning
 
@@ -569,6 +650,30 @@ Load a previous simulation's final state (or any node) as the starting point for
 - Incremental exploration ("what if I then do X from here?")
 - Save/restore simulation checkpoints
 - Build on existing scenarios without re-running
+
+### Recursive Nested Conditionals
+
+Currently, nested conditionals inside `else` branches are not recursively branched. For example:
+
+```yaml
+effects:
+  - type: conditional
+    condition: { target: A, ... }
+    then: [...]
+    else:
+      - type: conditional
+        condition: { target: B, ... }  # This won't trigger additional branching
+        then: [...]
+```
+
+Future work could recursively process nested conditionals, creating additional branch layers for each level of nesting.
+
+### Probabilistic Branching
+
+Add probability weights to branches for Monte Carlo simulation:
+- Assign probabilities to branch outcomes
+- Aggregate statistics across weighted paths
+- Support expected value calculations
 
 ---
 
