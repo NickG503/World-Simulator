@@ -210,7 +210,14 @@ class BranchCreationMixin:
         compound_type: str,
         layer_state_cache: Optional[Dict[str, Tuple["TreeNode", "ObjectInstance"]]] = None,
     ) -> "TreeNode":
-        """Create a fail node for compound condition using De Morgan."""
+        """Create a fail node for compound condition using De Morgan.
+
+        De Morgan's law:
+        - NOT(A OR B) = NOT A AND NOT B → compound_type="and" (all fail together)
+        - NOT(A AND B) = NOT A OR NOT B → separate fail nodes (this creates ONE of them)
+
+        For OR preconditions, this creates a single compound AND fail node.
+        """
         if layer_state_cache is None:
             layer_state_cache = {}
 
@@ -239,14 +246,38 @@ class BranchCreationMixin:
             constraint_strs.append(f"{attr_path}={val_str}")
         error_msg = f"Precondition failed: {' AND '.join(constraint_strs)}"
 
+        # Build sub_conditions for compound branch condition
+        sub_conditions: List[BranchCondition] = []
+        for attr_path, values in attr_constraints.items():
+            operator = "in" if len(values) > 1 else "equals"
+            value: Union[str, List[str]] = values if len(values) > 1 else values[0]
+            sub_conditions.append(
+                BranchCondition(
+                    attribute=attr_path,
+                    operator=operator,
+                    value=value,
+                    source="precondition",
+                    branch_type="fail",
+                )
+            )
+
         first_attr = list(attr_constraints.keys())[0]
         first_values = list(attr_constraints.values())[0]
+
+        # De Morgan: OR precondition creates AND fail branch
+        # (all must fail for the OR to fail)
+        demorgan_type: Optional[str] = None
+        if compound_type == "or" and len(sub_conditions) > 1:
+            demorgan_type = "and"  # NOT(A OR B) = NOT A AND NOT B
+
         branch_condition = BranchCondition(
             attribute=first_attr,
             operator="in" if len(first_values) > 1 else "equals",
             value=first_values if len(first_values) > 1 else first_values[0],
             source="precondition",
             branch_type="fail",
+            compound_type=demorgan_type,
+            sub_conditions=sub_conditions if len(sub_conditions) > 1 else None,
         )
 
         return create_or_merge_node(

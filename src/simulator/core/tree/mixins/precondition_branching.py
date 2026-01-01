@@ -103,12 +103,17 @@ class PreconditionBranchingMixin:
         OR logic: Action succeeds if ANY sub-condition passes.
         - Creates success branches for each disjunct (handles nested AND/OR)
         - Creates 1 fail branch using De Morgan: NOT(A OR B) = NOT A AND NOT B
+        - If any known sub-condition already satisfies the OR, no fail branch is created
         """
         if layer_state_cache is None:
             layer_state_cache = {}
 
         branches: List["TreeNode"] = []
         parent_snapshot = parent_node.snapshot if parent_node else None
+
+        # Check if any known sub-condition already satisfies the OR
+        # If so, the OR is guaranteed to pass and we shouldn't create fail branches
+        known_satisfies_or = self._check_known_satisfies_or(condition, instance, parent_snapshot)
 
         for sub_cond in condition.conditions:
             if not self._has_unknown_in_condition(sub_cond, instance, parent_snapshot):
@@ -131,21 +136,89 @@ class PreconditionBranchingMixin:
             )
             branches.extend(success_branches)
 
-        fail_constraints = self._get_condition_failing_values(condition, instance, parent_snapshot)
-        if fail_constraints and all(fail_constraints.values()):
-            fail_node = self._create_compound_fail_node(
-                tree=tree,
-                instance=instance,
-                parent_node=parent_node,
-                action=action,
-                parameters=parameters,
-                attr_constraints=fail_constraints,
-                compound_type="or",
-                layer_state_cache=layer_state_cache,
-            )
-            branches.append(fail_node)
+        # Only create fail branch if no known value already satisfies the OR
+        if not known_satisfies_or:
+            fail_constraints = self._get_condition_failing_values(condition, instance, parent_snapshot)
+            if fail_constraints and all(fail_constraints.values()):
+                fail_node = self._create_compound_fail_node(
+                    tree=tree,
+                    instance=instance,
+                    parent_node=parent_node,
+                    action=action,
+                    parameters=parameters,
+                    attr_constraints=fail_constraints,
+                    compound_type="or",
+                    layer_state_cache=layer_state_cache,
+                )
+                branches.append(fail_node)
 
         return branches
+
+    def _check_known_satisfies_or(
+        self,
+        condition: OrCondition,
+        instance: "ObjectInstance",
+        parent_snapshot: Optional["TreeNode"],
+    ) -> bool:
+        """Check if any known sub-condition already satisfies the OR."""
+        from simulator.core.tree.snapshot_utils import get_all_space_values, get_attribute_space_id
+
+        for sub_cond in condition.conditions:
+            # If sub-condition has unknowns, skip (it's not a known value)
+            if self._has_unknown_in_condition(sub_cond, instance, parent_snapshot):
+                continue
+
+            # This sub-condition has all known values - check if it passes
+            if isinstance(sub_cond, AttributeCondition):
+                try:
+                    ai = sub_cond.target.resolve(instance)
+                    attr_path = sub_cond.target.to_string()
+                    current_value = ai.current_value
+
+                    # Get space levels for comparison operators
+                    space_id = get_attribute_space_id(instance, attr_path)
+                    space_levels = get_all_space_values(space_id, self.registry_manager) if space_id else None
+
+                    if evaluate_condition_for_value(sub_cond, current_value, space_levels):
+                        return True  # Known value satisfies this disjunct → OR passes
+                except Exception:
+                    pass
+            elif isinstance(sub_cond, AndCondition):
+                # For nested AND, check if all parts are known and satisfy
+                all_known_and_pass = self._check_known_and_satisfies(sub_cond, instance, parent_snapshot)
+                if all_known_and_pass:
+                    return True
+
+        return False
+
+    def _check_known_and_satisfies(
+        self,
+        condition: AndCondition,
+        instance: "ObjectInstance",
+        parent_snapshot: Optional["TreeNode"],
+    ) -> bool:
+        """Check if all parts of an AND are known and satisfy."""
+        from simulator.core.tree.snapshot_utils import get_all_space_values, get_attribute_space_id
+
+        for sub_cond in condition.conditions:
+            if self._has_unknown_in_condition(sub_cond, instance, parent_snapshot):
+                return False  # Has unknown, can't be definitely satisfied
+
+            if isinstance(sub_cond, AttributeCondition):
+                try:
+                    ai = sub_cond.target.resolve(instance)
+                    attr_path = sub_cond.target.to_string()
+                    current_value = ai.current_value
+
+                    space_id = get_attribute_space_id(instance, attr_path)
+                    space_levels = get_all_space_values(space_id, self.registry_manager) if space_id else None
+
+                    if not evaluate_condition_for_value(sub_cond, current_value, space_levels):
+                        return False  # One part fails, AND fails
+                except Exception:
+                    return False
+
+        return True  # All parts are known and pass
 
     def _create_success_branches_for_constraints(
         self,

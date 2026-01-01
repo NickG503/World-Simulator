@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import yaml
 
 from simulator.core.actions.action import Action
-from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
+from simulator.core.actions.conditions.logical_conditions import OrCondition
 from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager

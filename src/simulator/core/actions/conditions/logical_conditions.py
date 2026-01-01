@@ -52,6 +52,34 @@ class OrCondition(Condition):
         parts = [c.describe() for c in self.conditions]
         return "(" + " OR ".join(parts) + ")"
 
+    def get_checked_attributes(self) -> List[str]:
+        """Get all attribute paths checked by this compound condition."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        attrs: List[str] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                attrs.append(cond.target.to_string())
+            elif hasattr(cond, "get_checked_attributes"):
+                attrs.extend(cond.get_checked_attributes())
+        return attrs
+
+    def get_attribute_conditions(self) -> List["Condition"]:
+        """Get all sub-conditions that check attributes."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        result: List[Condition] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                result.append(cond)
+            elif hasattr(cond, "get_attribute_conditions"):
+                result.extend(cond.get_attribute_conditions())
+        return result
+
 
 class AndCondition(Condition):
     """
@@ -79,6 +107,34 @@ class AndCondition(Condition):
         """Human-readable description of this AND condition."""
         parts = [c.describe() for c in self.conditions]
         return "(" + " AND ".join(parts) + ")"
+
+    def get_checked_attributes(self) -> List[str]:
+        """Get all attribute paths checked by this compound condition."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        attrs: List[str] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                attrs.append(cond.target.to_string())
+            elif hasattr(cond, "get_checked_attributes"):
+                attrs.extend(cond.get_checked_attributes())
+        return attrs
+
+    def get_attribute_conditions(self) -> List["Condition"]:
+        """Get all sub-conditions that check attributes."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        result: List[Condition] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                result.append(cond)
+            elif hasattr(cond, "get_attribute_conditions"):
+                result.extend(cond.get_attribute_conditions())
+        return result
 
 
 # Rebuild models to handle forward references

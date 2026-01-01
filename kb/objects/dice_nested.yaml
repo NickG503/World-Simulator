@@ -1,7 +1,7 @@
 # Dice Nested - Demonstrates NESTED OR/AND precondition
 #
 # Scenario: (face == 6 AND color == red) OR (size == large)
-# 
+#
 # This tests nested compound conditions where:
 # - Success if BOTH face=6 AND color=red (nested AND passes)
 # - Success if size=large (second disjunct passes, regardless of face/color)

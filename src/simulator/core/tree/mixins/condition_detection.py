@@ -184,15 +184,17 @@ class ConditionDetectionMixin:
                     return {}
 
                 possible_values = get_possible_values_for_attr(attr_path, instance, parent_snapshot)
-                if not possible_values:
-                    space_id = get_attribute_space_id(instance, attr_path)
-                    if space_id:
-                        possible_values = get_all_space_values(space_id, self.registry_manager)
+                space_id = get_attribute_space_id(instance, attr_path)
+                space_levels: Optional[List[str]] = None
+                if space_id:
+                    space_levels = get_all_space_values(space_id, self.registry_manager)
+                    if not possible_values:
+                        possible_values = space_levels
 
                 if not possible_values:
                     return {}
 
-                pass_values = [v for v in possible_values if evaluate_condition_for_value(condition, v)]
+                pass_values = [v for v in possible_values if evaluate_condition_for_value(condition, v, space_levels)]
                 return {attr_path: pass_values} if pass_values else {}
             except Exception:
                 return {}
@@ -251,15 +253,19 @@ class ConditionDetectionMixin:
                     return {}
 
                 possible_values = get_possible_values_for_attr(attr_path, instance, parent_snapshot)
-                if not possible_values:
-                    space_id = get_attribute_space_id(instance, attr_path)
-                    if space_id:
-                        possible_values = get_all_space_values(space_id, self.registry_manager)
+                space_id = get_attribute_space_id(instance, attr_path)
+                space_levels: Optional[List[str]] = None
+                if space_id:
+                    space_levels = get_all_space_values(space_id, self.registry_manager)
+                    if not possible_values:
+                        possible_values = space_levels
 
                 if not possible_values:
                     return {}
 
-                fail_values = [v for v in possible_values if not evaluate_condition_for_value(condition, v)]
+                fail_values = [
+                    v for v in possible_values if not evaluate_condition_for_value(condition, v, space_levels)
+                ]
                 return {attr_path: fail_values} if fail_values else {}
             except Exception:
                 return {}

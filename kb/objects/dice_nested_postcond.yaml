@@ -1,11 +1,11 @@
 # Dice Nested with Postcondition - Tests nested precond + postcond Cartesian product
 #
-# Scenario: 
+# Scenario:
 # - Precondition: (face == 6 AND color == red) OR face == 1
 # - Postcondition: if size == large then jackpot else small
 #
 # This creates a Cartesian product:
-# - Precond success 1: face=6, color=red 
+# - Precond success 1: face=6, color=red
 #   × Postcond: (size=large OR size={small,medium}) = 2 branches
 # - Precond success 2: face=1
 #   × Postcond: (size=large OR size={small,medium}) = 2 branches
