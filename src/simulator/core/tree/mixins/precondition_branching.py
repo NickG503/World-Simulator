@@ -1,222 +1,319 @@
+"""Precondition branching mixin for TreeSimulationRunner.
+
+Provides methods for creating branches based on preconditions,
+including compound (AND/OR) and nested conditions with De Morgan's law.
 """
-Mixin for precondition analysis and branching.
-"""
+
+from __future__ import annotations
 
 from typing import TYPE_CHECKING, Dict, List, Optional, Tuple
 
-from simulator.core.tree.models import TreeNode, WorldSnapshot
+from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
 from simulator.core.tree.snapshot_utils import get_all_space_values, get_attribute_space_id
-from simulator.core.tree.utils.condition_evaluation import (
-    evaluate_condition_for_value,
-)
+from simulator.core.tree.utils.evaluation import evaluate_condition_for_value
 
 if TYPE_CHECKING:
     from simulator.core.actions.action import Action
-    from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
     from simulator.core.objects.object_instance import ObjectInstance
-    from simulator.core.tree.models import SimulationTree
+    from simulator.core.tree.models import SimulationTree, TreeNode
 
 
 class PreconditionBranchingMixin:
-    """Mixin providing methods for precondition analysis and branching."""
+    """Mixin providing precondition branching methods."""
 
-    def _get_unknown_precondition_attribute(
-        self, action: "Action", instance: "ObjectInstance", parent_snapshot: Optional[WorldSnapshot] = None
-    ) -> Optional[str]:
+    def _create_precondition_branches(
+        self,
+        tree: "SimulationTree",
+        instance: "ObjectInstance",
+        parent_node: "TreeNode",
+        action: "Action",
+        parameters: Dict[str, str],
+        attr_path: str,
+    ) -> List["TreeNode"]:
         """
-        Get the unknown attribute in precondition that would cause branching.
-
-        An attribute is considered "unknown" (requiring branching) if:
-        - Its current_value is "unknown"
-        - It's a value SET (list) in the parent snapshot (e.g., from a trend)
+        Create 2 branches for precondition: success and fail paths.
 
         Returns:
-            Attribute path if unknown/multi-valued, None if all known single values
+            List of 2 TreeNodes [success_node, fail_node]
         """
-        for condition in action.preconditions:
-            unknown = self._find_unknown_in_condition(condition, instance, parent_snapshot)
-            if unknown:
-                return unknown
-        return None
+        condition = self._get_precondition_condition(action)
+        space_id = get_attribute_space_id(instance, attr_path)
 
-    def _find_unknown_in_condition(
+        if not condition or not space_id:
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters)
+
+        possible_values: List[str] = []
+        if parent_node and parent_node.snapshot:
+            snapshot_value = parent_node.snapshot.get_attribute_value(attr_path)
+            if isinstance(snapshot_value, list):
+                possible_values = list(snapshot_value)
+
+        if not possible_values:
+            possible_values = get_all_space_values(space_id, self.registry_manager)
+
+        if not possible_values:
+            return self._apply_action_linear(tree, instance, parent_node, action, parameters)
+
+        passing_values = [v for v in possible_values if evaluate_condition_for_value(condition, v)]
+        failing_values = [v for v in possible_values if not evaluate_condition_for_value(condition, v)]
+
+        branches: List["TreeNode"] = []
+
+        if passing_values:
+            success_node = self._create_branch_success_node(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_path=attr_path,
+                values=passing_values,
+            )
+            branches.append(success_node)
+
+        if failing_values:
+            fail_node = self._create_branch_fail_node(
+                tree=tree,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_path=attr_path,
+                values=failing_values,
+            )
+            branches.append(fail_node)
+
+        return branches
+
+    def _create_or_precondition_branches(
         self,
-        condition,
+        tree: "SimulationTree",
         instance: "ObjectInstance",
-        parent_snapshot: Optional[WorldSnapshot] = None,
-    ) -> Optional[str]:
-        """Recursively find unknown attributes in a condition (including compound)."""
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
-        from simulator.core.actions.conditions.logical_conditions import (
-            AndCondition,
-            OrCondition,
-        )
-
-        if isinstance(condition, AttributeCondition):
-            try:
-                ai = condition.target.resolve(instance)
-                attr_path = condition.target.to_string()
-
-                # Check if current value is "unknown"
-                if ai.current_value == "unknown":
-                    return attr_path
-
-                # Check if parent snapshot has a value set for this attribute
-                if parent_snapshot:
-                    snapshot_value = parent_snapshot.get_attribute_value(attr_path)
-                    if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
-                        return attr_path
-            except Exception:
-                pass
-        elif isinstance(condition, (AndCondition, OrCondition)):
-            # Check all sub-conditions
-            for sub_cond in condition.conditions:
-                unknown = self._find_unknown_in_condition(sub_cond, instance, parent_snapshot)
-                if unknown:
-                    return unknown
-        return None
-
-    def _get_unknown_attributes_in_condition(
-        self,
-        condition,
-        instance: "ObjectInstance",
-        parent_snapshot: Optional[WorldSnapshot] = None,
-    ) -> List[Tuple[str, "AttributeCondition"]]:
-        """Get ALL unknown attributes in a condition (for compound conditions).
-
-        Returns list of (attr_path, condition) tuples for all unknown attributes.
+        parent_node: "TreeNode",
+        action: "Action",
+        parameters: Dict[str, str],
+        condition: OrCondition,
+        unknowns: List[Tuple[str, AttributeCondition]],
+        postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple["TreeNode", "ObjectInstance"]]] = None,
+    ) -> List["TreeNode"]:
         """
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
-        from simulator.core.actions.conditions.logical_conditions import (
-            AndCondition,
-            OrCondition,
-        )
+        Create branches for OR precondition with unknown attributes.
 
-        unknowns: List[Tuple[str, AttributeCondition]] = []
+        OR logic: Action succeeds if ANY sub-condition passes.
+        - Creates success branches for each disjunct (handles nested AND/OR)
+        - Creates 1 fail branch using De Morgan: NOT(A OR B) = NOT A AND NOT B
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
 
-        if isinstance(condition, AttributeCondition):
-            try:
-                ai = condition.target.resolve(instance)
-                attr_path = condition.target.to_string()
+        branches: List["TreeNode"] = []
+        parent_snapshot = parent_node.snapshot if parent_node else None
 
-                is_unknown = ai.current_value == "unknown"
-                if not is_unknown and parent_snapshot:
-                    snapshot_value = parent_snapshot.get_attribute_value(attr_path)
-                    is_unknown = isinstance(snapshot_value, list) and len(snapshot_value) > 1
+        for sub_cond in condition.conditions:
+            if not self._has_unknown_in_condition(sub_cond, instance, parent_snapshot):
+                continue
 
-                if is_unknown:
-                    unknowns.append((attr_path, condition))
-            except Exception:
-                pass
-        elif isinstance(condition, (AndCondition, OrCondition)):
-            for sub_cond in condition.conditions:
-                unknowns.extend(self._get_unknown_attributes_in_condition(sub_cond, instance, parent_snapshot))
+            pass_constraints = self._get_condition_satisfying_values(sub_cond, instance, parent_snapshot)
 
-        return unknowns
+            if not pass_constraints:
+                continue
 
-    def _get_precondition_condition(self, action: "Action"):
-        """Get the first precondition condition that checks an attribute (or compound)."""
-        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import (
-            AndCondition,
-            OrCondition,
-        )
+            success_branches = self._create_success_branches_for_constraints(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_constraints=pass_constraints,
+                postcond_attr=postcond_attr,
+                layer_state_cache=layer_state_cache,
+            )
+            branches.extend(success_branches)
 
-        for condition in action.preconditions:
-            if isinstance(condition, (AttributeCondition, AndCondition, OrCondition)):
-                return condition
-        return None
+        fail_constraints = self._get_condition_failing_values(condition, instance, parent_snapshot)
+        if fail_constraints and all(fail_constraints.values()):
+            fail_node = self._create_compound_fail_node(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_constraints=fail_constraints,
+                compound_type="or",
+                layer_state_cache=layer_state_cache,
+            )
+            branches.append(fail_node)
+
+        return branches
+
+    def _create_success_branches_for_constraints(
+        self,
+        tree: "SimulationTree",
+        instance: "ObjectInstance",
+        parent_node: "TreeNode",
+        action: "Action",
+        parameters: Dict[str, str],
+        attr_constraints: Dict[str, List[str]],
+        postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple["TreeNode", "ObjectInstance"]]] = None,
+    ) -> List["TreeNode"]:
+        """Create success branches for a set of attribute constraints."""
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        if not attr_constraints:
+            return []
+
+        postcond_overlaps = postcond_attr and postcond_attr in attr_constraints
+
+        if postcond_attr and not postcond_overlaps:
+            return self._create_and_postcond_branches(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                precond_constraints=attr_constraints,
+                postcond_attr=postcond_attr,
+                layer_state_cache=layer_state_cache,
+            )
+        else:
+            if len(attr_constraints) == 1:
+                attr_path = list(attr_constraints.keys())[0]
+                values = attr_constraints[attr_path]
+                return [
+                    self._create_branch_success_node(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_path=attr_path,
+                        values=values,
+                        layer_state_cache=layer_state_cache,
+                    )
+                ]
+            else:
+                return [
+                    self._create_compound_success_node(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_constraints=attr_constraints,
+                        layer_state_cache=layer_state_cache,
+                    )
+                ]
+
+    def _create_and_precondition_branches(
+        self,
+        tree: "SimulationTree",
+        instance: "ObjectInstance",
+        parent_node: "TreeNode",
+        action: "Action",
+        parameters: Dict[str, str],
+        condition: AndCondition,
+        unknowns: List[Tuple[str, AttributeCondition]],
+        postcond_attr: Optional[str],
+        layer_state_cache: Optional[Dict[str, Tuple["TreeNode", "ObjectInstance"]]] = None,
+    ) -> List["TreeNode"]:
+        """
+        Create branches for AND precondition with unknown attributes.
+
+        AND logic: Action succeeds if ALL sub-conditions pass.
+        - Creates 1 success branch (all constraints must be satisfied)
+        - Creates N fail branches using De Morgan: NOT(A AND B) = NOT A OR NOT B
+        """
+        if layer_state_cache is None:
+            layer_state_cache = {}
+
+        branches: List["TreeNode"] = []
+        parent_snapshot = parent_node.snapshot if parent_node else None
+
+        pass_constraints = self._get_condition_satisfying_values(condition, instance, parent_snapshot)
+
+        if pass_constraints and all(pass_constraints.values()):
+            success_branches = self._create_success_branches_for_constraints(
+                tree=tree,
+                instance=instance,
+                parent_node=parent_node,
+                action=action,
+                parameters=parameters,
+                attr_constraints=pass_constraints,
+                postcond_attr=postcond_attr,
+                layer_state_cache=layer_state_cache,
+            )
+            branches.extend(success_branches)
+
+        for sub_cond in condition.conditions:
+            if not self._has_unknown_in_condition(sub_cond, instance, parent_snapshot):
+                continue
+
+            fail_constraints = self._get_condition_failing_values(sub_cond, instance, parent_snapshot)
+
+            if not fail_constraints:
+                continue
+
+            if len(fail_constraints) == 1:
+                attr_path = list(fail_constraints.keys())[0]
+                fail_values = fail_constraints[attr_path]
+                if fail_values:
+                    fail_node = self._create_branch_fail_node(
+                        tree=tree,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_path=attr_path,
+                        values=fail_values,
+                        layer_state_cache=layer_state_cache,
+                    )
+                    branches.append(fail_node)
+            else:
+                if all(fail_constraints.values()):
+                    fail_node = self._create_compound_fail_node(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_constraints=fail_constraints,
+                        compound_type="and",
+                        layer_state_cache=layer_state_cache,
+                    )
+                    branches.append(fail_node)
+
+        return branches
 
     def _create_combined_branches(
         self,
         tree: "SimulationTree",
         instance: "ObjectInstance",
-        parent_node: TreeNode,
+        parent_node: "TreeNode",
         action: "Action",
         parameters: Dict[str, str],
         precond_attr: str,
         postcond_attr: Optional[str],
-        layer_state_cache: Optional[Dict[str, Tuple[TreeNode, "ObjectInstance"]]] = None,
-    ) -> List[TreeNode]:
+        layer_state_cache: Optional[Dict[str, Tuple["TreeNode", "ObjectInstance"]]] = None,
+    ) -> List["TreeNode"]:
         """
         Create branches considering BOTH precondition and postcondition.
 
         Logic:
         1. Partition values for precondition into pass/fail sets
-        2. Create FAIL branch with fail values (no effects applied)
-        3. For SUCCESS values, further split by postcondition if/elif/else:
-           - If postcond_attr is None: single success branch
-           - If postcond_attr == precond_attr: intersect with pass values
-           - If postcond_attr != precond_attr: split by postcondition cases
-
-        For AND conditions with multiple unknown attributes:
-        - Success branch constrains ALL attributes to satisfying values
-        - Fail branch keeps original state (action rejected)
-
-        Uses layer_state_cache for DAG deduplication.
-
-        Args:
-            tree: Simulation tree
-            instance: Current object instance
-            parent_node: Parent node
-            action: Action being applied
-            parameters: Action parameters
-            precond_attr: Attribute path checked in precondition (first unknown)
-            postcond_attr: Attribute path checked in postcondition (may be None or same)
-            layer_state_cache: Optional cache for deduplication
-
-        Returns:
-            List of branches: 1 fail + N success sub-branches
+        2. Create FAIL branch with fail values
+        3. For SUCCESS values, further split by postcondition if needed
         """
-        from simulator.core.actions.conditions.logical_conditions import (
-            AndCondition,
-            OrCondition,
-        )
-
         if layer_state_cache is None:
             layer_state_cache = {}
+
         condition = self._get_precondition_condition(action)
-
-        if not condition:
-            return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
-
-        # Handle AND conditions with multiple attributes
-        if isinstance(condition, AndCondition):
-            return self._create_and_condition_branches(
-                tree=tree,
-                instance=instance,
-                parent_node=parent_node,
-                action=action,
-                parameters=parameters,
-                condition=condition,
-                postcond_attr=postcond_attr,
-                layer_state_cache=layer_state_cache,
-            )
-
-        # Handle OR conditions (creates multiple success branches)
-        if isinstance(condition, OrCondition):
-            return self._create_or_condition_branches(
-                tree=tree,
-                instance=instance,
-                parent_node=parent_node,
-                action=action,
-                parameters=parameters,
-                condition=condition,
-                postcond_attr=postcond_attr,
-                layer_state_cache=layer_state_cache,
-            )
-
-        # Simple AttributeCondition - original logic
         space_id = get_attribute_space_id(instance, precond_attr)
 
-        if not space_id:
+        if not condition or not space_id:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
-        # Get possible values from parent snapshot or space
         possible_values: List[str] = []
         if parent_node and parent_node.snapshot:
             snapshot_value = parent_node.snapshot.get_attribute_value(precond_attr)
@@ -229,22 +326,13 @@ class PreconditionBranchingMixin:
         if not possible_values:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
-        # Partition into passing and failing values
-        pass_values = [
-            v for v in possible_values if evaluate_condition_for_value(condition, v, instance, self.registry_manager)
-        ]
-        fail_values = [
-            v
-            for v in possible_values
-            if not evaluate_condition_for_value(condition, v, instance, self.registry_manager)
-        ]
+        pass_values = [v for v in possible_values if evaluate_condition_for_value(condition, v)]
+        fail_values = [v for v in possible_values if not evaluate_condition_for_value(condition, v)]
 
-        branches: List[TreeNode] = []
+        branches: List["TreeNode"] = []
 
-        # 1. Create SUCCESS branches first (so they're primary in current_path)
         if pass_values:
             if postcond_attr is None:
-                # No postcondition branching - single success branch
                 success_node = self._create_branch_success_node(
                     tree=tree,
                     instance=instance,
@@ -257,7 +345,6 @@ class PreconditionBranchingMixin:
                 )
                 branches.append(success_node)
             else:
-                # Further split by postcondition
                 success_branches = self._create_postcondition_success_branches(
                     tree=tree,
                     instance=instance,
@@ -271,7 +358,6 @@ class PreconditionBranchingMixin:
                 )
                 branches.extend(success_branches)
 
-        # 2. Create FAIL branch (if any fail values)
         if fail_values:
             fail_node = self._create_branch_fail_node(
                 tree=tree,

@@ -1,0 +1,102 @@
+# Dice AND Compound - Demonstrates AND precondition with Cartesian product
+#
+# Scenario:
+# - AND Precondition: (face == 6) AND (color == red)
+#   - Success only if BOTH face=6 AND color=red
+#   - Fail if face != 6 (De Morgan: one branch)
+#   - Fail if color != red (De Morgan: another branch)
+# - Postcondition: checks SIZE (3rd different attribute!)
+#     if size == large → jackpot prize
+#     else (small, medium) → small prize
+#
+# When face=unknown AND color=unknown AND size=unknown:
+# Creates branches:
+#   Success branches (Cartesian product for postcondition):
+#   1. face=6, color=red, size=large → jackpot
+#   2. face=6, color=red, size={small,medium} → small (else branch)
+#   Fail branches (De Morgan: NOT(A AND B) = NOT A OR NOT B):
+#   3. face={1-5} (NOT face=6) → rejected
+#   4. color={green,yellow,black,white} (NOT color=red) → rejected
+#
+# Total: 2 success + 2 fail = 4 branches
+
+type: dice_and_compound
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: green
+        mutable: true
+      size:
+        space: dice_size
+        default: medium
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
+
+behaviors:
+  # Check win - AND precondition with different postcondition attribute
+  check_and_win:
+    # AND Precondition: face==6 AND color==red
+    preconditions:
+      - type: and
+        conditions:
+          - type: attribute_check
+            target: cube.face
+            operator: equals
+            value: "6"
+          - type: attribute_check
+            target: cube.color
+            operator: equals
+            value: red
+    effects:
+      # Set result to win
+      - type: set_attribute
+        target: prize.result
+        value: win
+      # Postcondition branches on SIZE (3rd attribute)
+      # IF size == large -> jackpot prize
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.size
+          operator: equals
+          value: large
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+      # ELSE size in {small, medium} -> small prize
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.size
+          operator: in
+          value: ["small", "medium"]
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: small
+
+  # Reset the dice
+  reset:
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: none
+      - type: set_attribute
+        target: prize.level
+        value: none

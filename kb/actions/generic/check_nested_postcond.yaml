@@ -1,0 +1,9 @@
+action: check_nested_postcond
+object_type: generic
+description: "Generic check_nested_postcond action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []

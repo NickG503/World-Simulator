@@ -6,9 +6,11 @@ This module provides a single authoritative place to translate the raw YAML
 structures used across actions, object behaviors, and constraints into the
 runtime `Condition` and `Effect` instances consumed by the simulator.
 
-NOTE: Simplified for tree-based simulation. Complex logical conditions
-(AND/OR/NOT/Implication) have been removed. Preconditions are now binary
-(single AttributeCondition). Postconditions use flat if-elif-else in effects.
+Supports compound logical conditions (AND/OR) for preconditions:
+- OR: Action succeeds if ANY sub-condition passes
+- AND: Action succeeds if ALL sub-conditions pass
+
+De Morgan's law is applied for fail branches in tree simulation.
 """
 
 from typing import Any, Dict, Iterable, List, Literal, Mapping, Sequence, Union
@@ -76,43 +78,41 @@ class AttributeCheckConditionSpec(ConditionSpec):
     value: Any
 
 
-class AndConditionSpec(ConditionSpec):
-    """AND condition combining multiple sub-conditions."""
+class OrConditionSpec(ConditionSpec):
+    """Spec for OR condition: any sub-condition passes."""
 
-    type: Literal["and"]
-    conditions: List[ConditionSpec] = Field(default_factory=list)
+    type: Literal["or"]
+    conditions: List["ConditionSpec"]
 
     @field_validator("conditions", mode="before")
     @classmethod
-    def _parse_conditions(cls, value: Any) -> List[ConditionSpec]:
+    def _parse_conditions(cls, value: Any) -> List["ConditionSpec"]:
         if value is None:
             return []
         if not isinstance(value, list):
-            value = [value]
-        # Defer to parse_condition_spec for each item
+            raise TypeError("OR condition requires a list of sub-conditions")
         return [parse_condition_spec(item) for item in value]
 
 
-class OrConditionSpec(ConditionSpec):
-    """OR condition combining multiple sub-conditions."""
+class AndConditionSpec(ConditionSpec):
+    """Spec for AND condition: all sub-conditions pass."""
 
-    type: Literal["or"]
-    conditions: List[ConditionSpec] = Field(default_factory=list)
+    type: Literal["and"]
+    conditions: List["ConditionSpec"]
 
     @field_validator("conditions", mode="before")
     @classmethod
-    def _parse_conditions(cls, value: Any) -> List[ConditionSpec]:
+    def _parse_conditions(cls, value: Any) -> List["ConditionSpec"]:
         if value is None:
             return []
         if not isinstance(value, list):
-            value = [value]
-        # Defer to parse_condition_spec for each item
+            raise TypeError("AND condition requires a list of sub-conditions")
         return [parse_condition_spec(item) for item in value]
 
 
 ConditionSpec.model_rebuild()
-AndConditionSpec.model_rebuild()
 OrConditionSpec.model_rebuild()
+AndConditionSpec.model_rebuild()
 
 
 class EffectSpec(_BaseSpec):
@@ -180,8 +180,8 @@ def _register_builtin_types() -> None:
         "attribute_check", AttributeCheckConditionSpec, lambda spec: _build_attribute_condition(spec)
     )
     # Compound logical conditions
-    condition_registry.register("and", AndConditionSpec, lambda spec: _build_and_condition(spec))
     condition_registry.register("or", OrConditionSpec, lambda spec: _build_or_condition(spec))
+    condition_registry.register("and", AndConditionSpec, lambda spec: _build_and_condition(spec))
 
     # Register effect types
     effect_registry.register("set_attribute", SetAttributeEffectSpec, lambda spec: _build_set_attribute_effect(spec))
@@ -267,16 +267,16 @@ def _build_attribute_condition(spec: AttributeCheckConditionSpec) -> Condition:
     return AttributeCondition(target=target, operator=spec.operator, value=value)  # type: ignore[arg-type]
 
 
-def _build_and_condition(spec: "AndConditionSpec") -> Condition:
-    """Build AndCondition from spec."""
-    sub_conditions = [build_condition(c) for c in spec.conditions]
-    return AndCondition(conditions=sub_conditions)
-
-
 def _build_or_condition(spec: "OrConditionSpec") -> Condition:
     """Build OrCondition from spec."""
     sub_conditions = [build_condition(c) for c in spec.conditions]
     return OrCondition(conditions=sub_conditions)
+
+
+def _build_and_condition(spec: "AndConditionSpec") -> Condition:
+    """Build AndCondition from spec."""
+    sub_conditions = [build_condition(c) for c in spec.conditions]
+    return AndCondition(conditions=sub_conditions)
 
 
 def _build_set_attribute_effect(spec: SetAttributeEffectSpec) -> Effect:
@@ -308,10 +308,10 @@ def build_condition(spec: ConditionSpec) -> Condition:
         return _build_parameter_equals(spec)
     if isinstance(spec, AttributeCheckConditionSpec):
         return _build_attribute_condition(spec)
-    if isinstance(spec, AndConditionSpec):
-        return _build_and_condition(spec)
     if isinstance(spec, OrConditionSpec):
         return _build_or_condition(spec)
+    if isinstance(spec, AndConditionSpec):
+        return _build_and_condition(spec)
     raise TypeError(f"Unsupported condition spec: {spec}")
 
 

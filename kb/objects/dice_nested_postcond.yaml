@@ -1,0 +1,81 @@
+# Dice Nested with Postcondition - Tests nested precond + postcond Cartesian product
+#
+# Scenario: 
+# - Precondition: (face == 6 AND color == red) OR face == 1
+# - Postcondition: if size == large then jackpot else small
+#
+# This creates a Cartesian product:
+# - Precond success 1: face=6, color=red 
+#   × Postcond: (size=large OR size={small,medium}) = 2 branches
+# - Precond success 2: face=1
+#   × Postcond: (size=large OR size={small,medium}) = 2 branches
+# - Precond fail: face≠6 OR color≠red, AND face≠1
+#
+# Total: 4 success + 1 fail = 5 nodes
+
+type: dice_nested_postcond
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: green
+        mutable: true
+      size:
+        space: dice_size
+        default: medium
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+
+behaviors:
+  check_nested_postcond:
+    preconditions:
+      - type: or
+        conditions:
+          # First disjunct: (face=6 AND color=red)
+          - type: and
+            conditions:
+              - type: attribute_check
+                target: cube.face
+                operator: equals
+                value: "6"
+              - type: attribute_check
+                target: cube.color
+                operator: equals
+                value: red
+          # Second disjunct: face=1
+          - type: attribute_check
+            target: cube.face
+            operator: equals
+            value: "1"
+    effects:
+      # Postcondition on SIZE (different attribute!)
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.size
+          operator: equals
+          value: large
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.size
+          operator: in
+          value: ["small", "medium"]
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: small

@@ -1,0 +1,83 @@
+# Dice Nested - Demonstrates NESTED OR/AND precondition
+#
+# Scenario: (face == 6 AND color == red) OR (size == large)
+# 
+# This tests nested compound conditions where:
+# - Success if BOTH face=6 AND color=red (nested AND passes)
+# - Success if size=large (second disjunct passes, regardless of face/color)
+# - Fail if (face≠6 OR color≠red) AND size≠large (De Morgan)
+#
+# With face=unknown, color=unknown, size=unknown:
+# Creates branches:
+#   1. Success: face=6, color=red, size=unknown → (nested AND passed)
+#   2. Success: face=unknown, color=unknown, size=large → (size disjunct passed)
+#   3. Fail: face≠6 OR color≠red, AND size≠large (De Morgan)
+#
+# The nested structure tests that (A AND B) is treated as a single disjunct
+
+type: dice_nested
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: green
+        mutable: true
+      size:
+        space: dice_size
+        default: medium
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
+
+behaviors:
+  # Nested precondition: (face=6 AND color=red) OR size=large
+  check_nested_win:
+    preconditions:
+      - type: or
+        conditions:
+          # First disjunct: (face=6 AND color=red)
+          - type: and
+            conditions:
+              - type: attribute_check
+                target: cube.face
+                operator: equals
+                value: "6"
+              - type: attribute_check
+                target: cube.color
+                operator: equals
+                value: red
+          # Second disjunct: size=large
+          - type: attribute_check
+            target: cube.size
+            operator: equals
+            value: large
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: win
+      - type: set_attribute
+        target: prize.level
+        value: jackpot
+
+  # Reset the dice
+  reset:
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: none
+      - type: set_attribute
+        target: prize.level
+        value: none

@@ -1,0 +1,9 @@
+action: check_compound_win
+object_type: generic
+description: "Generic check_compound_win action - behavior defined by objects"
+
+parameters: {}
+
+preconditions: []
+
+effects: []
