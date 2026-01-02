@@ -3,8 +3,8 @@
 # Scenario:
 # - Precondition: (face == 6) OR (color == red) → attributes A, B
 #   - Success A: face=6
-#   - Success B: color=red  
-#   - Fail: face≠6 AND color≠red 
+#   - Success B: color=red
+#   - Fail: face≠6 AND color≠red
 #
 # - Postcondition: IF (size == large) OR (weight == heavy) ELSE → attributes C, D (UNRELATED to A, B)
 #   - IF C: size=large → jackpot

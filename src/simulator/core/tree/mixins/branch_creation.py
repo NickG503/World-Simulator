@@ -11,6 +11,10 @@ from simulator.core.attributes import AttributePath
 from simulator.core.tree.models import BranchCondition, NodeStatus
 from simulator.core.tree.node_factory import compute_narrowing_change, create_or_merge_node
 from simulator.core.tree.snapshot_utils import capture_snapshot_with_values, snapshot_with_constrained_values
+from simulator.core.tree.utils.branch_condition_helpers import (
+    create_compound_branch_condition,
+    create_simple_branch_condition,
+)
 
 if TYPE_CHECKING:
     from simulator.core.actions.action import Action
@@ -52,16 +56,7 @@ class BranchCreationMixin:
             parent_node.snapshot,
         )
 
-        operator = "in" if len(values) > 1 else "equals"
-        value = values if len(values) > 1 else values[0]
-
-        branch_condition = BranchCondition(
-            attribute=attr_path,
-            operator=operator,
-            value=value,
-            source="precondition",
-            branch_type="success",
-        )
+        branch_condition = create_simple_branch_condition(attr_path, values, "precondition", "success")
 
         return create_or_merge_node(
             tree=tree,
@@ -95,9 +90,6 @@ class BranchCreationMixin:
             parent_node.snapshot, attr_path, values, self.registry_manager
         )
 
-        operator = "in" if len(values) > 1 else "equals"
-        value = values if len(values) > 1 else values[0]
-
         error_msg = self._build_precondition_error(action, attr_path, values)
         changes = compute_narrowing_change(parent_node.snapshot, attr_path, values)
 
@@ -111,13 +103,7 @@ class BranchCreationMixin:
                 }
             )
 
-        branch_condition = BranchCondition(
-            attribute=attr_path,
-            operator=operator,
-            value=value,
-            source="precondition",
-            branch_type="fail",
-        )
+        branch_condition = create_simple_branch_condition(attr_path, values, "precondition", "fail")
 
         return create_or_merge_node(
             tree=tree,
@@ -172,36 +158,7 @@ class BranchCreationMixin:
             if attr:
                 attr.value = values[0] if len(values) == 1 else values
 
-        # Build sub_conditions for all attributes
-        sub_conditions: List[BranchCondition] = []
-        for attr_path, values in attr_constraints.items():
-            operator = "in" if len(values) > 1 else "equals"
-            value: Union[str, List[str]] = values if len(values) > 1 else values[0]
-            sub_conditions.append(
-                BranchCondition(
-                    attribute=attr_path,
-                    operator=operator,
-                    value=value,
-                    source="precondition",
-                    branch_type="success",
-                )
-            )
-
-        # Use first attribute for the main condition
-        first_attr = list(attr_constraints.keys())[0]
-        first_values = attr_constraints[first_attr]
-        first_operator = "in" if len(first_values) > 1 else "equals"
-        first_value: Union[str, List[str]] = first_values if len(first_values) > 1 else first_values[0]
-
-        branch_condition = BranchCondition(
-            attribute=first_attr,
-            operator=first_operator,
-            value=first_value,
-            source="precondition",
-            branch_type="success",
-            compound_type="and" if len(attr_constraints) > 1 else None,
-            sub_conditions=sub_conditions if len(attr_constraints) > 1 else None,
-        )
+        branch_condition = create_compound_branch_condition(attr_constraints, "precondition", "success", "and")
 
         return create_or_merge_node(
             tree=tree,
@@ -264,29 +221,16 @@ class BranchCreationMixin:
             constraint_strs.append(f"{attr_path}={val_str}")
         error_msg = f"Precondition failed: {' AND '.join(constraint_strs)}"
 
-        # Build sub_conditions for compound branch condition
+        # De Morgan: OR precondition creates AND fail branch
+        demorgan_type = "and" if compound_type == "or" and len(attr_constraints) > 1 else None
+
+        # Build compound fail condition using helper
         sub_conditions: List[BranchCondition] = []
         for attr_path, values in attr_constraints.items():
-            operator = "in" if len(values) > 1 else "equals"
-            value: Union[str, List[str]] = values if len(values) > 1 else values[0]
-            sub_conditions.append(
-                BranchCondition(
-                    attribute=attr_path,
-                    operator=operator,
-                    value=value,
-                    source="precondition",
-                    branch_type="fail",
-                )
-            )
+            sub_conditions.append(create_simple_branch_condition(attr_path, values, "precondition", "fail"))
 
         first_attr = list(attr_constraints.keys())[0]
         first_values = list(attr_constraints.values())[0]
-
-        # De Morgan: OR precondition creates AND fail branch
-        # (all must fail for the OR to fail)
-        demorgan_type: Optional[str] = None
-        if compound_type == "or" and len(sub_conditions) > 1:
-            demorgan_type = "and"  # NOT(A OR B) = NOT A AND NOT B
 
         branch_condition = BranchCondition(
             attribute=first_attr,
@@ -346,27 +290,7 @@ class BranchCreationMixin:
             parent_node.snapshot,
         )
 
-        # Normalize value and operator for consistent display
-        if isinstance(value, list):
-            if len(value) == 1:
-                # Single-item list: unwrap to string and use "equals"
-                display_value: Union[str, List[str]] = value[0]
-                operator = "equals"
-            else:
-                # Multi-item list: keep as list and use "in"
-                display_value = value
-                operator = "in"
-        else:
-            display_value = value
-            operator = "equals"
-
-        branch_condition = BranchCondition(
-            attribute=attr_path,
-            operator=operator,
-            value=display_value,
-            source="postcondition",
-            branch_type=branch_type,
-        )
+        branch_condition = create_simple_branch_condition(attr_path, value, "postcondition", branch_type)
 
         return create_or_merge_node(
             tree=tree,

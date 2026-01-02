@@ -335,12 +335,49 @@ run_sim "$CATEGORY" multi_action_recursive --obj coffee_machine --set water_tank
 # Nested compound through multiple actions
 run_sim "$CATEGORY" slot_nested_sequence --obj slot_machine --set reel1.symbol=unknown reel2.symbol=unknown reel3.symbol=unknown --actions nested_compound check_any_seven
 
-echo ""
-echo "  Cartesian product: Precond OR × Postcond OR on UNRELATED attributes:"
+viz_category "$CATEGORY"
 
-# Precond: (face=6 OR color=red) × Postcond: (size=large OR weight=heavy) ELSE
-# Creates 2 precond success × 3 postcond branches = 6 success + 1 fail = 7 branches
-run_sim "$CATEGORY" cartesian_product --obj dice_cartesian --set cube.face=unknown cube.color=unknown cube.size=unknown cube.weight=unknown --actions check_cartesian
+echo ""
+echo "=========================================="
+echo ""
+echo "13. CARTESIAN PRODUCT - Precond × Postcond Branching"
+echo "=========================================="
+
+CATEGORY="13_cartesian_product"
+rm -f outputs/${CATEGORY}/*.yaml outputs/${CATEGORY}/*.html
+
+echo ""
+echo "  Cartesian product: Precond OR × Postcond OR on UNRELATED attributes"
+echo "  When precondition and postcondition check DIFFERENT attributes,"
+echo "  branches multiply: N precond paths × M postcond paths"
+
+# Full Cartesian: Precond (face=6 OR color=red) × Postcond (size=large OR weight=heavy) ELSE
+# 2 precond success × 3 postcond branches + 1 precond fail = 7 total branches
+run_sim "$CATEGORY" full_cartesian_4unknown --obj dice_cartesian --set cube.face=unknown cube.color=unknown cube.size=unknown cube.weight=unknown --actions check_cartesian
+
+# Partial known in precond: Only 1 precond success × 3 postcond = 3 success + 1 fail
+run_sim "$CATEGORY" cartesian_precond_1known --obj dice_cartesian --set cube.face=6 cube.color=unknown cube.size=unknown cube.weight=unknown --actions check_cartesian
+
+# Partial known in postcond: 2 precond success × fewer postcond branches
+run_sim "$CATEGORY" cartesian_postcond_1known --obj dice_cartesian --set cube.face=unknown cube.color=unknown cube.size=large cube.weight=unknown --actions check_cartesian
+
+# All precond known (satisfying): Just postcond branching
+run_sim "$CATEGORY" cartesian_precond_all_known --obj dice_cartesian --set cube.face=6 cube.color=red cube.size=unknown cube.weight=unknown --actions check_cartesian
+
+# Precond fail: Only 1 fail branch, no postcond branching
+run_sim "$CATEGORY" cartesian_precond_fail --obj dice_cartesian --set cube.face=1 cube.color=green cube.size=unknown cube.weight=unknown --actions check_cartesian
+
+echo ""
+echo "  Simple precond with compound postcond:"
+
+# dice_compound: face == 6 → IF (color == red) OR (color == green) ELSE
+run_sim "$CATEGORY" simple_precond_or_postcond --obj dice_compound --set cube.face=unknown cube.color=unknown --actions check_compound_win
+
+echo ""
+echo "  Compound precond with simple postcond:"
+
+# Using slot machine: (reel1 == seven OR reel2 == seven) then simple effect
+run_sim "$CATEGORY" or_precond_simple_postcond --obj slot_machine --set reel1.symbol=unknown reel2.symbol=unknown reel3.symbol=cherry --actions check_any_seven
 
 viz_category "$CATEGORY"
 
