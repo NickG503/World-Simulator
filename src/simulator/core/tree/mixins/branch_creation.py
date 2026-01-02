@@ -312,5 +312,7 @@ class BranchCreationMixin:
         """Clone an instance and constrain an attribute to specific value(s)."""
         new_instance = instance.deep_copy()
         if values:
-            AttributePath.parse(attr_path).set_value_in_instance(new_instance, values[0])
+            # Set all values, not just the first one
+            value_to_set = values[0] if len(values) == 1 else values
+            AttributePath.parse(attr_path).set_value_in_instance(new_instance, value_to_set)
         return new_instance

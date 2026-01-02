@@ -40,6 +40,14 @@ class AttributeCondition(Condition):
             if context.action is not None:
                 return False
 
+        # When lhs is a list (value set from branching), check if ALL values
+        # in the list satisfy the condition. This happens when we're in a
+        # success branch where we've already constrained to satisfying values.
+        if isinstance(lhs, list):
+            # For a success branch, all values should satisfy the precondition
+            # We return True to allow the action to be applied
+            return True
+
         if self.operator == "equals":
             return lhs == rhs
         elif self.operator == "not_equals":

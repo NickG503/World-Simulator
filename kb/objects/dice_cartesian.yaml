@@ -112,6 +112,46 @@ behaviors:
             target: prize.level
             value: small
 
+  # Example with nested IF / ELSE structure
+  check_with_else:
+    preconditions:
+      - type: attribute_check
+        target: cube.face
+        operator: gte
+        value: "4"
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: win
+      # IF size == large → jackpot
+      - type: conditional
+        condition:
+          type: attribute_check
+          target: cube.size
+          operator: equals
+          value: large
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+        else:
+          # ELSE: not large - check if medium
+          - type: conditional
+            condition:
+              type: attribute_check
+              target: cube.size
+              operator: equals
+              value: medium
+            then:
+              - type: set_attribute
+                target: prize.level
+                value: medium
+            else:
+              # ELSE: not large and not medium → must be small
+              - type: set_attribute
+                target: prize.level
+                value: small
+
   # Reset the dice
   reset:
     effects:

@@ -468,6 +468,177 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             font-size: 0.85em;
             margin-top: 8px;
         }}
+
+        /* Action Detail Panel */
+        .action-panel {{
+            background: var(--bg-card);
+            border-bottom: 1px solid var(--border);
+            max-height: 0;
+            overflow: hidden;
+            transition: max-height 0.3s ease, padding 0.3s ease;
+            padding: 0 20px;
+        }}
+
+        .action-panel.visible {{
+            max-height: 400px;
+            padding: 16px 20px;
+            overflow-y: auto;
+        }}
+
+        .action-panel-header {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 12px;
+        }}
+
+        .action-panel-header h3 {{
+            font-size: 1.1em;
+            color: var(--accent-purple);
+            margin: 0;
+        }}
+
+        .action-panel-close {{
+            cursor: pointer;
+            color: var(--text-dim);
+            font-size: 1.2em;
+            padding: 4px 8px;
+            border-radius: 4px;
+            transition: background 0.2s;
+        }}
+
+        .action-panel-close:hover {{
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--text);
+        }}
+
+        .condition-section {{
+            margin-bottom: 16px;
+        }}
+
+        .condition-section-title {{
+            font-size: 0.75em;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-dim);
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+
+        .condition-section-title::before {{
+            content: '';
+            width: 3px;
+            height: 12px;
+            border-radius: 2px;
+        }}
+
+        .condition-section-title.precondition::before {{
+            background: var(--accent-cyan);
+        }}
+
+        .condition-section-title.effects::before {{
+            background: var(--accent-green);
+        }}
+
+        .condition-tree {{
+            font-family: 'JetBrains Mono', 'SF Mono', 'Fira Code', monospace;
+            font-size: 0.85em;
+            line-height: 1.6;
+        }}
+
+        .condition-block {{
+            padding: 8px 12px;
+            border-left: 3px solid var(--border);
+            background: rgba(255, 255, 255, 0.02);
+            margin: 4px 0;
+            border-radius: 0 4px 4px 0;
+        }}
+
+        .condition-block.if {{
+            border-left-color: var(--accent-green);
+        }}
+
+        .condition-block.elif {{
+            border-left-color: var(--accent-gold);
+        }}
+
+        .condition-block.else {{
+            border-left-color: var(--accent-red);
+        }}
+
+        .condition-block.or {{
+            border-left-color: var(--accent-purple);
+        }}
+
+        .condition-block.and {{
+            border-left-color: var(--accent-cyan);
+        }}
+
+        .condition-keyword {{
+            font-weight: 600;
+            text-transform: uppercase;
+            font-size: 0.85em;
+            margin-right: 8px;
+        }}
+
+        .condition-keyword.if {{ color: var(--accent-green); }}
+        .condition-keyword.elif {{ color: var(--accent-gold); }}
+        .condition-keyword.else {{ color: var(--accent-red); }}
+        .condition-keyword.or {{ color: var(--accent-purple); }}
+        .condition-keyword.and {{ color: var(--accent-cyan); }}
+
+        .condition-expr {{
+            color: var(--text);
+        }}
+
+        .condition-expr .attr {{
+            color: var(--accent-cyan);
+        }}
+
+        .condition-expr .op {{
+            color: var(--accent-gold);
+            padding: 0 4px;
+        }}
+
+        .condition-expr .val {{
+            color: var(--accent-green);
+        }}
+
+        .effect-arrow {{
+            color: var(--accent-purple);
+            margin: 0 4px;
+        }}
+
+        .effect-target {{
+            color: var(--accent-cyan);
+        }}
+
+        .effect-value {{
+            color: var(--accent-green);
+        }}
+
+        .nested-conditions {{
+            margin-left: 16px;
+            padding-left: 8px;
+            border-left: 1px dashed var(--border);
+        }}
+
+        /* Make action labels clickable */
+        .level-action {{
+            cursor: pointer;
+            transition: fill 0.2s;
+        }}
+
+        .level-action:hover {{
+            fill: var(--accent-purple);
+        }}
+
+        .level-action.selected {{
+            fill: var(--accent-purple);
+            font-weight: 700;
+        }}
     </style>
 </head>
 <body>
@@ -491,9 +662,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             <div class="tooltip" id="tooltip"></div>
         </div>
 
-        <div class="detail-panel empty" id="detail-panel">
-            <div class="empty-icon">◉</div>
-            <p>Click a node to view details</p>
+        <div style="display: flex; flex-direction: column; overflow: hidden;">
+            <div class="action-panel" id="action-panel">
+                <div class="action-panel-header">
+                    <h3 id="action-panel-title">Action Details</h3>
+                    <span class="action-panel-close" onclick="hideActionPanel()">✕</span>
+                </div>
+                <div id="action-panel-content"></div>
+            </div>
+            <div class="detail-panel empty" id="detail-panel" style="flex: 1; overflow-y: auto;">
+                <div class="empty-icon">◉</div>
+                <p>Click a node to view details</p>
+            </div>
         </div>
     </div>
 
@@ -501,6 +681,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         const treeData = {tree_json};
 
         let selectedNodeId = null;
+        let selectedActionName = null;
         const sectionStates = {{}};  // Track collapsed state per node
         const otherAttrsStates = {{}};  // Track "other attributes" expanded state per node
         const NODE_RADIUS = 28;
@@ -648,9 +829,13 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             // Draw action labels on the left side (once per level)
             const leftX = -width / 2 + 60;
             for (const [levelY, info] of Object.entries(levelActions)) {{
-                const labelClass = info.hasFailure ? 'level-action has-failure' : 'level-action';
+                const isSelected = selectedActionName === info.action;
+                let labelClass = 'level-action';
+                if (info.hasFailure) labelClass += ' has-failure';
+                if (isSelected) labelClass += ' selected';
                 const txt = `<text class="${{labelClass}}" x="${{leftX}}" y="${{info.y}}" ` +
-                    `text-anchor="start">${{info.action}}</text>`;
+                    `text-anchor="start" onclick="toggleActionPanel('${{info.action}}')" ` +
+                    `style="cursor: pointer;">${{info.action}}</text>`;
                 html += txt;
             }}
 
@@ -687,6 +872,236 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             selectedNodeId = nodeId;
             renderGraph();
             renderDetail(nodeId);
+        }}
+
+        // =====================================================================
+        // Action Panel Functions
+        // =====================================================================
+
+        function toggleActionPanel(actionName) {{
+            if (selectedActionName === actionName) {{
+                hideActionPanel();
+            }} else {{
+                showActionPanel(actionName);
+            }}
+        }}
+
+        function showActionPanel(actionName) {{
+            selectedActionName = actionName;
+            const panel = document.getElementById('action-panel');
+            const title = document.getElementById('action-panel-title');
+            const content = document.getElementById('action-panel-content');
+
+            title.textContent = `Action: ${{actionName}}`;
+
+            // Get action definition from treeData
+            const actionDef = treeData.action_definitions?.[actionName];
+            content.innerHTML = renderActionDefinition(actionDef);
+
+            panel.classList.add('visible');
+            renderGraph();  // Re-render to update selected state
+        }}
+
+        function hideActionPanel() {{
+            selectedActionName = null;
+            const panel = document.getElementById('action-panel');
+            panel.classList.remove('visible');
+            renderGraph();  // Re-render to update selected state
+        }}
+
+        function renderActionDefinition(def) {{
+            if (!def) {{
+                return '<p style="color: var(--text-dim);">No definition available</p>';
+            }}
+
+            let html = '';
+
+            // Preconditions
+            if (def.preconditions && def.preconditions.length > 0) {{
+                html += `
+                    <div class="condition-section">
+                        <div class="condition-section-title precondition">Preconditions</div>
+                        <div class="condition-tree">
+                            ${{renderPreconditions(def.preconditions)}}
+                        </div>
+                    </div>
+                `;
+            }}
+
+            // Effects
+            if (def.effects && def.effects.length > 0) {{
+                html += `
+                    <div class="condition-section">
+                        <div class="condition-section-title effects">Effects</div>
+                        <div class="condition-tree">
+                            ${{renderEffects(def.effects)}}
+                        </div>
+                    </div>
+                `;
+            }}
+
+            if (!html) {{
+                html = '<p style="color: var(--text-dim);">No preconditions or effects defined</p>';
+            }}
+
+            return html;
+        }}
+
+        function renderPreconditions(preconditions) {{
+            return preconditions.map(cond => renderCondition(cond, 'precondition')).join('');
+        }}
+
+        function renderCondition(cond, context) {{
+            if (cond.type === 'or') {{
+                const subConds = (cond.conditions || []).map((c, i) => {{
+                    const prefix = i === 0 ? '' : '<span class="condition-keyword or">OR</span>';
+                    return `${{prefix}}${{renderCondition(c, context)}}`;
+                }}).join('');
+                return `<div class="condition-block or">${{subConds}}</div>`;
+            }} else if (cond.type === 'and') {{
+                const subConds = (cond.conditions || []).map((c, i) => {{
+                    const prefix = i === 0 ? '' : '<span class="condition-keyword and">AND</span>';
+                    return `${{prefix}}${{renderCondition(c, context)}}`;
+                }}).join('');
+                return `<div class="condition-block and">${{subConds}}</div>`;
+            }} else if (cond.type === 'attribute_check') {{
+                return renderAttributeCheck(cond);
+            }} else {{
+                return `<span class="condition-expr">${{cond.description || 'Unknown condition'}}</span>`;
+            }}
+        }}
+
+        function renderAttributeCheck(cond) {{
+            const attr = cond.attribute || '';
+            const op = getOperatorSymbol(cond.operator);
+            let val = cond.value;
+            if (Array.isArray(val)) {{
+                val = '{{' + val.join(', ') + '}}';
+            }}
+            return `
+                <span class="condition-expr">
+                    <span class="attr">${{attr}}</span>
+                    <span class="op">${{op}}</span>
+                    <span class="val">${{val}}</span>
+                </span>
+            `;
+        }}
+
+        function renderEffects(effects) {{
+            let html = '';
+            for (const effect of effects) {{
+                if (effect.type === 'conditional') {{
+                    html += renderConditionalEffect(effect);
+                }} else if (effect.type === 'set_attribute') {{
+                    html += renderSetAttributeEffect(effect);
+                }} else if (effect.type === 'trend') {{
+                    html += renderTrendEffect(effect);
+                }} else {{
+                    html += `<div class="condition-block">${{effect.description || 'Unknown effect'}}</div>`;
+                }}
+            }}
+            return html;
+        }}
+
+        function renderConditionalEffect(effect) {{
+            const branchType = effect.branch_type || 'if';
+            const keyword = branchType.toUpperCase();
+            const keywordClass = branchType.toLowerCase();
+
+            let conditionHtml = '';
+            if (effect.condition) {{
+                conditionHtml = renderCondition(effect.condition, 'effect');
+            }}
+
+            let thenHtml = '';
+            if (effect.then_effects && effect.then_effects.length > 0) {{
+                thenHtml = effect.then_effects.map(e => {{
+                    if (e.type === 'set_attribute') {{
+                        return `<div><span class="effect-target">${{e.target}}</span> = ` +
+                               `<span class="effect-value">${{e.value}}</span></div>`;
+                    }} else if (e.type === 'trend') {{
+                        return `<div><span class="effect-target">${{e.target}}</span>.trend = ` +
+                               `<span class="effect-value">${{e.direction}}</span></div>`;
+                    }}
+                    return `<div>${{e.description || 'effect'}}</div>`;
+                }}).join('');
+            }}
+
+            let elseHtml = '';
+            if (effect.else_effects && effect.else_effects.length > 0) {{
+                // Check if else contains a conditional (ELIF) or just direct effects (ELSE)
+                const hasConditional = effect.else_effects.some(e => e.type === 'conditional');
+                if (hasConditional) {{
+                    // Render nested conditionals (ELIF chain)
+                    elseHtml = effect.else_effects.map(e => {{
+                        if (e.type === 'conditional') {{
+                            return renderConditionalEffect(e);
+                        }} else if (e.type === 'set_attribute') {{
+                            return `<div class="condition-block else">
+                                <span class="condition-keyword else">ELSE</span>
+                                <div class="nested-conditions">
+                                    <div><span class="effect-target">${{e.target}}</span> =
+                                    <span class="effect-value">${{e.value}}</span></div>
+                                </div>
+                            </div>`;
+                        }} else if (e.type === 'trend') {{
+                            return `<div class="condition-block else">
+                                <span class="condition-keyword else">ELSE</span>
+                                <div class="nested-conditions">
+                                    <div><span class="effect-target">${{e.target}}</span>.trend =
+                                    <span class="effect-value">${{e.direction}}</span></div>
+                                </div>
+                            </div>`;
+                        }}
+                        return '';
+                    }}).join('');
+                }} else {{
+                    // Pure ELSE block with direct effects
+                    const elseContent = effect.else_effects.map(e => {{
+                        if (e.type === 'set_attribute') {{
+                            return `<div><span class="effect-target">${{e.target}}</span> = ` +
+                                   `<span class="effect-value">${{e.value}}</span></div>`;
+                        }} else if (e.type === 'trend') {{
+                            return `<div><span class="effect-target">${{e.target}}</span>.trend = ` +
+                                   `<span class="effect-value">${{e.direction}}</span></div>`;
+                        }}
+                        return `<div>${{e.description || 'effect'}}</div>`;
+                    }}).join('');
+                    elseHtml = `
+                        <div class="condition-block else">
+                            <span class="condition-keyword else">ELSE</span>
+                            <div class="nested-conditions">${{elseContent}}</div>
+                        </div>
+                    `;
+                }}
+            }}
+
+            return `
+                <div class="condition-block ${{keywordClass}}">
+                    <span class="condition-keyword ${{keywordClass}}">${{keyword}}</span>
+                    ${{conditionHtml}}
+                    <div class="nested-conditions">${{thenHtml}}</div>
+                </div>
+                ${{elseHtml}}
+            `;
+        }}
+
+        function renderSetAttributeEffect(effect) {{
+            return `
+                <div class="condition-block">
+                    <span class="effect-target">${{effect.target}}</span> =
+                    <span class="effect-value">${{effect.value}}</span>
+                </div>
+            `;
+        }}
+
+        function renderTrendEffect(effect) {{
+            return `
+                <div class="condition-block">
+                    <span class="effect-target">${{effect.target}}</span>.trend =
+                    <span class="effect-value">${{effect.direction}}</span>
+                </div>
+            `;
         }}
 
         function renderDetail(nodeId) {{

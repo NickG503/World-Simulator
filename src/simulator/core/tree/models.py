@@ -413,6 +413,9 @@ class SimulationTree(BaseModel):
     # Actions that were executed (for reference)
     actions: List[str] = Field(default_factory=list)
 
+    # Action definitions for visualization (preconditions/postconditions)
+    action_definitions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
     # Tree structure
     root_id: Optional[str] = None
     nodes: Dict[str, TreeNode] = Field(default_factory=dict)
@@ -640,7 +643,7 @@ class SimulationTree(BaseModel):
                 node_data["incoming_edges"] = [e.model_dump() for e in node.incoming_edges]
             nodes_dict[node_id] = node_data
 
-        return {
+        result = {
             "simulation_id": self.simulation_id,
             "object_type": self.object_type,
             "object_name": self.object_name,
@@ -651,6 +654,12 @@ class SimulationTree(BaseModel):
             "current_path": self.current_path,
             "nodes": nodes_dict,
         }
+
+        # Include action definitions if present
+        if self.action_definitions:
+            result["action_definitions"] = self.action_definitions
+
+        return result
 
     def count_merged_nodes(self) -> int:
         """Count nodes with multiple parents (merged nodes)."""

@@ -835,3 +835,361 @@ class TestCartesianProductBranching:
         # Each would have jackpot prize
         assert len(success) >= 2, f"Expected at least 2 success, got {len(success)}"
         assert len(fail) == 1, f"Expected 1 fail, got {len(fail)}"
+
+
+class TestComparisonOperatorBranching:
+    """Tests for comparison operators (gte, lte, gt, lt) in preconditions."""
+
+    def test_gte_creates_fail_branch(self, registry_manager):
+        """Precondition with >= should create fail branch for values below threshold."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "dice_cartesian",
+            [{"name": "check_with_else", "parameters": {}}],
+            simulation_id="test_gte_fail",
+            initial_values={
+                "cube.face": "unknown",
+                "cube.size": "unknown",
+            },
+        )
+
+        root = tree.nodes["state0"]
+        fail_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "rejected"]
+
+        # Should have 1 fail node for values {1, 2, 3} (< 4)
+        assert len(fail_nodes) >= 1, f"Expected at least 1 fail branch for gte, got {len(fail_nodes)}"
+
+    def test_gte_success_constrains_values(self, registry_manager):
+        """Precondition with >= should constrain success values to threshold and above."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "dice_cartesian",
+            [{"name": "check_with_else", "parameters": {}}],
+            simulation_id="test_gte_success",
+            initial_values={
+                "cube.face": "unknown",
+                "cube.size": "unknown",
+            },
+        )
+
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        # Success nodes should have face constrained to {4, 5, 6}
+        for node in success_nodes:
+            face_value = node.snapshot.get_attribute_value("cube.face")
+            if isinstance(face_value, list):
+                for v in face_value:
+                    assert v in ["4", "5", "6"], f"Success face should be >=4, got {v}"
+            elif face_value != "unknown":
+                assert face_value in ["4", "5", "6"], f"Success face should be >=4, got {face_value}"
+
+    def test_gte_fail_constrains_values(self, registry_manager):
+        """Precondition with >= should constrain fail values to below threshold."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "dice_cartesian",
+            [{"name": "check_with_else", "parameters": {}}],
+            simulation_id="test_gte_fail_values",
+            initial_values={
+                "cube.face": "unknown",
+                "cube.size": "unknown",
+            },
+        )
+
+        root = tree.nodes["state0"]
+        fail_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "rejected"]
+
+        # Fail node should have face constrained to {1, 2, 3}
+        for node in fail_nodes:
+            face_value = node.snapshot.get_attribute_value("cube.face")
+            if isinstance(face_value, list):
+                for v in face_value:
+                    assert v in ["1", "2", "3"], f"Fail face should be <4, got {v}"
+            elif face_value != "unknown":
+                assert face_value in ["1", "2", "3"], f"Fail face should be <4, got {face_value}"
+
+    def test_action_effects_applied_in_success(self, registry_manager):
+        """Action effects should be properly applied in success branches."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "dice_cartesian",
+            [{"name": "check_with_else", "parameters": {}}],
+            simulation_id="test_effects_applied",
+            initial_values={
+                "cube.face": "unknown",
+                "cube.size": "unknown",
+            },
+        )
+
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        # All success nodes should have prize.result = "win"
+        for node in success_nodes:
+            result_value = node.snapshot.get_attribute_value("prize.result")
+            assert result_value == "win", f"Expected prize.result=win, got {result_value}"
+
+    def test_postcondition_effects_applied(self, registry_manager):
+        """Postcondition effects (IF/ELIF/ELSE) should be properly applied."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "dice_cartesian",
+            [{"name": "check_with_else", "parameters": {}}],
+            simulation_id="test_postcond_effects",
+            initial_values={
+                "cube.face": "unknown",
+                "cube.size": "unknown",
+            },
+        )
+
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        # Each success node should have a prize.level set (not none)
+        for node in success_nodes:
+            level_value = node.snapshot.get_attribute_value("prize.level")
+            # Level should be jackpot, medium, or small based on size
+            assert level_value in ["jackpot", "medium", "small"], f"Expected prize.level set, got {level_value}"
+
+
+class TestListValueHandling:
+    """Tests for correct handling of list values in branching and conditions.
+
+    These tests verify the bugs are fixed through integration tests:
+    1. _clone_instance_with_values sets all values (not just first)
+    2. AttributeCondition.evaluate returns True for list values
+    3. Precondition passes when value is a list (from branching)
+    """
+
+    def test_clone_instance_preserves_all_values(self, registry_manager):
+        """_clone_instance_with_values should set all values, not just first."""
+        from simulator.core.tree.mixins.branch_creation import BranchCreationMixin
+        from simulator.io.loaders.object_loader import instantiate_default
+
+        obj_type = registry_manager.objects.get("dice_cartesian")
+        instance = instantiate_default(obj_type, registry_manager)
+
+        # Create a minimal mixin instance to test the method
+        class TestMixin(BranchCreationMixin):
+            pass
+
+        mixin = TestMixin()
+        values = ["4", "5", "6"]
+        cloned = mixin._clone_instance_with_values(instance, "cube.face", values)
+
+        # Should have all values, not just the first
+        cloned_value = cloned.parts["cube"].attributes["face"].current_value
+        assert cloned_value == values, f"Expected {values}, got {cloned_value}"
+
+    def test_precondition_passes_with_multiple_values(self, registry_manager):
+        """Precondition check should pass when attribute has multiple satisfying values."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "cool_down", "parameters": {}}],
+            simulation_id="test_precond_multivalue",
+            initial_values={"heater.temperature": "unknown"},
+        )
+
+        # Should have success branch (precondition passed with {warm, hot})
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+        assert len(success_nodes) == 1, "Should have one success branch"
+
+        # The value should be a set (multiple values passed precondition)
+        success = success_nodes[0]
+        temp_value = success.snapshot.get_attribute_value("heater.temperature")
+        assert isinstance(temp_value, list), f"Expected list, got {type(temp_value)}"
+        assert "warm" in temp_value, "Should include 'warm'"
+        assert "hot" in temp_value, "Should include 'hot'"
+
+    def test_action_effects_applied_with_list_values(self, registry_manager):
+        """Action effects should be applied even when precondition attribute has list value."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "cool_down", "parameters": {}}],
+            simulation_id="test_effects_with_list",
+            initial_values={"heater.temperature": "unknown"},
+        )
+
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        assert len(success_nodes) == 1, "Should have success branch"
+        success = success_nodes[0]
+
+        # Trend effect should have been applied
+        temp_attr = success.snapshot.object_state.parts["heater"].attributes["temperature"]
+        assert temp_attr.trend == "down", f"Expected trend=down, got {temp_attr.trend}"
+
+
+class TestTrendEffectApplication:
+    """Tests for trend effects being applied correctly."""
+
+    def test_cool_down_applies_trend(self, registry_manager):
+        """cool_down action should apply trend=down to temperature."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "cool_down", "parameters": {}}],
+            simulation_id="test_trend_applied",
+            initial_values={"heater.temperature": "unknown"},
+        )
+
+        # Find the success node
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        assert len(success_nodes) == 1, "Should have one success node"
+        success = success_nodes[0]
+
+        # Check that trend is down
+        temp_attr = success.snapshot.object_state.parts["heater"].attributes["temperature"]
+        assert temp_attr.trend == "down", f"Expected trend=down, got {temp_attr.trend}"
+
+    def test_cool_down_expands_value_set(self, registry_manager):
+        """cool_down with trend should expand value set to include lower values."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "cool_down", "parameters": {}}],
+            simulation_id="test_trend_expands",
+            initial_values={"heater.temperature": "unknown"},
+        )
+
+        # Find the success node
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        assert len(success_nodes) == 1, "Should have one success node"
+        success = success_nodes[0]
+
+        # Value should be expanded to include cold (from trend down)
+        temp_value = success.snapshot.get_attribute_value("heater.temperature")
+        assert isinstance(temp_value, list), "Should be a list"
+        assert "cold" in temp_value, "Should include 'cold' from trend expansion"
+        assert "warm" in temp_value, "Should include 'warm'"
+        assert "hot" in temp_value, "Should include 'hot'"
+
+    def test_turn_on_applies_trend(self, registry_manager):
+        """turn_on action should apply trend=down to battery level."""
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "flashlight",
+            [{"name": "turn_on", "parameters": {}}],
+            simulation_id="test_turn_on_trend",
+            initial_values={"battery.level": "high"},
+        )
+
+        # Find the success node
+        root = tree.nodes["state0"]
+        success_nodes = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "ok"]
+
+        assert len(success_nodes) >= 1, "Should have at least one success node"
+        success = success_nodes[0]
+
+        # Check that trend is down
+        battery_attr = success.snapshot.object_state.parts["battery"].attributes["level"]
+        assert battery_attr.trend == "down", f"Expected trend=down, got {battery_attr.trend}"
+
+
+class TestPreconditionNarrowsWithTrend:
+    """Tests for precondition constraints correctly narrowing trend-expanded values."""
+
+    def test_equals_precondition_narrows_trend_expanded_value(self, registry_manager):
+        """Precondition '== hot' should narrow {cold, warm, hot} to just hot.
+
+        Scenario:
+        1. heat_up: temp < hot → sets trend=up → value becomes {cold, warm, hot}
+        2. brew_espresso: temp == hot → should narrow to just 'hot'
+
+        Bug that was fixed: trend-expanded values were not being narrowed by
+        subsequent precondition constraints, so temp stayed as {cold, warm, hot}
+        even though the precondition required exactly 'hot'.
+        """
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "heat_up", "parameters": {}}, {"name": "brew_espresso", "parameters": {}}],
+            simulation_id="test_narrow_with_trend",
+            initial_values={
+                "heater.temperature": "unknown",
+                "water_tank.level": "full",
+                "bean_hopper.amount": "full",
+            },
+        )
+
+        # Find the brew_espresso success nodes (nodes where brew_espresso succeeded)
+        brew_nodes = []
+        for node_id, node in tree.nodes.items():
+            if node.action_name == "brew_espresso" and node.action_status == "ok":
+                brew_nodes.append(node)
+
+        assert len(brew_nodes) >= 1, "Should have at least one successful brew_espresso node"
+
+        for node in brew_nodes:
+            temp_value = node.snapshot.get_attribute_value("heater.temperature")
+            # If trend up from 'hot' (which is at the top), it should stay as 'hot'
+            # It should NOT be {cold, warm, hot}
+            if isinstance(temp_value, list):
+                # If it's a list, it should only contain 'hot'
+                assert temp_value == ["hot"], f"Expected ['hot'], got {temp_value}"
+            else:
+                assert temp_value == "hot", f"Expected 'hot', got {temp_value}"
+
+    def test_trend_up_from_max_value_stays_single(self, registry_manager):
+        """Trend up from the maximum value should not expand.
+
+        If temp == hot (max value) and trend is up, the value should stay as
+        just 'hot' since there's nowhere higher to go.
+        """
+        from simulator.core.tree.tree_runner import TreeSimulationRunner
+
+        runner = TreeSimulationRunner(registry_manager)
+        tree = runner.run(
+            "coffee_machine",
+            [{"name": "heat_up", "parameters": {}}, {"name": "brew_espresso", "parameters": {}}],
+            simulation_id="test_trend_up_from_max",
+            initial_values={
+                "heater.temperature": "unknown",
+                "water_tank.level": "full",
+                "bean_hopper.amount": "full",
+            },
+        )
+
+        # Find brew_espresso success nodes
+        brew_nodes = [n for n in tree.nodes.values() if n.action_name == "brew_espresso" and n.action_status == "ok"]
+
+        for node in brew_nodes:
+            temp_attr = node.snapshot.object_state.parts["heater"].attributes["temperature"]
+            # Check if trend is still present
+            if temp_attr.trend == "up":
+                # Value should be 'hot' only (can't go higher)
+                temp_value = temp_attr.value
+                if isinstance(temp_value, list):
+                    assert "cold" not in temp_value, "Trend up from hot should not include cold"
+                    assert "warm" not in temp_value, "Trend up from hot should not include warm"

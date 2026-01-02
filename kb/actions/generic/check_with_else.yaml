@@ -1,0 +1,6 @@
+action: check_with_else
+object_type: generic
+description: "Example action with IF/ELIF/ELSE postcondition structure"
+parameters: {}
+preconditions: []
+effects: []

@@ -118,9 +118,25 @@ def compute_value_with_trend(
     # If there's an active trend, compute value set
     if trend and trend != "none" and current_value != "unknown":
         if space_id:
-            value_set = compute_value_set_from_trend(current_value, trend, space_id, registry_manager)
-            if len(value_set) > 1:
-                return value_set
+            # Handle when current_value is already a list (from branching)
+            if isinstance(current_value, list):
+                # Compute trend-based set for each value and union them
+                all_values: set = set()
+                for val in current_value:
+                    val_set = compute_value_set_from_trend(val, trend, space_id, registry_manager)
+                    all_values.update(val_set)
+                # Preserve order from space levels
+                space = registry_manager.spaces.get(space_id)
+                if space:
+                    ordered = [v for v in space.levels if v in all_values]
+                    if len(ordered) > 1:
+                        return ordered
+                    elif ordered:
+                        return ordered[0]
+            else:
+                value_set = compute_value_set_from_trend(current_value, trend, space_id, registry_manager)
+                if len(value_set) > 1:
+                    return value_set
 
     # If parent had a value set, only preserve it if NO explicit value was set
     if parent_snapshot:
@@ -248,19 +264,47 @@ def capture_snapshot_with_values(
             return
 
         current_value = attr.value
+        has_trend = attr.trend and attr.trend != "none"
 
         # If current value is a set, narrow it to the constraint
         if isinstance(current_value, list):
             # Intersect with constraints
             intersection = [v for v in current_value if v in values]
             if intersection:
-                attr.value = intersection[0] if len(intersection) == 1 else intersection
+                narrowed = intersection[0] if len(intersection) == 1 else intersection
             else:
                 # No intersection, use constraint values
-                attr.value = values[0] if len(values) == 1 else values
+                narrowed = values[0] if len(values) == 1 else values
+
+            # If there's an active trend, re-expand from the narrowed value
+            if has_trend and attr.space_id:
+                if isinstance(narrowed, list):
+                    # Multiple values - expand each with trend and union
+                    all_expanded: set = set()
+                    for val in narrowed:
+                        expanded = compute_value_set_from_trend(val, attr.trend, attr.space_id, registry_manager)
+                        all_expanded.update(expanded)
+                    # Preserve order from space
+                    space = registry_manager.spaces.get(attr.space_id)
+                    if space:
+                        ordered = [v for v in space.levels if v in all_expanded]
+                        attr.value = ordered[0] if len(ordered) == 1 else ordered
+                    else:
+                        attr.value = narrowed
+                else:
+                    # Single value - expand with trend
+                    expanded = compute_value_set_from_trend(narrowed, attr.trend, attr.space_id, registry_manager)
+                    attr.value = expanded[0] if len(expanded) == 1 else expanded
+            else:
+                attr.value = narrowed
         elif current_value == "unknown":
-            # Unknown value -> apply constraints
-            attr.value = values[0] if len(values) == 1 else values
+            # Unknown value -> apply constraints, then expand with trend
+            narrowed = values[0] if len(values) == 1 else values
+            if has_trend and attr.space_id and isinstance(narrowed, str):
+                expanded = compute_value_set_from_trend(narrowed, attr.trend, attr.space_id, registry_manager)
+                attr.value = expanded[0] if len(expanded) == 1 else expanded
+            else:
+                attr.value = narrowed
         else:
             # Current value is a specific value (e.g., "3")
             # Check if this is a value the action SET, or just what we constrained to

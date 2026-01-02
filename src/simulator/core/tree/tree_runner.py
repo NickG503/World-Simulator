@@ -213,6 +213,9 @@ class TreeSimulationRunner(
             tree.add_node(node)
             return ActionResult(node=node, instance=None, action=None)
 
+        # Store action definition for visualization
+        self._store_action_definition(tree, action)
+
         parent_snapshot = parent_node.snapshot if parent_node else None
 
         compound_precond = self._get_compound_precondition(action, instance, parent_snapshot)
@@ -463,13 +466,13 @@ class TreeSimulationRunner(
                         if matches:
                             # Use "equals" operator for single value display
                             branch_type = "if" if conditional_index == 0 else "elif"
-                            return BranchCondition(
-                                attribute=attr_path,
-                                operator="equals",
-                                value=str(actual_value) if actual_value else "unknown",
-                                source="postcondition",
-                                branch_type=branch_type,
-                            )
+                        return BranchCondition(
+                            attribute=attr_path,
+                            operator="equals",
+                            value=str(actual_value) if actual_value else "unknown",
+                            source="postcondition",
+                            branch_type=branch_type,
+                        )
 
                         conditional_index += 1
                     except Exception:
@@ -634,6 +637,159 @@ class TreeSimulationRunner(
 
         actual_str = actual_values[0] if len(actual_values) == 1 else "{" + ", ".join(actual_values) + "}"
         return f"Precondition failed: {attr_path} (actual: {actual_str})"
+
+    # =========================================================================
+    # Action Definition Serialization
+    # =========================================================================
+
+    def _serialize_action_definition(self, action: Action) -> Dict[str, Any]:
+        """Serialize action preconditions and effects for visualization."""
+        return {
+            "preconditions": self._serialize_preconditions(action.preconditions),
+            "effects": self._serialize_effects(action.effects),
+        }
+
+    def _serialize_preconditions(self, preconditions: List[Any]) -> List[Dict[str, Any]]:
+        """Serialize preconditions to a visualization-friendly format."""
+        result = []
+        for cond in preconditions:
+            result.append(self._serialize_condition(cond))
+        return result
+
+    def _serialize_condition(self, cond: Any) -> Dict[str, Any]:
+        """Serialize a single condition recursively."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
+
+        if isinstance(cond, OrCondition):
+            return {
+                "type": "or",
+                "description": cond.describe(),
+                "conditions": [self._serialize_condition(c) for c in cond.conditions],
+            }
+        elif isinstance(cond, AndCondition):
+            return {
+                "type": "and",
+                "description": cond.describe(),
+                "conditions": [self._serialize_condition(c) for c in cond.conditions],
+            }
+        elif isinstance(cond, AttributeCondition):
+            return {
+                "type": "attribute_check",
+                "attribute": cond.target.to_string(),
+                "operator": cond.operator,
+                "value": cond.value,
+                "description": cond.describe(),
+            }
+        else:
+            return {
+                "type": "unknown",
+                "description": cond.describe() if hasattr(cond, "describe") else str(cond),
+            }
+
+    def _serialize_effects(self, effects: List[Any]) -> List[Dict[str, Any]]:
+        """Serialize effects to a visualization-friendly format."""
+        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+        from simulator.core.actions.effects.trend_effects import TrendEffect
+
+        result = []
+        is_first_conditional = True
+
+        for effect in effects:
+            if isinstance(effect, ConditionalEffect):
+                branch_type = "if" if is_first_conditional else "elif"
+                is_first_conditional = False
+
+                serialized = {
+                    "type": "conditional",
+                    "branch_type": branch_type,
+                    "condition": self._serialize_condition(effect.condition),
+                    "then_effects": self._serialize_effect_list(effect.then_effect),
+                }
+                if effect.else_effect:
+                    serialized["else_effects"] = self._serialize_effect_list(effect.else_effect)
+                result.append(serialized)
+            elif isinstance(effect, SetAttributeEffect):
+                result.append(
+                    {
+                        "type": "set_attribute",
+                        "target": effect.target.to_string(),
+                        "value": effect.value,
+                    }
+                )
+            elif isinstance(effect, TrendEffect):
+                result.append(
+                    {
+                        "type": "trend",
+                        "target": effect.target.to_string(),
+                        "direction": effect.direction,
+                    }
+                )
+            else:
+                result.append(
+                    {
+                        "type": "other",
+                        "description": str(effect),
+                    }
+                )
+
+        return result
+
+    def _serialize_effect_list(self, effects: Any) -> List[Dict[str, Any]]:
+        """Serialize a list of effects (or single effect)."""
+        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+        from simulator.core.actions.effects.trend_effects import TrendEffect
+
+        if effects is None:
+            return []
+
+        effect_list = effects if isinstance(effects, list) else [effects]
+        result = []
+
+        for effect in effect_list:
+            if isinstance(effect, ConditionalEffect):
+                # Nested conditional (for ELIF in ELSE)
+                serialized = {
+                    "type": "conditional",
+                    "branch_type": "elif",
+                    "condition": self._serialize_condition(effect.condition),
+                    "then_effects": self._serialize_effect_list(effect.then_effect),
+                }
+                if effect.else_effect:
+                    serialized["else_effects"] = self._serialize_effect_list(effect.else_effect)
+                result.append(serialized)
+            elif isinstance(effect, SetAttributeEffect):
+                result.append(
+                    {
+                        "type": "set_attribute",
+                        "target": effect.target.to_string(),
+                        "value": effect.value,
+                    }
+                )
+            elif isinstance(effect, TrendEffect):
+                result.append(
+                    {
+                        "type": "trend",
+                        "target": effect.target.to_string(),
+                        "direction": effect.direction,
+                    }
+                )
+            else:
+                result.append(
+                    {
+                        "type": "other",
+                        "description": str(effect),
+                    }
+                )
+
+        return result
+
+    def _store_action_definition(self, tree: SimulationTree, action: Action) -> None:
+        """Store action definition in the tree for visualization."""
+        if action.name not in tree.action_definitions:
+            tree.action_definitions[action.name] = self._serialize_action_definition(action)
 
     # =========================================================================
     # Serialization

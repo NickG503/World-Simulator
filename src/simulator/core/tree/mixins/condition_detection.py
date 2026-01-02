@@ -402,6 +402,7 @@ class ConditionDetectionMixin:
         Get all possible branch options for a postcondition attribute.
 
         Returns list of (value, branch_type, effects) tuples.
+        Handles nested conditionals in else blocks (IF/ELIF/ELSE chains).
         """
         from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 
@@ -423,28 +424,66 @@ class ConditionDetectionMixin:
         except Exception:
             pass
 
-        conditional_index = 0
+        def process_conditional(
+            effect: ConditionalEffect,
+            is_first: bool,
+        ) -> None:
+            """Recursively process conditional effects including nested else blocks."""
+            nonlocal options, used_values
+
+            cond = effect.condition
+            if isinstance(cond, AttributeCondition) and cond.target.to_string() == attribute_path:
+                branch_type = "if" if is_first else "elif"
+
+                then_effects = effect.then_effect if isinstance(effect.then_effect, list) else [effect.then_effect]
+
+                if cond.operator == "equals":
+                    value = cond.value
+                    options.append((value, branch_type, then_effects))
+                    used_values.add(value)
+                elif cond.operator == "in" and isinstance(cond.value, list):
+                    value = cond.value
+                    options.append((value, branch_type, then_effects))
+                    used_values.update(cond.value)
+
+                # Process nested conditionals in else block
+                if effect.else_effect:
+                    else_effects = effect.else_effect if isinstance(effect.else_effect, list) else [effect.else_effect]
+                    has_nested_conditional = False
+                    for else_eff in else_effects:
+                        if isinstance(else_eff, ConditionalEffect):
+                            has_nested_conditional = True
+                            # Nested conditional in else is always an ELIF
+                            process_conditional(else_eff, is_first=False)
+
+                    # If else block has no nested conditional, it's a true ELSE with effects
+                    if not has_nested_conditional and else_effects:
+                        # Get remaining values for the else branch
+                        remaining = [v for v in all_values if v not in used_values]
+                        if remaining:
+                            remaining_val = remaining if len(remaining) > 1 else remaining[0]
+                            options.append((remaining_val, "else", else_effects))
+                            if isinstance(remaining_val, list):
+                                used_values.update(remaining_val)
+                            else:
+                                used_values.add(remaining_val)
+
+        # Process top-level conditional effects
+        first_conditional = True
         for effect in action.effects:
             if isinstance(effect, ConditionalEffect):
                 cond = effect.condition
                 if isinstance(cond, AttributeCondition) and cond.target.to_string() == attribute_path:
-                    branch_type = "if" if conditional_index == 0 else "elif"
-                    conditional_index += 1
+                    process_conditional(effect, is_first=first_conditional)
+                    first_conditional = False
 
-                    then_effects = effect.then_effect if isinstance(effect.then_effect, list) else [effect.then_effect]
-
-                    if cond.operator == "equals":
-                        value = cond.value
-                        options.append((value, branch_type, then_effects))
-                        used_values.add(value)
-                    elif cond.operator == "in" and isinstance(cond.value, list):
-                        value = cond.value
-                        options.append((value, branch_type, then_effects))
-                        used_values.update(cond.value)
-
-        if all_values and used_values:
-            remaining = [v for v in all_values if v not in used_values]
-            if remaining:
-                options.append((remaining, "else", []))
+        # If we have conditionals but no explicit else, add remaining values as else
+        if options and all_values and used_values:
+            # Check if we already have an else branch
+            has_else = any(opt[1] == "else" for opt in options)
+            if not has_else:
+                remaining = [v for v in all_values if v not in used_values]
+                if remaining:
+                    options.append((remaining, "else", []))
 
         return options

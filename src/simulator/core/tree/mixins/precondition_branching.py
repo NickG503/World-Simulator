@@ -12,7 +12,7 @@ from simulator.core.actions.conditions.attribute_conditions import AttributeCond
 from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
 from simulator.core.tree.models import BranchCondition
 from simulator.core.tree.snapshot_utils import get_all_space_values, get_attribute_space_id
-from simulator.core.tree.utils.evaluation import evaluate_condition_for_value
+from simulator.core.tree.utils.condition_evaluation import evaluate_condition_for_value
 
 if TYPE_CHECKING:
     from simulator.core.actions.action import Action
@@ -56,8 +56,14 @@ class PreconditionBranchingMixin:
         if not possible_values:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters)
 
-        passing_values = [v for v in possible_values if evaluate_condition_for_value(condition, v)]
-        failing_values = [v for v in possible_values if not evaluate_condition_for_value(condition, v)]
+        passing_values = [
+            v for v in possible_values if evaluate_condition_for_value(condition, v, instance, self.registry_manager)
+        ]
+        failing_values = [
+            v
+            for v in possible_values
+            if not evaluate_condition_for_value(condition, v, instance, self.registry_manager)
+        ]
 
         branches: List["TreeNode"] = []
 
@@ -642,8 +648,14 @@ class PreconditionBranchingMixin:
         if not possible_values:
             return self._apply_action_linear(tree, instance, parent_node, action, parameters, layer_state_cache)
 
-        pass_values = [v for v in possible_values if evaluate_condition_for_value(condition, v)]
-        fail_values = [v for v in possible_values if not evaluate_condition_for_value(condition, v)]
+        pass_values = [
+            v for v in possible_values if evaluate_condition_for_value(condition, v, instance, self.registry_manager)
+        ]
+        fail_values = [
+            v
+            for v in possible_values
+            if not evaluate_condition_for_value(condition, v, instance, self.registry_manager)
+        ]
 
         branches: List["TreeNode"] = []
 
