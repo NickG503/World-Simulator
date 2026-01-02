@@ -328,12 +328,24 @@ class BranchCreationMixin:
             parent_node.snapshot,
         )
 
-        operator = "in" if isinstance(value, list) else "equals"
+        # Normalize value and operator for consistent display
+        if isinstance(value, list):
+            if len(value) == 1:
+                # Single-item list: unwrap to string and use "equals"
+                display_value: Union[str, List[str]] = value[0]
+                operator = "equals"
+            else:
+                # Multi-item list: keep as list and use "in"
+                display_value = value
+                operator = "in"
+        else:
+            display_value = value
+            operator = "equals"
 
         branch_condition = BranchCondition(
             attribute=attr_path,
             operator=operator,
-            value=value,
+            value=display_value,
             source="postcondition",
             branch_type=branch_type,
         )

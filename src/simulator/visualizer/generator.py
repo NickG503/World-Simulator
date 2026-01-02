@@ -973,10 +973,12 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             // Simple condition
             const attr = bc.attribute || '';
             let op = getOperatorSymbol(bc.operator);
-            const isValueSet = Array.isArray(bc.value);
+            // Check if value is a set with MORE than one element
+            const isMultiValueSet = Array.isArray(bc.value) && bc.value.length > 1;
+            const isSingleValueArray = Array.isArray(bc.value) && bc.value.length === 1;
 
-            // If value is a set and operator is equals/not_equals, use ∈/∉ instead
-            if (isValueSet) {{
+            // If value is a multi-value set and operator is equals/not_equals, use ∈/∉ instead
+            if (isMultiValueSet) {{
                 if (bc.operator === 'equals' || bc.operator === 'in') {{
                     op = '∈';
                 }} else if (bc.operator === 'not_equals' || bc.operator === 'not_in') {{
@@ -984,9 +986,16 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 }}
             }}
 
-            const valueDisplay = isValueSet
-                ? '{{' + bc.value.join(', ') + '}}'
-                : (bc.value || '');
+            // Determine value display
+            let valueDisplay;
+            if (isMultiValueSet) {{
+                valueDisplay = '{{' + bc.value.join(', ') + '}}';
+            }} else if (isSingleValueArray) {{
+                // Single-item array: unwrap and display as single value
+                valueDisplay = bc.value[0] || '';
+            }} else {{
+                valueDisplay = bc.value || '';
+            }}
 
             if (!attr && !valueDisplay) {{
                 return bc.branch_type || '';

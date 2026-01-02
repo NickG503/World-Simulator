@@ -220,11 +220,23 @@ class PostconditionBranchingMixin:
             else:
                 self._update_snapshot_attribute(snapshot, postcond_attr, [postcond_value])
 
-        postcond_display = postcond_value
+        # Normalize value and operator for consistent display
+        if isinstance(postcond_value, list):
+            if len(postcond_value) == 1:
+                # Single-item list: unwrap to string and use "equals"
+                postcond_display = postcond_value[0]
+                operator = "equals"
+            else:
+                # Multi-item list: keep as list and use "in"
+                postcond_display = postcond_value
+                operator = "in"
+        else:
+            postcond_display = postcond_value
+            operator = "equals"
 
         branch_condition = BranchCondition(
             attribute=postcond_attr,
-            operator="equals",
+            operator=operator,
             value=postcond_display,
             source="postcondition",
             branch_type=branch_type,
@@ -304,11 +316,24 @@ class PostconditionBranchingMixin:
                 parent_node.snapshot,
             )
 
-            operator = "in" if isinstance(postcond_value, list) else "equals"
+            # Normalize value and operator for consistent display
+            if isinstance(postcond_value, list):
+                if len(postcond_value) == 1:
+                    # Single-item list: unwrap to string and use "equals"
+                    display_value: Union[str, List[str]] = postcond_value[0]
+                    operator = "equals"
+                else:
+                    # Multi-item list: keep as list and use "in"
+                    display_value = postcond_value
+                    operator = "in"
+            else:
+                display_value = postcond_value
+                operator = "equals"
+
             branch_condition = BranchCondition(
                 attribute=postcond_attr,
                 operator=operator,
-                value=postcond_value,
+                value=display_value,
                 source="postcondition",
                 branch_type=branch_type,
             )

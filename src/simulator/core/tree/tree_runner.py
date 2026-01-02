@@ -414,10 +414,15 @@ class TreeSimulationRunner(
     # =========================================================================
 
     def _extract_postcondition_branch(self, action: Action, instance: ObjectInstance) -> Optional[BranchCondition]:
-        """Extract branch condition from conditional effects."""
+        """Extract branch condition from conditional effects.
+
+        Finds the conditional effect that matches the instance's current value
+        and returns a BranchCondition with the appropriate operator and branch_type.
+        """
         from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
         from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 
+        conditional_index = 0
         for effect in action.effects:
             if isinstance(effect, ConditionalEffect):
                 cond = effect.condition
@@ -425,13 +430,31 @@ class TreeSimulationRunner(
                     try:
                         ai = cond.target.resolve(instance)
                         actual_value = ai.current_value
+                        attr_path = cond.target.to_string()
 
-                        return BranchCondition(
-                            attribute=cond.target.to_string(),
-                            operator=cond.operator,
-                            value=str(actual_value) if actual_value else "unknown",
-                            source="postcondition",
-                        )
+                        # Check if this condition matches the current value
+                        matches = False
+                        if cond.operator == "equals":
+                            matches = actual_value == cond.value
+                        elif cond.operator == "in" and isinstance(cond.value, list):
+                            matches = actual_value in cond.value
+                        elif cond.operator == "not_equals":
+                            matches = actual_value != cond.value
+                        elif cond.operator == "not_in" and isinstance(cond.value, list):
+                            matches = actual_value not in cond.value
+
+                        if matches:
+                            # Use "equals" operator for single value display
+                            branch_type = "if" if conditional_index == 0 else "elif"
+                            return BranchCondition(
+                                attribute=attr_path,
+                                operator="equals",
+                                value=str(actual_value) if actual_value else "unknown",
+                                source="postcondition",
+                                branch_type=branch_type,
+                            )
+
+                        conditional_index += 1
                     except Exception:
                         pass
 
