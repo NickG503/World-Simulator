@@ -1,0 +1,123 @@
+# Dice Cartesian - Demonstrates Cartesian product of precondition OR with postcondition OR
+#
+# Scenario:
+# - Precondition: (face == 6) OR (color == red) → attributes A, B
+#   - Success A: face=6
+#   - Success B: color=red  
+#   - Fail: face≠6 AND color≠red 
+#
+# - Postcondition: IF (size == large) OR (weight == heavy) ELSE → attributes C, D (UNRELATED to A, B)
+#   - IF C: size=large → jackpot
+#   - IF D: weight=heavy → jackpot
+#   - ELSE: size≠large AND weight≠heavy → small
+#
+# When face=unknown AND color=unknown AND size=unknown AND weight=unknown:
+# Cartesian product creates:
+#   Precondition Success A (face=6):
+#     1. size=large, weight=unknown → jackpot (C satisfies)
+#     2. size≠large, weight=heavy → jackpot (D satisfies)
+#     3. size≠large, weight≠heavy → small (ELSE)
+#   Precondition Success B (color=red):
+#     4. size=large, weight=unknown → jackpot (C satisfies)
+#     5. size≠large, weight=heavy → jackpot (D satisfies)
+#     6. size≠large, weight≠heavy → small (ELSE)
+#   Precondition Fail:
+#     7. face≠6 AND color≠red → rejected
+#
+# Total: 6 success + 1 fail = 7 branches
+
+type: dice_cartesian
+parts:
+  cube:
+    attributes:
+      face:
+        space: dice_face
+        default: "3"
+        mutable: true
+      color:
+        space: dice_color
+        default: green
+        mutable: true
+      size:
+        space: dice_size
+        default: medium
+        mutable: true
+      weight:
+        space: dice_weight
+        default: light
+        mutable: true
+  prize:
+    attributes:
+      level:
+        space: prize_level
+        default: none
+        mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
+
+behaviors:
+  # Check win - OR precondition with OR postcondition on UNRELATED attributes
+  check_cartesian:
+    # Precondition: face==6 OR color==red (A OR B)
+    preconditions:
+      - type: or
+        conditions:
+          - type: attribute_check
+            target: cube.face
+            operator: equals
+            value: "6"
+          - type: attribute_check
+            target: cube.color
+            operator: equals
+            value: red
+    effects:
+      # Set result to win (always on success)
+      - type: set_attribute
+        target: prize.result
+        value: win
+      # Postcondition: IF (size==large OR weight==heavy) THEN jackpot ELSE small
+      - type: conditional
+        condition:
+          type: or
+          conditions:
+            - type: attribute_check
+              target: cube.size
+              operator: equals
+              value: large
+            - type: attribute_check
+              target: cube.weight
+              operator: equals
+              value: heavy
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: jackpot
+      # ELSE: size≠large AND weight≠heavy
+      - type: conditional
+        condition:
+          type: and
+          conditions:
+            - type: attribute_check
+              target: cube.size
+              operator: in
+              value: ["small", "medium"]
+            - type: attribute_check
+              target: cube.weight
+              operator: equals
+              value: light
+        then:
+          - type: set_attribute
+            target: prize.level
+            value: small
+
+  # Reset the dice
+  reset:
+    effects:
+      - type: set_attribute
+        target: prize.result
+        value: none
+      - type: set_attribute
+        target: prize.level
+        value: none

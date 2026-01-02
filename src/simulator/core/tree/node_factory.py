@@ -103,42 +103,46 @@ def compute_snapshot_diff(
     new_snapshot: WorldSnapshot,
     base_changes: List[ChangeDict],
 ) -> List[ChangeDict]:
-    """Compute changes between snapshots, including value set narrowing."""
-    # Get attributes already in base_changes
-    changed_attrs = {c["attribute"] for c in base_changes if "attribute" in c}
+    """Compute changes between snapshots, including value set narrowing.
 
-    # Check all attributes for value set narrowing
-    additional_changes = []
-    for attr_path in parent_snapshot.get_all_attribute_paths():
-        if attr_path in changed_attrs:
-            continue  # Already tracked
+    This computes the NET change from parent to new snapshot for each attribute,
+    avoiding intermediate values from constraint narrowing + action effects.
+    """
+    result: List[ChangeDict] = []
 
+    # Track all attributes that might have changed
+    all_attrs = set(parent_snapshot.get_all_attribute_paths())
+    all_attrs.update(new_snapshot.get_all_attribute_paths())
+
+    # Also include attributes from base_changes
+    for c in base_changes:
+        if "attribute" in c:
+            all_attrs.add(c["attribute"])
+
+    # Compute NET change for each attribute
+    for attr_path in all_attrs:
         parent_value = parent_snapshot.get_attribute_value(attr_path)
         new_value = new_snapshot.get_attribute_value(attr_path)
 
-        # Check if value set narrowed to single value
-        if isinstance(parent_value, list) and not isinstance(new_value, list):
-            if new_value != parent_value:
-                additional_changes.append(
-                    {
-                        "attribute": attr_path,
-                        "before": parent_value,
-                        "after": new_value,
-                        "kind": "value",
-                    }
-                )
-        elif parent_value != new_value:
-            # Any other difference
-            additional_changes.append(
-                {
-                    "attribute": attr_path,
-                    "before": parent_value,
-                    "after": new_value,
-                    "kind": "value",
-                }
-            )
+        # Skip if no change
+        if parent_value == new_value:
+            continue
 
-    return additional_changes + base_changes
+        # Skip if both are None/unknown
+        if parent_value is None and new_value is None:
+            continue
+
+        # Record the net change
+        result.append(
+            {
+                "attribute": attr_path,
+                "before": parent_value,
+                "after": new_value,
+                "kind": "value",
+            }
+        )
+
+    return result
 
 
 def compute_narrowing_change(

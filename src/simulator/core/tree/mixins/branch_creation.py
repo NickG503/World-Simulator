@@ -172,17 +172,35 @@ class BranchCreationMixin:
             if attr:
                 attr.value = values[0] if len(values) == 1 else values
 
+        # Build sub_conditions for all attributes
+        sub_conditions: List[BranchCondition] = []
+        for attr_path, values in attr_constraints.items():
+            operator = "in" if len(values) > 1 else "equals"
+            value: Union[str, List[str]] = values if len(values) > 1 else values[0]
+            sub_conditions.append(
+                BranchCondition(
+                    attribute=attr_path,
+                    operator=operator,
+                    value=value,
+                    source="precondition",
+                    branch_type="success",
+                )
+            )
+
+        # Use first attribute for the main condition
         first_attr = list(attr_constraints.keys())[0]
         first_values = attr_constraints[first_attr]
-        operator = "in" if len(first_values) > 1 else "equals"
-        value = first_values if len(first_values) > 1 else first_values[0]
+        first_operator = "in" if len(first_values) > 1 else "equals"
+        first_value: Union[str, List[str]] = first_values if len(first_values) > 1 else first_values[0]
 
         branch_condition = BranchCondition(
             attribute=first_attr,
-            operator=operator,
-            value=value,
+            operator=first_operator,
+            value=first_value,
             source="precondition",
             branch_type="success",
+            compound_type="and" if len(attr_constraints) > 1 else None,
+            sub_conditions=sub_conditions if len(attr_constraints) > 1 else None,
         )
 
         return create_or_merge_node(

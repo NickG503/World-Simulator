@@ -335,6 +335,13 @@ run_sim "$CATEGORY" multi_action_recursive --obj coffee_machine --set water_tank
 # Nested compound through multiple actions
 run_sim "$CATEGORY" slot_nested_sequence --obj slot_machine --set reel1.symbol=unknown reel2.symbol=unknown reel3.symbol=unknown --actions nested_compound check_any_seven
 
+echo ""
+echo "  Cartesian product: Precond OR × Postcond OR on UNRELATED attributes:"
+
+# Precond: (face=6 OR color=red) × Postcond: (size=large OR weight=heavy) ELSE
+# Creates 2 precond success × 3 postcond branches = 6 success + 1 fail = 7 branches
+run_sim "$CATEGORY" cartesian_product --obj dice_cartesian --set cube.face=unknown cube.color=unknown cube.size=unknown cube.weight=unknown --actions check_cartesian
+
 viz_category "$CATEGORY"
 
 echo ""

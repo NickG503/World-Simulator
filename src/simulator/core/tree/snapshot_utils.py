@@ -219,15 +219,20 @@ def capture_snapshot_with_values(
     parent_snapshot: Optional[WorldSnapshot] = None,
 ) -> WorldSnapshot:
     """
-    Capture a snapshot, preserving trend-based value sets.
+    Capture a snapshot, applying constraint values only when appropriate.
 
-    The `values` parameter is used for branch condition tracking, but the
-    snapshot's actual value is computed by `capture_snapshot` which considers
-    trends. If a trend produces a value SET, we preserve it rather than
-    overriding with a single value.
+    The constraint `values` are applied to narrow unknown/set attributes,
+    but if the action explicitly set a specific value (different from
+    the constraint), that value is preserved.
+
+    Logic:
+    - If current value is a set (list) -> narrow to intersection with constraints
+    - If current value is "unknown" -> apply constraints
+    - If current value is a specific value that differs from instance's original
+      value, it means an action SET it explicitly -> preserve it
 
     Args:
-        instance: Object instance to snapshot
+        instance: Object instance to snapshot (after action applied)
         attr_path: Attribute path being branched on
         values: Branch constraint values
         registry_manager: For space access
@@ -238,21 +243,52 @@ def capture_snapshot_with_values(
     """
     snapshot = capture_snapshot(instance, registry_manager, parent_snapshot)
 
+    def _apply_constraint(attr: AttributeSnapshot) -> None:
+        if attr is None:
+            return
+
+        current_value = attr.value
+
+        # If current value is a set, narrow it to the constraint
+        if isinstance(current_value, list):
+            # Intersect with constraints
+            intersection = [v for v in current_value if v in values]
+            if intersection:
+                attr.value = intersection[0] if len(intersection) == 1 else intersection
+            else:
+                # No intersection, use constraint values
+                attr.value = values[0] if len(values) == 1 else values
+        elif current_value == "unknown":
+            # Unknown value -> apply constraints
+            attr.value = values[0] if len(values) == 1 else values
+        else:
+            # Current value is a specific value (e.g., "3")
+            # Check if this is a value the action SET, or just what we constrained to
+            # If it's IN the constraint values, it might be from the constraint
+            # If it's NOT in the constraint values, the action set a different value
+            if current_value not in values:
+                # Action set a value outside the constraint - preserve it
+                pass  # Keep the current value
+            else:
+                # Value is in constraints - this could be from constraint or action
+                # Check if it matches what we would have constrained to
+                if len(values) == 1 and current_value == values[0]:
+                    # Single constraint value matches - could be either, keep as is
+                    pass
+                else:
+                    # Multiple constraint values but instance has specific value
+                    # This is the constraint being applied - keep as is
+                    pass
+
     parts = attr_path.split(".")
     if len(parts) == 2:
         part_name, attr_name = parts
         if part_name in snapshot.object_state.parts:
             attr = snapshot.object_state.parts[part_name].attributes.get(attr_name)
-            if attr:
-                current_is_set = isinstance(attr.value, list)
-                if not current_is_set:
-                    attr.value = values[0] if len(values) == 1 else values
+            _apply_constraint(attr)
     elif len(parts) == 1:
         attr = snapshot.object_state.global_attributes.get(parts[0])
-        if attr:
-            current_is_set = isinstance(attr.value, list)
-            if not current_is_set:
-                attr.value = values[0] if len(values) == 1 else values
+        _apply_constraint(attr)
 
     return snapshot
 

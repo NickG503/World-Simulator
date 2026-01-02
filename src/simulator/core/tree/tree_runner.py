@@ -284,16 +284,33 @@ class TreeSimulationRunner(
                     layer_state_cache=layer_state_cache,
                 )
             elif postcond_unknown:
-                child_nodes = self._create_postcondition_branches(
-                    tree=tree,
-                    instance=instance,
-                    parent_node=parent_node,
-                    action=action,
-                    parameters=parameters,
-                    attr_path=postcond_unknown,
-                    parent_snapshot=parent_snapshot,
-                    layer_state_cache=layer_state_cache,
-                )
+                # Check if postcondition has compound OR with multiple unknown attrs
+                postcond_unknowns = self._get_unknown_postcondition_attributes(action, instance, parent_snapshot)
+                has_compound = self._has_compound_postcondition(action)
+
+                if has_compound and len(postcond_unknowns) > 1:
+                    # Compound OR postcondition with multiple unknown attributes
+                    child_nodes = self._create_compound_postcondition_branches(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        parent_snapshot=parent_snapshot,
+                        layer_state_cache=layer_state_cache,
+                    )
+                else:
+                    # Simple postcondition branching on single attribute
+                    child_nodes = self._create_postcondition_branches(
+                        tree=tree,
+                        instance=instance,
+                        parent_node=parent_node,
+                        action=action,
+                        parameters=parameters,
+                        attr_path=postcond_unknown,
+                        parent_snapshot=parent_snapshot,
+                        layer_state_cache=layer_state_cache,
+                    )
                 if verbose:
                     logger.info("Created %d postcondition branches", len(child_nodes))
             else:
@@ -524,6 +541,58 @@ class TreeSimulationRunner(
             normalized = self._normalize_change(c)
             if normalized:
                 result.append(normalized)
+        return result
+
+    def _merge_changes_for_same_attr(self, changes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Merge multiple changes for the same attribute into net changes.
+
+        When we have narrowing + action effect for the same attribute:
+        - {3, 5} → 5 (narrowing)
+        - 5 → 3 (action effect)
+        This becomes: {3, 5} → 3 (net change)
+        """
+        if not changes:
+            return changes
+
+        # Group by attribute, keeping order of first occurrence
+        attr_order: List[str] = []
+        attr_changes: Dict[str, List[Dict[str, Any]]] = {}
+
+        for change in changes:
+            attr = change.get("attribute", "")
+            if attr not in attr_changes:
+                attr_order.append(attr)
+                attr_changes[attr] = []
+            attr_changes[attr].append(change)
+
+        # Merge changes for each attribute
+        result: List[Dict[str, Any]] = []
+        for attr in attr_order:
+            attr_list = attr_changes[attr]
+            if len(attr_list) == 1:
+                result.append(attr_list[0])
+            else:
+                # Multiple changes for same attribute - take first before and last after
+                first_before = attr_list[0].get("before")
+                last_after = attr_list[-1].get("after")
+                # Use the most specific kind (prefer 'value' over 'narrowing')
+                kind = "value"
+                for c in attr_list:
+                    if c.get("kind") == "value":
+                        kind = "value"
+                        break
+
+                # Skip if net change is no-op
+                if first_before != last_after:
+                    result.append(
+                        {
+                            "attribute": attr,
+                            "before": first_before,
+                            "after": last_after,
+                            "kind": kind,
+                        }
+                    )
+
         return result
 
     def _normalize_change(self, change: Any) -> Optional[Dict[str, Any]]:

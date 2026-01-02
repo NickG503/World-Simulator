@@ -303,26 +303,90 @@ class ConditionDetectionMixin:
         Returns:
             Attribute path if unknown/multi-valued, None if all known single values
         """
+        from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
+        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+
+        def check_condition_for_unknown(cond) -> Optional[str]:
+            """Recursively check condition for unknown attributes."""
+            if isinstance(cond, AttributeCondition):
+                try:
+                    ai = cond.target.resolve(instance)
+                    attr_path = cond.target.to_string()
+
+                    if ai.current_value == "unknown":
+                        return attr_path
+
+                    if parent_snapshot:
+                        snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                        if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
+                            return attr_path
+                except Exception:
+                    pass
+            elif isinstance(cond, (OrCondition, AndCondition)):
+                for sub_cond in cond.conditions:
+                    result = check_condition_for_unknown(sub_cond)
+                    if result:
+                        return result
+            return None
+
+        for effect in action.effects:
+            if isinstance(effect, ConditionalEffect):
+                result = check_condition_for_unknown(effect.condition)
+                if result:
+                    return result
+        return None
+
+    def _get_unknown_postcondition_attributes(
+        self, action: "Action", instance: "ObjectInstance", parent_snapshot: Optional["WorldSnapshot"] = None
+    ) -> List[str]:
+        """
+        Get ALL unknown attributes in postcondition that would cause branching.
+
+        Returns:
+            List of attribute paths that are unknown/multi-valued
+        """
+        from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
+        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
+
+        unknowns: List[str] = []
+
+        def collect_unknowns(cond):
+            """Recursively collect unknown attributes from condition."""
+            if isinstance(cond, AttributeCondition):
+                try:
+                    ai = cond.target.resolve(instance)
+                    attr_path = cond.target.to_string()
+
+                    if ai.current_value == "unknown":
+                        if attr_path not in unknowns:
+                            unknowns.append(attr_path)
+                    elif parent_snapshot:
+                        snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+                        if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
+                            if attr_path not in unknowns:
+                                unknowns.append(attr_path)
+                except Exception:
+                    pass
+            elif isinstance(cond, (OrCondition, AndCondition)):
+                for sub_cond in cond.conditions:
+                    collect_unknowns(sub_cond)
+
+        for effect in action.effects:
+            if isinstance(effect, ConditionalEffect):
+                collect_unknowns(effect.condition)
+
+        return unknowns
+
+    def _has_compound_postcondition(self, action: "Action") -> bool:
+        """Check if action has OR or AND condition in postcondition."""
+        from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
         from simulator.core.actions.effects.conditional_effects import ConditionalEffect
 
         for effect in action.effects:
             if isinstance(effect, ConditionalEffect):
-                cond = effect.condition
-                if isinstance(cond, AttributeCondition):
-                    try:
-                        ai = cond.target.resolve(instance)
-                        attr_path = cond.target.to_string()
-
-                        if ai.current_value == "unknown":
-                            return attr_path
-
-                        if parent_snapshot:
-                            snapshot_value = parent_snapshot.get_attribute_value(attr_path)
-                            if isinstance(snapshot_value, list) and len(snapshot_value) > 1:
-                                return attr_path
-                    except Exception:
-                        pass
-        return None
+                if isinstance(effect.condition, (OrCondition, AndCondition)):
+                    return True
+        return False
 
     def _get_precondition_condition(self, action: "Action") -> Optional[AttributeCondition]:
         """Get the first precondition condition that checks an attribute."""

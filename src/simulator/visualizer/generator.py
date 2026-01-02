@@ -967,7 +967,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 const connectorText = bc.compound_type === 'and' ? 'AND' : 'OR';
                 const connector = `<span class="compound-connector">${{connectorText}}</span>`;
                 const parts = bc.sub_conditions.map(sub => formatBranchCondition(sub));
-                return '(' + parts.join(' ' + connector + ' ') + ')';
+                return parts.join(' ' + connector + ' ');
             }}
 
             // Simple condition

@@ -141,9 +141,11 @@ class TestRecursiveDeMorganEdgeCases:
 
         # (A AND B) OR C with all unknown:
         # Success: 2 (1 for inner AND satisfied, 1 for C satisfied)
-        # Fail: 1 (De Morgan: all disjuncts fail)
+        # Fail: 2 (De Morgan: NOT((A AND B) OR C) = (NOT A OR NOT B) AND NOT C)
+        #   - One fail where A fails + C fails (B unknown)
+        #   - One fail where B fails + C fails (A unknown)
         assert len(success) == 2, f"Expected 2 success, got {len(success)}"
-        assert len(fail) == 1, f"Expected 1 fail, got {len(fail)}"
+        assert len(fail) == 2, f"Expected 2 fail, got {len(fail)}"
 
     def test_each_fail_branch_has_unique_constraint(self, registry_manager):
         """Each fail branch should constrain different attributes."""

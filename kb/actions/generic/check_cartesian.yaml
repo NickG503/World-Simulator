@@ -1,0 +1,9 @@
+action: check_cartesian
+object_type: generic
+description: "Check Cartesian product of OR precondition with OR postcondition"
+
+parameters: {}
+
+preconditions: []
+
+effects: []

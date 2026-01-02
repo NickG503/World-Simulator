@@ -68,6 +68,11 @@ spaces:
     name: Dice Size
     levels: ["small", "medium", "large"]
 
+  # Dice weights
+  - id: dice_weight
+    name: Dice Weight
+    levels: ["light", "heavy"]
+
   # Slot machine symbols (unordered - for IN operator checks)
   - id: slot_symbol
     name: Slot Symbol
