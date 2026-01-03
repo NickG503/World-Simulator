@@ -1239,16 +1239,16 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             // SECTION 2+: Changes sections (collapsed by default)
             if (isMerged) {{
                 // Primary parent changes (first parent)
+                const primaryParent = parentIds[0];
+                const pLabel = primaryParent.replace('state', 'S');
+                html += `
+                    <div class="section collapsed">
+                        <div class="section-title" onclick="toggleSection(this)">` +
+                        `Changes from ${{pLabel}}</div>
+                        <div class="section-content">
+                            <div class="change-list">
+                `;
                 if (changes.length > 0) {{
-                    const primaryParent = parentIds[0];
-                    const pLabel = primaryParent.replace('state', 'S');
-                    html += `
-                        <div class="section collapsed">
-                            <div class="section-title" onclick="toggleSection(this)">` +
-                            `Changes from ${{pLabel}}</div>
-                            <div class="section-content">
-                                <div class="change-list">
-                    `;
                     for (const change of changes) {{
                         html += `
                             <div class="change-item">
@@ -1259,8 +1259,10 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                             </div>
                         `;
                     }}
-                    html += '</div></div></div>';
+                }} else {{
+                    html += `<div class="change-item" style="color: var(--text-dim);">No changes (same state)</div>`;
                 }}
+                html += '</div></div></div>';
 
                 // Additional parent changes from incoming_edges
                 if (node.incoming_edges && node.incoming_edges.length > 0) {{

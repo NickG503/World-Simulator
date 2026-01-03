@@ -103,10 +103,11 @@ def compute_snapshot_diff(
     new_snapshot: WorldSnapshot,
     base_changes: List[ChangeDict],
 ) -> List[ChangeDict]:
-    """Compute changes between snapshots, including value set narrowing.
+    """Compute changes between snapshots, including value set narrowing and trends.
 
     This computes the NET change from parent to new snapshot for each attribute,
     avoiding intermediate values from constraint narrowing + action effects.
+    Also captures trend changes separately.
     """
     result: List[ChangeDict] = []
 
@@ -124,23 +125,36 @@ def compute_snapshot_diff(
         parent_value = parent_snapshot.get_attribute_value(attr_path)
         new_value = new_snapshot.get_attribute_value(attr_path)
 
-        # Skip if no change
-        if parent_value == new_value:
-            continue
+        # Record value change if different
+        if parent_value != new_value:
+            # Skip if both are None/unknown
+            if not (parent_value is None and new_value is None):
+                result.append(
+                    {
+                        "attribute": attr_path,
+                        "before": parent_value,
+                        "after": new_value,
+                        "kind": "value",
+                    }
+                )
 
-        # Skip if both are None/unknown
-        if parent_value is None and new_value is None:
-            continue
+        # Also check for trend changes
+        parent_attr = parent_snapshot._get_attribute_snapshot(attr_path)
+        new_attr = new_snapshot._get_attribute_snapshot(attr_path)
 
-        # Record the net change
-        result.append(
-            {
-                "attribute": attr_path,
-                "before": parent_value,
-                "after": new_value,
-                "kind": "value",
-            }
-        )
+        if parent_attr and new_attr:
+            parent_trend = parent_attr.trend or "none"
+            new_trend = new_attr.trend or "none"
+
+            if parent_trend != new_trend:
+                result.append(
+                    {
+                        "attribute": f"{attr_path}.trend",
+                        "before": parent_trend,
+                        "after": new_trend,
+                        "kind": "trend",
+                    }
+                )
 
     return result
 
