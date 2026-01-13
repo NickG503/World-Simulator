@@ -26,7 +26,7 @@ parts:
         mutable: true
       type:
         space: battery_types
-        mutable: false
+        mutable: true
         default: AA
 
 constraints:
@@ -43,7 +43,7 @@ constraints:
     value: empty
 
 behaviors:
-  # Turn on: Flat if-elif-else structure based on battery.level
+  # Turn on: All consumables trend down when in use
   turn_on:
     # Precondition: battery must not be empty
     preconditions:
@@ -56,13 +56,20 @@ behaviors:
       - type: set_attribute
         target: switch.position
         value: "on"
-      # Always turn bulb on (precondition ensures battery not empty)
+      # Bulb turns on, but trends down (will turn off when battery empty)
       - type: set_attribute
         target: bulb.state
         value: "on"
-      # Set trend down (battery drains)
+      - type: set_trend
+        target: bulb.state
+        direction: down
+      # Battery drains (trend down)
       - type: set_trend
         target: battery.level
+        direction: down
+      # Brightness will dim (trend down)
+      - type: set_trend
+        target: bulb.brightness
         direction: down
       # Flat if-elif-else for brightness based on battery.level
       # IF battery.level in {full, high} -> brightness = high
@@ -87,7 +94,7 @@ behaviors:
           - type: set_attribute
             target: bulb.brightness
             value: medium
-      # ELSE (low) -> brightness = low
+      # ELIF battery.level == low -> brightness = low
       - type: conditional
         condition:
           type: attribute_check
@@ -99,7 +106,7 @@ behaviors:
             target: bulb.brightness
             value: low
 
-  # Turn off: Only works if switch is on
+  # Turn off: Stop all consumption trends
   turn_off:
     preconditions:
       - type: attribute_check
@@ -110,12 +117,21 @@ behaviors:
       - type: set_attribute
         target: switch.position
         value: off
+      # Bulb turns off, trend stops
       - type: set_attribute
         target: bulb.state
         value: off
+      - type: set_trend
+        target: bulb.state
+        direction: none
+      # Brightness goes to none, trend stops
       - type: set_attribute
         target: bulb.brightness
         value: none
+      - type: set_trend
+        target: bulb.brightness
+        direction: none
+      # Battery stops draining
       - type: set_trend
         target: battery.level
         direction: none

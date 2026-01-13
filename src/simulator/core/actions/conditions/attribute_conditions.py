@@ -41,13 +41,16 @@ class AttributeCondition(Condition):
                 return False
 
         # When lhs is a list (value set from branching), check if ALL values
-        # in the list satisfy the condition. This happens when we're in a
-        # success branch where we've already constrained to satisfying values.
+        # in the list satisfy the condition. Only fire the effect if every
+        # possible value would satisfy it - this prevents incorrect effects
+        # when values are uncertain.
         if isinstance(lhs, list):
-            # For a success branch, all values should satisfy the precondition
-            # We return True to allow the action to be applied
-            return True
+            return all(self._evaluate_single(v, rhs, context) for v in lhs)
 
+        return self._evaluate_single(lhs, rhs, context)
+
+    def _evaluate_single(self, lhs: str, rhs, context: "EvaluationContext") -> bool:  # noqa: F821
+        """Evaluate condition for a single LHS value."""
         if self.operator == "equals":
             return lhs == rhs
         elif self.operator == "not_equals":

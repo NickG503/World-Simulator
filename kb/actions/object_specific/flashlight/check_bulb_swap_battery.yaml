@@ -1,0 +1,21 @@
+action: check_bulb_swap_battery
+object_type: flashlight
+description: "Check bulb state and swap battery type if bulb is off"
+
+parameters: {}
+
+preconditions: []
+
+effects:
+  # IF bulb.state == off -> change battery type to AAA
+  - type: conditional
+    condition:
+      type: attribute_check
+      target: bulb.state
+      operator: equals
+      value: off
+    then:
+      - type: set_attribute
+        target: battery.type
+        value: AAA
+  # ELSE (bulb.state == on) -> no change (implicit, no effect)
