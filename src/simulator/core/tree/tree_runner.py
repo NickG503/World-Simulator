@@ -22,6 +22,10 @@ from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.simulation_runner import ActionRequest
+from simulator.core.tree.constraint_branching import (
+    apply_branching_constraints,
+    get_branching_constraints,
+)
 from simulator.core.tree.mixins import (
     BranchCreationMixin,
     ConditionDetectionMixin,
@@ -33,14 +37,18 @@ from simulator.core.tree.models import (
     NodeStatus,
     SimulationTree,
     TreeNode,
+    WorldSnapshot,
 )
 from simulator.core.tree.node_factory import (
+    create_constraint_node,
     create_error_node,
     create_or_merge_node,
     create_root_node,
 )
 from simulator.core.tree.snapshot_utils import capture_snapshot
+from simulator.core.tree.utils.change_helpers import build_changes_list
 from simulator.core.tree.utils.evaluation import evaluate_condition_for_value
+from simulator.core.tree.utils.instance_helpers import clone_instance_with_values
 
 logger = logging.getLogger(__name__)
 
@@ -125,7 +133,19 @@ class TreeSimulationRunner(
                     for result in results:
                         logger.info("Created node: %s", result.node.describe())
 
-            leaves = new_leaves
+            # Apply branching constraints to action results
+            constraint_leaves = self._apply_branching_constraints_to_leaves(
+                tree=tree,
+                leaves=new_leaves,
+                object_type=object_type,
+                verbose=verbose,
+            )
+
+            # If constraint branching created new nodes, use them as leaves
+            if constraint_leaves:
+                leaves = constraint_leaves
+            else:
+                leaves = new_leaves
 
             if verbose and layer_state_cache:
                 merged_count = sum(1 for n, _ in layer_state_cache.values() if n.has_multiple_parents)
@@ -170,7 +190,7 @@ class TreeSimulationRunner(
                 bc = child_node.branch_condition
                 if bc and bc.attribute:
                     values = bc.value if isinstance(bc.value, list) else [bc.value]
-                    constrained_instance = self._clone_instance_with_values(instance, bc.attribute, values)
+                    constrained_instance = clone_instance_with_values(instance, bc.attribute, values)
                 else:
                     constrained_instance = instance.deep_copy()
 
@@ -369,7 +389,7 @@ class TreeSimulationRunner(
             layer_state_cache = {}
 
         result = self.engine.apply_action(instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         if result.status == "ok":
             if result.after:
@@ -428,6 +448,165 @@ class TreeSimulationRunner(
                 layer_state_cache=layer_state_cache,
             )
             return [node]
+
+    # =========================================================================
+    # Branching Constraint Application
+    # =========================================================================
+
+    def _apply_branching_constraints_to_leaves(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        object_type: str,
+        verbose: bool = False,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Apply branching constraints to action result leaves.
+
+        Logic:
+        - If action result has active trends: create blue "Time" nodes as children
+        - If action result has NO trends: apply constraints directly to the action node
+
+        Args:
+            tree: The simulation tree
+            leaves: List of (node, instance) tuples from action processing
+            object_type: Name of the object type
+            verbose: Whether to log debug info
+
+        Returns:
+            List of (node, instance) tuples for next action
+        """
+        # Check if there are any branching constraints
+        constraints = get_branching_constraints(object_type, self.registry_manager)
+        if not constraints:
+            return []  # No constraints, return empty to use action leaves
+
+        # Store constraint definitions for visualization
+        self._store_constraint_definitions(tree, object_type)
+
+        result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
+        layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
+
+        # Check if ANY sibling has trends (to determine if we need placeholders)
+        any_sibling_has_trends = any(
+            self._snapshot_has_active_trends(node.snapshot) for node, _ in leaves if node.action_status == "ok"
+        )
+
+        for action_node, instance in leaves:
+            # Check if the action node has any active trends
+            has_trends = self._snapshot_has_active_trends(action_node.snapshot)
+
+            # For failed nodes: create placeholder Time node if siblings have trends
+            if action_node.action_status != "ok":
+                if any_sibling_has_trends:
+                    # Create a placeholder Time node to align with sibling Time nodes
+                    placeholder_node = create_constraint_node(
+                        tree=tree,
+                        parent_node=action_node,
+                        snapshot=action_node.snapshot,  # Same state as failed node
+                        constraint_name=None,
+                        branch_type="placeholder",
+                        condition_attribute="",
+                        condition_values=[],
+                        has_active_trends=False,
+                        changes=[],
+                        layer_state_cache=layer_state_cache,
+                    )
+                    tree.add_node(placeholder_node)
+                    result_leaves.append((placeholder_node, instance))
+                else:
+                    result_leaves.append((action_node, instance))
+                continue
+
+            # Apply branching constraints to this action node's snapshot
+            branches = apply_branching_constraints(
+                snapshot=action_node.snapshot,
+                object_type_name=object_type,
+                registry_manager=self.registry_manager,
+            )
+
+            if not has_trends:
+                # NO TRENDS: Apply constraints directly to the action node
+                # Pick the first valid branch and update the action node in place
+                for branch_snapshot, branch_info in branches:
+                    if branch_info.branch_type == "none":
+                        result_leaves.append((action_node, instance))
+                        break
+
+                    # Update the action node's snapshot with constraint changes
+                    action_node.snapshot = branch_snapshot
+                    action_node.changes.extend(branch_info.changes)
+                    action_node.constraints_applied = True  # Mark that constraints were applied
+
+                    # Create instance that matches the constrained snapshot
+                    constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
+                    result_leaves.append((action_node, constrained_instance))
+                    break  # Only take the first branch when no trends
+            else:
+                # HAS TRENDS: Create blue "Time" nodes as children
+                for branch_snapshot, branch_info in branches:
+                    if branch_info.branch_type == "none" and not branch_info.constraint_name:
+                        result_leaves.append((action_node, instance))
+                        continue
+
+                    # Create Time constraint node
+                    constraint_node = create_constraint_node(
+                        tree=tree,
+                        parent_node=action_node,
+                        snapshot=branch_snapshot,
+                        constraint_name=None,  # Will show as "Time"
+                        branch_type=branch_info.branch_type,
+                        condition_attribute=branch_info.condition_attribute,
+                        condition_values=branch_info.condition_values,
+                        has_active_trends=branch_info.has_active_trends,
+                        changes=branch_info.changes,
+                        layer_state_cache=layer_state_cache,
+                    )
+
+                    tree.add_node(constraint_node)
+
+                    if verbose:
+                        logger.info("Created Time node: %s", constraint_node.describe())
+
+                    # Create instance that matches the constrained snapshot
+                    constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
+                    result_leaves.append((constraint_node, constrained_instance))
+
+        return result_leaves
+
+    def _snapshot_has_active_trends(self, snapshot: WorldSnapshot) -> bool:
+        """Check if any attribute in the snapshot has an active trend."""
+        for part_name, part in snapshot.object_state.parts.items():
+            for attr_name, attr in part.attributes.items():
+                if attr.trend and attr.trend != "none":
+                    return True
+        for attr_name, attr in snapshot.object_state.global_attributes.items():
+            if attr.trend and attr.trend != "none":
+                return True
+        return False
+
+    def _create_instance_from_snapshot(
+        self, original_instance: ObjectInstance, snapshot: WorldSnapshot
+    ) -> ObjectInstance:
+        """Create an ObjectInstance that matches the snapshot's state."""
+        new_instance = original_instance.deep_copy()
+
+        # Update part attributes from snapshot
+        for part_name, part_snapshot in snapshot.object_state.parts.items():
+            if part_name in new_instance.parts:
+                for attr_name, attr_snapshot in part_snapshot.attributes.items():
+                    if attr_name in new_instance.parts[part_name].attributes:
+                        attr = new_instance.parts[part_name].attributes[attr_name]
+                        attr.current_value = attr_snapshot.value
+                        attr.trend = attr_snapshot.trend
+
+        # Update global attributes from snapshot
+        for attr_name, attr_snapshot in snapshot.object_state.global_attributes.items():
+            if attr_name in new_instance.global_attributes:
+                attr = new_instance.global_attributes[attr_name]
+                attr.current_value = attr_snapshot.value
+                attr.trend = attr_snapshot.trend
+
+        return new_instance
 
     # =========================================================================
     # Branch Condition Extraction
@@ -537,15 +716,6 @@ class TreeSimulationRunner(
                     attr_inst.current_value = value
                     attr_inst.last_known_value = value if value != "unknown" else None
 
-    def _build_changes_list(self, changes: List[Any]) -> List[Dict[str, Any]]:
-        """Build serializable changes list, filtering info/internal/no-op entries."""
-        result = []
-        for c in changes:
-            normalized = self._normalize_change(c)
-            if normalized:
-                result.append(normalized)
-        return result
-
     def _merge_changes_for_same_attr(self, changes: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Merge multiple changes for the same attribute into net changes.
 
@@ -597,26 +767,6 @@ class TreeSimulationRunner(
                     )
 
         return result
-
-    def _normalize_change(self, change: Any) -> Optional[Dict[str, Any]]:
-        """Normalize a change (dict or object) to dict format."""
-        if isinstance(change, dict):
-            attr = change.get("attribute", "")
-            before = change.get("before")
-            after = change.get("after")
-            kind = change.get("kind", "value")
-        elif hasattr(change, "attribute"):
-            attr = change.attribute
-            before = change.before
-            after = change.after
-            kind = getattr(change, "kind", "value")
-        else:
-            return None
-
-        if before == after or kind == "info" or attr.startswith("["):
-            return None
-
-        return {"attribute": attr, "before": before, "after": after, "kind": kind}
 
     def _build_precondition_error(self, action: Action, attr_path: str, actual_values: List[str]) -> str:
         """Build detailed precondition error message."""
@@ -790,6 +940,62 @@ class TreeSimulationRunner(
         """Store action definition in the tree for visualization."""
         if action.name not in tree.action_definitions:
             tree.action_definitions[action.name] = self._serialize_action_definition(action)
+
+    def _store_constraint_definitions(self, tree: SimulationTree, object_type: str) -> None:
+        """Store constraint definitions in the tree for visualization."""
+        from simulator.core.constraints.constraint import BranchingConstraint
+
+        if "constraint" in tree.constraint_definitions:
+            return  # Already stored
+
+        obj_type = self.registry_manager.objects.get(object_type)
+        if not obj_type or not obj_type.compiled_constraints:
+            return
+
+        branching_constraints = [c for c in obj_type.compiled_constraints if isinstance(c, BranchingConstraint)]
+        if not branching_constraints:
+            return
+
+        # Serialize the branching constraints
+        constraint_def = {"branches": []}
+        for bc in branching_constraints:
+            branch_def = {
+                "condition": self._serialize_condition_for_display(bc.condition),
+                "effects": [self._serialize_effect_for_display(e) for e in bc.effects],
+            }
+            if bc.else_effects:
+                branch_def["else_effects"] = [self._serialize_effect_for_display(e) for e in bc.else_effects]
+            constraint_def["branches"].append(branch_def)
+
+        tree.constraint_definitions["constraint"] = constraint_def
+
+    def _serialize_condition_for_display(self, condition) -> Dict[str, Any]:
+        """Serialize a condition for visualization display."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+        from simulator.utils.error_formatting import get_operator_symbol
+
+        if isinstance(condition, AttributeCondition):
+            op_symbol = get_operator_symbol(condition.operator)
+            return {
+                "type": "attribute_check",
+                "attribute": condition.target.to_string(),
+                "operator": condition.operator,
+                "value": condition.value,
+                "description": f"{condition.target.to_string()} {op_symbol} {condition.value}",
+            }
+        return {"type": condition.__class__.__name__}
+
+    def _serialize_effect_for_display(self, effect) -> Dict[str, Any]:
+        """Serialize an effect for visualization display."""
+        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+
+        if isinstance(effect, SetAttributeEffect):
+            return {
+                "type": "set_attribute",
+                "target": effect.target.to_string(),
+                "value": effect.value,
+            }
+        return {"type": effect.__class__.__name__}
 
     # =========================================================================
     # Serialization

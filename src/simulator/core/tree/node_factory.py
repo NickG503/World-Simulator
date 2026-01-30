@@ -74,6 +74,7 @@ def create_root_node(
     return TreeNode(
         id=tree.generate_node_id(),  # state0
         snapshot=snapshot,
+        node_type="root",
         action_name=None,  # Root has no action
     )
 
@@ -181,3 +182,81 @@ def compute_narrowing_change(
             ]
 
     return []
+
+
+def create_constraint_node(
+    tree: SimulationTree,
+    parent_node: TreeNode,
+    snapshot: WorldSnapshot,
+    constraint_name: Optional[str],
+    branch_type: str,  # "if" or "else"
+    condition_attribute: str,
+    condition_values: List[str],
+    has_active_trends: bool,
+    changes: List[ChangeDict],
+    layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+) -> TreeNode:
+    """Create a constraint node (blue node in visualization).
+
+    Constraint nodes are created after action nodes to enforce
+    branching constraints that define atomic valid states.
+    """
+    if layer_state_cache is None:
+        layer_state_cache = {}
+
+    # Compute changes from parent
+    full_changes = compute_snapshot_diff(parent_node.snapshot, snapshot, changes)
+
+    # Create branch condition for constraint
+    branch_condition = None
+    if branch_type == "placeholder":
+        # Placeholder nodes always get a branch_condition to mark them
+        branch_condition = BranchCondition(
+            attribute="",
+            operator="",
+            value="",
+            source="postcondition",
+            branch_type="placeholder",
+        )
+    elif condition_attribute and condition_values:
+        branch_condition = BranchCondition(
+            attribute=condition_attribute,
+            operator="equals",
+            value=condition_values[0] if len(condition_values) == 1 else condition_values,
+            source="postcondition",  # Using postcondition for constraint visualization
+            branch_type=branch_type,
+        )
+
+    # Check for duplicate state in cache
+    state_hash = snapshot.state_hash()
+    if state_hash in layer_state_cache:
+        existing_node, _ = layer_state_cache[state_hash]
+        # Merge: add incoming edge to existing node
+        edge = IncomingEdge(
+            parent_id=parent_node.id,
+            action_name=constraint_name or "constraint",
+            action_parameters={},
+            action_status="ok",
+            action_error=None,
+            branch_condition=branch_condition,
+            changes=full_changes,
+        )
+        tree.add_edge_to_existing_node(existing_node.id, parent_node.id, edge)
+        return existing_node
+
+    # Create new constraint node
+    node = TreeNode(
+        id=tree.generate_node_id(),
+        snapshot=snapshot,
+        node_type="constraint",
+        constraint_name=constraint_name,
+        has_active_trends=has_active_trends,
+        parent_ids=[parent_node.id],
+        action_name=constraint_name or "constraint",
+        action_parameters={},
+        action_status="ok",
+        branch_condition=branch_condition,
+        changes=full_changes,
+    )
+    layer_state_cache[state_hash] = (node, None)
+    return node

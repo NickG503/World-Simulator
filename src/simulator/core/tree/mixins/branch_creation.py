@@ -15,6 +15,8 @@ from simulator.core.tree.utils.branch_condition_helpers import (
     create_compound_branch_condition,
     create_simple_branch_condition,
 )
+from simulator.core.tree.utils.change_helpers import build_changes_list
+from simulator.core.tree.utils.instance_helpers import clone_instance_with_values
 
 if TYPE_CHECKING:
     from simulator.core.actions.action import Action
@@ -40,10 +42,10 @@ class BranchCreationMixin:
         if layer_state_cache is None:
             layer_state_cache = {}
 
-        modified_instance = self._clone_instance_with_values(instance, attr_path, values)
+        modified_instance = clone_instance_with_values(instance, attr_path, values)
 
         result = self.engine.apply_action(modified_instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
         changes = narrowing + changes
@@ -139,7 +141,7 @@ class BranchCreationMixin:
                 AttributePath.parse(attr_path).set_value_in_instance(modified_instance, values[0])
 
         result = self.engine.apply_action(modified_instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         for attr_path, values in attr_constraints.items():
             narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
@@ -274,10 +276,10 @@ class BranchCreationMixin:
             layer_state_cache = {}
 
         values = value if isinstance(value, list) else [value]
-        modified_instance = self._clone_instance_with_values(instance, attr_path, values)
+        modified_instance = clone_instance_with_values(instance, attr_path, values)
 
         result = self.engine.apply_action(modified_instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)
         changes = narrowing + changes
@@ -305,14 +307,3 @@ class BranchCreationMixin:
             result_instance=result.after if result.after else modified_instance,
             layer_state_cache=layer_state_cache,
         )
-
-    def _clone_instance_with_values(
-        self, instance: "ObjectInstance", attr_path: str, values: List[str]
-    ) -> "ObjectInstance":
-        """Clone an instance and constrain an attribute to specific value(s)."""
-        new_instance = instance.deep_copy()
-        if values:
-            # Set all values, not just the first one
-            value_to_set = values[0] if len(values) == 1 else values
-            AttributePath.parse(attr_path).set_value_in_instance(new_instance, value_to_set)
-        return new_instance

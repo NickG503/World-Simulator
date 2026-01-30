@@ -23,6 +23,7 @@ from simulator.core.tree.utils.branch_condition_helpers import (
     create_simple_branch_condition,
     merge_branch_conditions,
 )
+from simulator.core.tree.utils.change_helpers import build_changes_list
 from simulator.core.tree.utils.condition_evaluation import evaluate_condition_for_value
 from simulator.core.tree.utils.value_helpers import (
     get_fail_constraints_for_or,
@@ -216,7 +217,7 @@ class PostconditionBranchingMixin:
         action_result = self.engine.apply_action(new_instance, action, parameters)
         raw_changes = action_result.changes if action_result else []
 
-        changes = self._build_changes_list(raw_changes)
+        changes = build_changes_list(raw_changes)
 
         narrowing = compute_narrowing_change(parent_node.snapshot, precond_attr, precond_values)
         if precond_attr != postcond_attr:
@@ -376,7 +377,7 @@ class PostconditionBranchingMixin:
 
         # Apply action
         result = self.engine.apply_action(modified_instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         # Add narrowing changes
         for attr_path, values in precond_constraints.items():
@@ -443,7 +444,7 @@ class PostconditionBranchingMixin:
 
         # Apply action
         result = self.engine.apply_action(modified_instance, action, parameters)
-        changes = self._build_changes_list(result.changes)
+        changes = build_changes_list(result.changes)
 
         # Add narrowing changes
         for attr_path, values in precond_constraints.items():
@@ -605,7 +606,7 @@ class PostconditionBranchingMixin:
             AttributePath.parse(postcond_attr).set_value_in_instance(modified_instance, postcond_values[0])
 
             result = self.engine.apply_action(modified_instance, action, parameters)
-            changes = self._build_changes_list(result.changes)
+            changes = build_changes_list(result.changes)
 
             for attr_path, values in precond_constraints.items():
                 narrowing = compute_narrowing_change(parent_node.snapshot, attr_path, values)

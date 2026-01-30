@@ -2,19 +2,13 @@ from __future__ import annotations
 
 import glob
 import os
-from typing import Any, Dict
 
-import yaml
 from pydantic import ValidationError
 
 from simulator.core.attributes.file_spec import QualitativeSpaceFileSpec
 from simulator.core.registries.registry_manager import RegistryManager
+from simulator.io.loaders.common import read_yaml
 from simulator.io.loaders.errors import LoaderError
-
-
-def _read_yaml_file(path: str) -> Dict[str, Any]:
-    with open(path, "r", encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
 
 
 def load_spaces(path: str, registries: RegistryManager) -> None:
@@ -30,7 +24,7 @@ def load_spaces(path: str, registries: RegistryManager) -> None:
         return
     files = sorted(glob.glob(os.path.join(path, "**", "*.yaml"), recursive=True))
     for fp in files:
-        data = _read_yaml_file(fp)
+        data = read_yaml(fp)
         try:
             spec = QualitativeSpaceFileSpec.model_validate(data)
         except ValidationError as exc:

@@ -27,6 +27,14 @@ class NodeStatus(str, Enum):
     ERROR = "error"  # Action not found or other error
 
 
+class NodeType(str, Enum):
+    """Type of node in the simulation tree."""
+
+    ROOT = "root"  # Initial state node
+    ACTION = "action"  # Result of an action execution
+    CONSTRAINT = "constraint"  # Result of branching constraint application
+
+
 class WorldSnapshot(BaseModel):
     """
     Immutable state of the world at a point in time.
@@ -207,8 +215,8 @@ class BranchCondition(BaseModel):
     value: Union[str, List[str]]  # Single value OR set of values (for else branch)
     source: Literal["precondition", "postcondition"]
 
-    # For postcondition branches with if/elif/else
-    branch_type: Literal["if", "elif", "else", "success", "fail"] = "if"
+    # For postcondition branches with if/elif/else, or placeholder for alignment
+    branch_type: Literal["if", "elif", "else", "success", "fail", "placeholder"] = "if"
 
     # For compound conditions (AND/OR)
     compound_type: Optional[Literal["and", "or"]] = None
@@ -315,6 +323,20 @@ class TreeNode(BaseModel):
     id: str  # Sequential ID: state0, state1, etc.
     snapshot: WorldSnapshot
 
+    # Node type: root, action, or constraint
+    node_type: str = "action"  # "root", "action", or "constraint"
+
+    # For constraint nodes: optional name and whether any attributes have active trends
+    constraint_name: Optional[str] = None
+    has_active_trends: bool = False  # True if any attribute has trend != "none"
+
+    # For action nodes: True if constraints were applied directly (no Time branch)
+    constraints_applied: bool = False
+
+    # Layer in action sequence (for visualization alignment)
+    # Layer 0 = root, odd layers = actions, even layers = Time branches
+    layer: int = 0
+
     # DAG support: multiple parents possible
     parent_ids: List[str] = Field(default_factory=list)
     children_ids: List[str] = Field(default_factory=list)
@@ -338,7 +360,12 @@ class TreeNode(BaseModel):
     @property
     def is_root(self) -> bool:
         """Check if this is the root node (initial state)."""
-        return len(self.parent_ids) == 0
+        return len(self.parent_ids) == 0 or self.node_type == "root"
+
+    @property
+    def is_constraint_node(self) -> bool:
+        """Check if this is a constraint node (blue in visualization)."""
+        return self.node_type == "constraint"
 
     @property
     def parent_id(self) -> Optional[str]:
@@ -374,6 +401,13 @@ class TreeNode(BaseModel):
         """Human-readable description of this node."""
         if self.is_root:
             return f"[{self.id}] Initial State"
+
+        if self.is_constraint_node:
+            constraint_desc = self.constraint_name or "Constraint"
+            time_suffix = " (Time)" if self.has_active_trends else ""
+            if self.branch_condition:
+                return f"[{self.id}] {constraint_desc}{time_suffix} | {self.branch_condition.describe()}"
+            return f"[{self.id}] {constraint_desc}{time_suffix}"
 
         action_desc = self.action_name or "unknown"
         if self.action_status != "ok":
@@ -415,6 +449,9 @@ class SimulationTree(BaseModel):
 
     # Action definitions for visualization (preconditions/postconditions)
     action_definitions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
+    # Constraint definitions for visualization
+    constraint_definitions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
     # Tree structure
     root_id: Optional[str] = None
@@ -659,6 +696,10 @@ class SimulationTree(BaseModel):
         if self.action_definitions:
             result["action_definitions"] = self.action_definitions
 
+        # Include constraint definitions if present
+        if self.constraint_definitions:
+            result["constraint_definitions"] = self.constraint_definitions
+
         return result
 
     def count_merged_nodes(self) -> int:
@@ -674,6 +715,7 @@ __all__ = [
     "BranchCondition",
     "IncomingEdge",
     "NodeStatus",
+    "NodeType",
     "SimulationTree",
     "TreeNode",
     "WorldSnapshot",

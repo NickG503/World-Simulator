@@ -30,17 +30,44 @@ parts:
         default: AA
 
 constraints:
-- type: dependency
-  condition:
-    type: attribute_check
-    target: bulb.state
-    operator: equals
-    value: on
-  requires:
-    type: attribute_check
-    target: battery.level
-    operator: not_equals
-    value: empty
+  # Dependency constraint: bulb can only be on if battery is not empty
+  - type: dependency
+    condition:
+      type: attribute_check
+      target: bulb.state
+      operator: equals
+      value: on
+    requires:
+      type: attribute_check
+      target: battery.level
+      operator: not_equals
+      value: empty
+
+  # Branching constraint: defines atomic states based on battery level
+  # IF battery is empty: bulb must be off and brightness must be none
+  # ELSE (battery not empty): bulb can't be off and brightness can't be none
+  - type: branching_constraint
+    condition:
+      type: attribute_check
+      target: battery.level
+      operator: equals
+      value: empty
+    effects:
+      - type: set_attribute
+        target: bulb.brightness
+        value: none
+      - type: set_attribute
+        target: bulb.state
+        value: off
+    else_effects:
+      # Exclude "off" from bulb.state when battery is not empty
+      - type: set_attribute
+        target: bulb.state
+        value: "!off"
+      # Exclude "none" from brightness when battery is not empty
+      - type: set_attribute
+        target: bulb.brightness
+        value: "!none"
 
 behaviors:
   # Turn on: All consumables trend down when in use

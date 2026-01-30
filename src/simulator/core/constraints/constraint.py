@@ -58,6 +58,66 @@ class DependencyConstraint(Constraint):
         return f"If {_cond_to_text(self.condition)}, then {_cond_to_text(self.requires)}"
 
 
+class BranchingConstraint(Constraint):
+    """Constraint that creates branches based on atomic state conditions.
+
+    When the condition attribute is a value set, this constraint creates
+    separate branches for matching (IF) and non-matching (ELSE) values.
+    Effects are applied to IF branch, else_effects are applied to ELSE branch.
+    """
+
+    type: str = "branching_constraint"
+    name: str | None = None  # Optional name for visualization
+    condition: Condition  # IF condition (typically AttributeCondition)
+    effects: List[Any]  # List of Effect objects to apply when condition is true (IF)
+    else_effects: List[Any] = []  # List of Effect objects to apply when condition is false (ELSE)
+
+    model_config = {"arbitrary_types_allowed": True}
+
+    def evaluate(self, instance: ObjectInstance, registries=None) -> bool:
+        """Branching constraints don't evaluate as pass/fail - they create branches."""
+        # This constraint type creates branches rather than returning pass/fail
+        # The actual branching logic is handled in constraint_branching.py
+        return True
+
+    def describe(self) -> str:
+        def _cond_to_text(c: Condition) -> str:
+            from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+            from simulator.utils.error_formatting import get_operator_symbol
+
+            if isinstance(c, AttributeCondition):
+                op = get_operator_symbol(c.operator)
+                return f"{c.target.to_string()} {op} {c.value}"
+            return c.__class__.__name__
+
+        name_part = f"[{self.name}] " if self.name else ""
+        return f"{name_part}If {_cond_to_text(self.condition)}, apply {len(self.effects)} effects"
+
+    def get_condition_attribute(self) -> str | None:
+        """Get the attribute path from the condition."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+
+        if isinstance(self.condition, AttributeCondition):
+            return self.condition.target.to_string()
+        return None
+
+    def get_condition_value(self) -> Any:
+        """Get the expected value from the condition."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+
+        if isinstance(self.condition, AttributeCondition):
+            return self.condition.value
+        return None
+
+    def get_condition_operator(self) -> str | None:
+        """Get the operator from the condition."""
+        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
+
+        if isinstance(self.condition, AttributeCondition):
+            return self.condition.operator
+        return None
+
+
 class ConstraintViolation(BaseModel):
     """Represents a constraint violation."""
 
@@ -73,7 +133,10 @@ class ConstraintEngine:
     """Engine for evaluating constraints on object instances."""
 
     def __init__(self):
-        self.constraint_factories = {"dependency": DependencyConstraint}
+        self.constraint_factories = {
+            "dependency": DependencyConstraint,
+            "branching_constraint": BranchingConstraint,
+        }
 
     def create_constraint(self, constraint_data: Dict[str, Any]) -> Constraint:
         """Create a constraint from YAML data."""
@@ -86,6 +149,10 @@ class ConstraintEngine:
         if constraint_type == "dependency":
             data["condition"] = build_condition_from_raw(data.get("condition"))
             data["requires"] = build_condition_from_raw(data.get("requires"))
+        elif constraint_type == "branching_constraint":
+            data["condition"] = build_condition_from_raw(data.get("condition"))
+            # Effects are handled separately during branching
+            data["effects"] = data.get("effects", [])
         factory = self.constraint_factories[constraint_type]
         return factory(**data)
 

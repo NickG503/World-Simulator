@@ -93,6 +93,13 @@ class ObjectFileSpec(BaseModel):
         compiled_constraints = []
         for spec in self.constraints:
             extras = dict(spec.model_extra or {})  # type: ignore[attr-defined]
+            # Include explicit fields for branching constraints
+            if hasattr(spec, "name") and spec.name is not None:  # type: ignore[attr-defined]
+                extras["name"] = spec.name  # type: ignore[attr-defined]
+            if hasattr(spec, "effects"):
+                extras["effects"] = spec.effects  # type: ignore[attr-defined]
+            if hasattr(spec, "else_effects"):
+                extras["else_effects"] = spec.else_effects  # type: ignore[attr-defined]
             constraint = ObjectConstraint(
                 type=spec.type,
                 condition=getattr(spec, "condition", None),
@@ -117,7 +124,7 @@ class ObjectFileSpec(BaseModel):
 
     @staticmethod
     def _compile_constraint(constraint: ObjectConstraint):
-        from simulator.core.constraints.constraint import DependencyConstraint
+        from simulator.core.constraints.constraint import BranchingConstraint, DependencyConstraint
 
         if constraint.type == "dependency":
             if constraint.condition is None or constraint.requires is None:
@@ -125,6 +132,24 @@ class ObjectFileSpec(BaseModel):
             condition = build_condition(constraint.condition)
             requires = build_condition(constraint.requires)
             return DependencyConstraint(condition=condition, requires=requires)
+        elif constraint.type == "branching_constraint":
+            if constraint.condition is None:
+                raise ValueError("branching_constraint requires 'condition'")
+            condition = build_condition(constraint.condition)
+            # Get effects from model_extra (since it's not a standard field)
+            raw_effects = getattr(constraint, "effects", None)
+            if raw_effects is None:
+                raw_effects = constraint.model_extra.get("effects", []) if constraint.model_extra else []
+            effects = [build_effect(parse_effect_spec(e)) for e in raw_effects]
+            # Get else_effects
+            raw_else_effects = getattr(constraint, "else_effects", None)
+            if raw_else_effects is None:
+                raw_else_effects = constraint.model_extra.get("else_effects", []) if constraint.model_extra else []
+            else_effects = [build_effect(parse_effect_spec(e)) for e in raw_else_effects]
+            name = getattr(constraint, "name", None)
+            if name is None and constraint.model_extra:
+                name = constraint.model_extra.get("name")
+            return BranchingConstraint(condition=condition, effects=effects, else_effects=else_effects, name=name)
         raise ValueError(f"Unsupported constraint type: {constraint.type}")
 
 

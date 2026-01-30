@@ -973,20 +973,15 @@ class TestListValueHandling:
     """
 
     def test_clone_instance_preserves_all_values(self, registry_manager):
-        """_clone_instance_with_values should set all values, not just first."""
-        from simulator.core.tree.mixins.branch_creation import BranchCreationMixin
+        """clone_instance_with_values should set all values, not just first."""
+        from simulator.core.tree.utils.instance_helpers import clone_instance_with_values
         from simulator.io.loaders.object_loader import instantiate_default
 
         obj_type = registry_manager.objects.get("dice_cartesian")
         instance = instantiate_default(obj_type, registry_manager)
 
-        # Create a minimal mixin instance to test the method
-        class TestMixin(BranchCreationMixin):
-            pass
-
-        mixin = TestMixin()
         values = ["4", "5", "6"]
-        cloned = mixin._clone_instance_with_values(instance, "cube.face", values)
+        cloned = clone_instance_with_values(instance, "cube.face", values)
 
         # Should have all values, not just the first
         cloned_value = cloned.parts["cube"].attributes["face"].current_value

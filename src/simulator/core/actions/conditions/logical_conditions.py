@@ -25,7 +25,41 @@ if TYPE_CHECKING:
     from simulator.core.engine.context import EvaluationContext
 
 
-class OrCondition(Condition):
+class CompoundConditionMixin:
+    """Mixin providing shared methods for compound conditions (AND/OR)."""
+
+    conditions: List[Condition]  # Defined in subclasses
+
+    def get_checked_attributes(self) -> List[str]:
+        """Get all attribute paths checked by this compound condition."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        attrs: List[str] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                attrs.append(cond.target.to_string())
+            elif hasattr(cond, "get_checked_attributes"):
+                attrs.extend(cond.get_checked_attributes())
+        return attrs
+
+    def get_attribute_conditions(self) -> List["Condition"]:
+        """Get all sub-conditions that check attributes."""
+        from simulator.core.actions.conditions.attribute_conditions import (
+            AttributeCondition,
+        )
+
+        result: List[Condition] = []
+        for cond in self.conditions:
+            if isinstance(cond, AttributeCondition):
+                result.append(cond)
+            elif hasattr(cond, "get_attribute_conditions"):
+                result.extend(cond.get_attribute_conditions())
+        return result
+
+
+class OrCondition(CompoundConditionMixin, Condition):
     """
     Disjunction: condition passes if ANY sub-condition passes.
 
@@ -52,36 +86,8 @@ class OrCondition(Condition):
         parts = [c.describe() for c in self.conditions]
         return "(" + " OR ".join(parts) + ")"
 
-    def get_checked_attributes(self) -> List[str]:
-        """Get all attribute paths checked by this compound condition."""
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
 
-        attrs: List[str] = []
-        for cond in self.conditions:
-            if isinstance(cond, AttributeCondition):
-                attrs.append(cond.target.to_string())
-            elif hasattr(cond, "get_checked_attributes"):
-                attrs.extend(cond.get_checked_attributes())
-        return attrs
-
-    def get_attribute_conditions(self) -> List["Condition"]:
-        """Get all sub-conditions that check attributes."""
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
-
-        result: List[Condition] = []
-        for cond in self.conditions:
-            if isinstance(cond, AttributeCondition):
-                result.append(cond)
-            elif hasattr(cond, "get_attribute_conditions"):
-                result.extend(cond.get_attribute_conditions())
-        return result
-
-
-class AndCondition(Condition):
+class AndCondition(CompoundConditionMixin, Condition):
     """
     Conjunction: condition passes if ALL sub-conditions pass.
 
@@ -108,34 +114,6 @@ class AndCondition(Condition):
         parts = [c.describe() for c in self.conditions]
         return "(" + " AND ".join(parts) + ")"
 
-    def get_checked_attributes(self) -> List[str]:
-        """Get all attribute paths checked by this compound condition."""
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
-
-        attrs: List[str] = []
-        for cond in self.conditions:
-            if isinstance(cond, AttributeCondition):
-                attrs.append(cond.target.to_string())
-            elif hasattr(cond, "get_checked_attributes"):
-                attrs.extend(cond.get_checked_attributes())
-        return attrs
-
-    def get_attribute_conditions(self) -> List["Condition"]:
-        """Get all sub-conditions that check attributes."""
-        from simulator.core.actions.conditions.attribute_conditions import (
-            AttributeCondition,
-        )
-
-        result: List[Condition] = []
-        for cond in self.conditions:
-            if isinstance(cond, AttributeCondition):
-                result.append(cond)
-            elif hasattr(cond, "get_attribute_conditions"):
-                result.extend(cond.get_attribute_conditions())
-        return result
-
 
 # Rebuild models to handle forward references
 def _rebuild_models():
@@ -145,4 +123,4 @@ def _rebuild_models():
 
 _rebuild_models()
 
-__all__ = ["OrCondition", "AndCondition"]
+__all__ = ["CompoundConditionMixin", "OrCondition", "AndCondition"]
