@@ -1,19 +1,13 @@
 # Dice object definition
-# Demonstrates branching with DIFFERENT attributes in precondition vs postcondition
+# ARCHITECTURE: Behaviors set direct effects only, Solver derives prize.level
 #
 # Scenario:
 # - Precondition: face in {3, 5, 6} (face={1,2,4} FAILS, face={3,5,6} SUCCEEDS)
-# - Postcondition: checks COLOR (different attribute!)
-#     if color == green → small prize
-#     elif color == red → medium prize
-#     else (yellow, black, white) → big prize (grouped as value set)
+# - Action effect: Sets prize.result = win (direct effect)
+# - Solver: Derives prize.level based on cube.color
 #
 # When face=unknown AND color=unknown:
-# Creates 4 branches:
-#   1. SUCCESS + color=green: face={3,5,6}, color=green → small
-#   2. SUCCESS + color=red: face={3,5,6}, color=red → medium
-#   3. SUCCESS + color=else: face={3,5,6}, color={yellow,black,white} → big
-#   4. FAIL: face={1,2,4} (precondition failed - NOT in {3,5,6})
+# Creates branches through solver rules based on color.
 
 type: dice
 parts:
@@ -38,55 +32,85 @@ parts:
         default: none
         mutable: true
 
+# =============================================================================
+# SOLVER: Derives prize.level from cube.color (when result is win)
+# =============================================================================
+solver:
+  # Rule 1: Prize level depends on color (only when result is win)
+  - name: prize_level_from_color
+    priority: 10
+    description: "Prize level derived from cube color when result is win"
+    precondition:
+      type: attribute_check
+      target: prize.result
+      operator: equals
+      value: win
+    cases:
+      - condition:
+          type: attribute_check
+          target: cube.color
+          operator: equals
+          value: green
+        implies:
+          - type: set_attribute
+            target: prize.level
+            value: small
+      - condition:
+          type: attribute_check
+          target: cube.color
+          operator: equals
+          value: red
+        implies:
+          - type: set_attribute
+            target: prize.level
+            value: medium
+      - condition:
+          type: attribute_check
+          target: cube.color
+          operator: in
+          value: ["yellow", "black", "white"]
+        implies:
+          - type: set_attribute
+            target: prize.level
+            value: big
+    otherwise:
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+  # Rule 2: No prize level when result is not win
+  - name: no_prize_when_no_win
+    priority: 20
+    description: "Prize level is none when result is not win"
+    condition:
+      type: attribute_check
+      target: prize.result
+      operator: not_equals
+      value: win
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles prize.level
+# =============================================================================
 behaviors:
-  # Check win - DIFFERENT attributes (face for precond, color for postcond)
+  # Check win - ONLY sets prize.result, solver handles prize.level
   check_win:
     # Precondition: face must be IN {3, 5, 6} to succeed
-    # face={1, 2, 4} will FAIL
     preconditions:
       - type: attribute_check
         target: cube.face
         operator: in
         value: ["3", "5", "6"]
     effects:
-      # Set result to win
+      # ONLY the direct effect: mark as win
+      # prize.level is derived by solver based on color
       - type: set_attribute
         target: prize.result
         value: win
-      # Postcondition branches on COLOR
-      # IF color == green -> small prize
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.color
-          operator: equals
-          value: green
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: small
-      # ELIF color == red -> medium prize
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.color
-          operator: equals
-          value: red
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: medium
-      # ELSE color in {yellow, black, white} -> big prize (grouped as value set)
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.color
-          operator: in
-          value: ["yellow", "black", "white"]
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: big
 
   # Reset the dice
   reset:
@@ -99,6 +123,4 @@ behaviors:
       - type: set_attribute
         target: prize.result
         value: none
-      - type: set_attribute
-        target: prize.level
-        value: none
+      # prize.level is derived by solver (will be set to none)

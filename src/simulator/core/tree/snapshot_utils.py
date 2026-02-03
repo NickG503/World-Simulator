@@ -95,11 +95,15 @@ def compute_value_with_trend(
     parent_snapshot: Optional[WorldSnapshot] = None,
 ) -> Union[str, List[str]]:
     """
-    Compute the value for an attribute, considering its trend and parent value set.
+    Compute the value for an attribute, preserving parent value sets when appropriate.
 
-    - If the attribute has an active trend (up/down), returns a value set
-    - If parent had a value set and this action didn't set a new concrete value,
-      preserve the value set
+    IMPORTANT: This function does NOT expand trends to value sets. Trend expansion
+    should ONLY happen in the dedicated TIME step (_expand_trends_to_value_sets
+    in constraint_branching.py). This prevents undoing the work of branching
+    constraints that narrow values to specific singles.
+
+    - If current value is already a list, return it as-is
+    - If parent had a value set and this action didn't change the value, preserve it
     - Otherwise returns the single current value
 
     Args:
@@ -112,33 +116,13 @@ def compute_value_with_trend(
         Single value or list of possible values
     """
     current_value = attr_instance.current_value
-    trend = attr_instance.trend
-    space_id = attr_instance.spec.space_id
 
-    # If there's an active trend, compute value set
-    if trend and trend != "none" and current_value != "unknown":
-        if space_id:
-            # Handle when current_value is already a list (from branching)
-            if isinstance(current_value, list):
-                # Compute trend-based set for each value and union them
-                all_values: set = set()
-                for val in current_value:
-                    val_set = compute_value_set_from_trend(val, trend, space_id, registry_manager)
-                    all_values.update(val_set)
-                # Preserve order from space levels
-                space = registry_manager.spaces.get(space_id)
-                if space:
-                    ordered = [v for v in space.levels if v in all_values]
-                    if len(ordered) > 1:
-                        return ordered
-                    elif ordered:
-                        return ordered[0]
-            else:
-                value_set = compute_value_set_from_trend(current_value, trend, space_id, registry_manager)
-                if len(value_set) > 1:
-                    return value_set
+    # If value is already a list (from branching), return it as-is
+    if isinstance(current_value, list):
+        return current_value
 
     # If parent had a value set, only preserve it if NO explicit value was set
+    # (i.e., the action didn't change this attribute)
     if parent_snapshot:
         parent_value = parent_snapshot.get_attribute_value(attr_path)
         if isinstance(parent_value, list) and len(parent_value) > 1:
@@ -267,38 +251,19 @@ def capture_snapshot_with_values(
         has_trend = attr.trend and attr.trend != "none"
 
         # If current value is a set, narrow it to the constraint
+        # NOTE: Do NOT re-expand trends here for value sets! They were already expanded
+        # during the TIME step. Re-expanding would undo the narrowing from branching constraints.
         if isinstance(current_value, list):
-            # Intersect with constraints
+            # Intersect with constraints - no trend re-expansion
             intersection = [v for v in current_value if v in values]
             if intersection:
-                narrowed = intersection[0] if len(intersection) == 1 else intersection
+                attr.value = intersection[0] if len(intersection) == 1 else intersection
             else:
                 # No intersection, use constraint values
-                narrowed = values[0] if len(values) == 1 else values
-
-            # If there's an active trend, re-expand from the narrowed value
-            if has_trend and attr.space_id:
-                if isinstance(narrowed, list):
-                    # Multiple values - expand each with trend and union
-                    all_expanded: set = set()
-                    for val in narrowed:
-                        expanded = compute_value_set_from_trend(val, attr.trend, attr.space_id, registry_manager)
-                        all_expanded.update(expanded)
-                    # Preserve order from space
-                    space = registry_manager.spaces.get(attr.space_id)
-                    if space:
-                        ordered = [v for v in space.levels if v in all_expanded]
-                        attr.value = ordered[0] if len(ordered) == 1 else ordered
-                    else:
-                        attr.value = narrowed
-                else:
-                    # Single value - expand with trend
-                    expanded = compute_value_set_from_trend(narrowed, attr.trend, attr.space_id, registry_manager)
-                    attr.value = expanded[0] if len(expanded) == 1 else expanded
-            else:
-                attr.value = narrowed
+                attr.value = values[0] if len(values) == 1 else values
         elif current_value == "unknown":
-            # Unknown value -> apply constraints, then expand with trend
+            # Unknown value -> apply constraints, then expand with trend if active
+            # This is the initial branching case where we need trend expansion
             narrowed = values[0] if len(values) == 1 else values
             if has_trend and attr.space_id and isinstance(narrowed, str):
                 expanded = compute_value_set_from_trend(narrowed, attr.trend, attr.space_id, registry_manager)

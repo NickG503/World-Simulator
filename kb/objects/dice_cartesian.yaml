@@ -1,30 +1,10 @@
-# Dice Cartesian - Demonstrates Cartesian product of precondition OR with postcondition OR
+# Dice Cartesian - Demonstrates Cartesian product of precondition OR
+# ARCHITECTURE: Behaviors set direct effects only, Solver derives prize.level
 #
 # Scenario:
-# - Precondition: (face == 6) OR (color == red) → attributes A, B
-#   - Success A: face=6
-#   - Success B: color=red
-#   - Fail: face≠6 AND color≠red
-#
-# - Postcondition: IF (size == large) OR (weight == heavy) ELSE → attributes C, D (UNRELATED to A, B)
-#   - IF C: size=large → jackpot
-#   - IF D: weight=heavy → jackpot
-#   - ELSE: size≠large AND weight≠heavy → small
-#
-# When face=unknown AND color=unknown AND size=unknown AND weight=unknown:
-# Cartesian product creates:
-#   Precondition Success A (face=6):
-#     1. size=large, weight=unknown → jackpot (C satisfies)
-#     2. size≠large, weight=heavy → jackpot (D satisfies)
-#     3. size≠large, weight≠heavy → small (ELSE)
-#   Precondition Success B (color=red):
-#     4. size=large, weight=unknown → jackpot (C satisfies)
-#     5. size≠large, weight=heavy → jackpot (D satisfies)
-#     6. size≠large, weight≠heavy → small (ELSE)
-#   Precondition Fail:
-#     7. face≠6 AND color≠red → rejected
-#
-# Total: 6 success + 1 fail = 7 branches
+# - Precondition: (face == 6) OR (color == red)
+# - Action effect: Sets prize.result = win (direct effect)
+# - Solver: Derives prize.level based on cube.size and cube.weight
 
 type: dice_cartesian
 parts:
@@ -57,10 +37,82 @@ parts:
         default: none
         mutable: true
 
+# =============================================================================
+# SOLVER: Derives prize.level from cube.size and cube.weight (when result is win)
+# =============================================================================
+solver:
+  # Rule 1: Jackpot when size=large or weight=heavy
+  - name: prize_jackpot
+    priority: 10
+    description: "Jackpot when size is large or weight is heavy"
+    precondition:
+      type: attribute_check
+      target: prize.result
+      operator: equals
+      value: win
+    condition:
+      type: or
+      conditions:
+        - type: attribute_check
+          target: cube.size
+          operator: equals
+          value: large
+        - type: attribute_check
+          target: cube.weight
+          operator: equals
+          value: heavy
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: jackpot
+
+  # Rule 2: Small prize when size not large and weight not heavy
+  - name: prize_small
+    priority: 20
+    description: "Small prize when size is not large and weight is not heavy"
+    precondition:
+      type: attribute_check
+      target: prize.result
+      operator: equals
+      value: win
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: cube.size
+          operator: in
+          value: ["small", "medium"]
+        - type: attribute_check
+          target: cube.weight
+          operator: equals
+          value: light
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: small
+
+  # Rule 3: No prize level when result is not win
+  - name: no_prize_when_no_win
+    priority: 30
+    description: "Prize level is none when result is not win"
+    condition:
+      type: attribute_check
+      target: prize.result
+      operator: not_equals
+      value: win
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles prize.level
+# =============================================================================
 behaviors:
-  # Check win - OR precondition with OR postcondition on UNRELATED attributes
+  # Check win - ONLY sets prize.result, solver handles prize.level
   check_cartesian:
-    # Precondition: face==6 OR color==red (A OR B)
+    # Precondition: face==6 OR color==red
     preconditions:
       - type: or
         conditions:
@@ -73,46 +125,12 @@ behaviors:
             operator: equals
             value: red
     effects:
-      # Set result to win (always on success)
+      # ONLY the direct effect: mark as win
       - type: set_attribute
         target: prize.result
         value: win
-      # Postcondition: IF (size==large OR weight==heavy) THEN jackpot ELSE small
-      - type: conditional
-        condition:
-          type: or
-          conditions:
-            - type: attribute_check
-              target: cube.size
-              operator: equals
-              value: large
-            - type: attribute_check
-              target: cube.weight
-              operator: equals
-              value: heavy
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: jackpot
-      # ELSE: size≠large AND weight≠heavy
-      - type: conditional
-        condition:
-          type: and
-          conditions:
-            - type: attribute_check
-              target: cube.size
-              operator: in
-              value: ["small", "medium"]
-            - type: attribute_check
-              target: cube.weight
-              operator: equals
-              value: light
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: small
 
-  # Example with nested IF / ELSE structure
+  # Check with else - ONLY sets prize.result
   check_with_else:
     preconditions:
       - type: attribute_check
@@ -123,41 +141,10 @@ behaviors:
       - type: set_attribute
         target: prize.result
         value: win
-      # IF size == large → jackpot
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.size
-          operator: equals
-          value: large
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: jackpot
-        else:
-          # ELSE: not large - check if medium
-          - type: conditional
-            condition:
-              type: attribute_check
-              target: cube.size
-              operator: equals
-              value: medium
-            then:
-              - type: set_attribute
-                target: prize.level
-                value: medium
-            else:
-              # ELSE: not large and not medium → must be small
-              - type: set_attribute
-                target: prize.level
-                value: small
 
   # Reset the dice
   reset:
     effects:
       - type: set_attribute
         target: prize.result
-        value: none
-      - type: set_attribute
-        target: prize.level
         value: none

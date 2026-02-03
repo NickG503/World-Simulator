@@ -61,6 +61,7 @@ def create_or_merge_node(
         action_error=error,
         branch_condition=branch_condition,
         changes=full_changes,
+        has_active_trends=compute_has_active_trends(snapshot),
     )
     layer_state_cache[state_hash] = (node, result_instance)
     return node
@@ -97,6 +98,15 @@ def create_error_node(
         action_status=NodeStatus.ERROR.value,
         action_error=error,
     )
+
+
+def compute_has_active_trends(snapshot: WorldSnapshot) -> bool:
+    """Check if any attribute in the snapshot has an active trend (not 'none')."""
+    for attr_path in snapshot.get_all_attribute_paths():
+        attr_snapshot = snapshot._get_attribute_snapshot(attr_path)
+        if attr_snapshot and attr_snapshot.trend and attr_snapshot.trend != "none":
+            return True
+    return False
 
 
 def compute_snapshot_diff(
@@ -253,6 +263,141 @@ def create_constraint_node(
         has_active_trends=has_active_trends,
         parent_ids=[parent_node.id],
         action_name=constraint_name or "constraint",
+        action_parameters={},
+        action_status="ok",
+        branch_condition=branch_condition,
+        changes=full_changes,
+    )
+    layer_state_cache[state_hash] = (node, None)
+    return node
+
+
+def create_solver_node(
+    tree: SimulationTree,
+    parent_node: TreeNode,
+    snapshot: WorldSnapshot,
+    rule_name: Optional[str],
+    branch_type: str,  # "if", "elif", "else"
+    condition_attribute: str,
+    condition_values: List[str],
+    changes: List[ChangeDict],
+    layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+) -> TreeNode:
+    """Create a solver node (purple node in visualization).
+
+    Solver nodes are created after action nodes to apply world rules
+    that derive state from other state (e.g., bulb state from switch + battery).
+    """
+    if layer_state_cache is None:
+        layer_state_cache = {}
+
+    # Compute changes from parent
+    full_changes = compute_snapshot_diff(parent_node.snapshot, snapshot, changes)
+
+    # Create branch condition for solver
+    branch_condition = None
+    if condition_attribute and condition_values:
+        branch_condition = BranchCondition(
+            attribute=condition_attribute,
+            operator="equals",
+            value=condition_values[0] if len(condition_values) == 1 else condition_values,
+            source="postcondition",  # Using postcondition for visualization
+            branch_type=branch_type,
+        )
+
+    # Check for duplicate state in cache
+    state_hash = snapshot.state_hash()
+    if state_hash in layer_state_cache:
+        existing_node, _ = layer_state_cache[state_hash]
+        # Merge: add incoming edge to existing node
+        edge = IncomingEdge(
+            parent_id=parent_node.id,
+            action_name=rule_name or "solver",
+            action_parameters={},
+            action_status="ok",
+            action_error=None,
+            branch_condition=branch_condition,
+            changes=full_changes,
+        )
+        tree.add_edge_to_existing_node(existing_node.id, parent_node.id, edge)
+        return existing_node
+
+    # Create new solver node
+    node = TreeNode(
+        id=tree.generate_node_id(),
+        snapshot=snapshot,
+        node_type="solver",
+        constraint_name=rule_name,  # Reuse for rule name display
+        has_active_trends=compute_has_active_trends(snapshot),
+        parent_ids=[parent_node.id],
+        action_name=rule_name or "solver",
+        action_parameters={},
+        action_status="ok",
+        branch_condition=branch_condition,
+        changes=full_changes,
+    )
+    layer_state_cache[state_hash] = (node, None)
+    return node
+
+
+def create_time_node(
+    tree: SimulationTree,
+    parent_node: TreeNode,
+    snapshot: WorldSnapshot,
+    branch_type: str,  # "if" or "else"
+    condition_attribute: str,
+    condition_values: List[str],
+    has_active_trends: bool,
+    changes: List[ChangeDict],
+    layer_state_cache: Optional[Dict[str, Tuple[TreeNode, ObjectInstance]]] = None,
+) -> TreeNode:
+    """Create a time node (blue node in visualization).
+
+    Time nodes represent the expansion of trends to value sets.
+    They show what happens "over time" when trends are active.
+    """
+    if layer_state_cache is None:
+        layer_state_cache = {}
+
+    # Compute changes from parent
+    full_changes = compute_snapshot_diff(parent_node.snapshot, snapshot, changes)
+
+    # Create branch condition
+    branch_condition = None
+    if condition_attribute and condition_values:
+        branch_condition = BranchCondition(
+            attribute=condition_attribute,
+            operator="equals",
+            value=condition_values[0] if len(condition_values) == 1 else condition_values,
+            source="postcondition",
+            branch_type=branch_type,
+        )
+
+    # Check for duplicate state in cache
+    state_hash = snapshot.state_hash()
+    if state_hash in layer_state_cache:
+        existing_node, _ = layer_state_cache[state_hash]
+        edge = IncomingEdge(
+            parent_id=parent_node.id,
+            action_name="time",
+            action_parameters={},
+            action_status="ok",
+            action_error=None,
+            branch_condition=branch_condition,
+            changes=full_changes,
+        )
+        tree.add_edge_to_existing_node(existing_node.id, parent_node.id, edge)
+        return existing_node
+
+    # Create new time node
+    node = TreeNode(
+        id=tree.generate_node_id(),
+        snapshot=snapshot,
+        node_type="time",
+        constraint_name=None,
+        has_active_trends=has_active_trends,
+        parent_ids=[parent_node.id],
+        action_name="time",
         action_parameters={},
         action_status="ok",
         branch_condition=branch_condition,

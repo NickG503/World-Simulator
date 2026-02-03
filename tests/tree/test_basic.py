@@ -89,15 +89,21 @@ class TestTreeSimulationRunner:
 
         tree = runner.run("flashlight", actions, simulation_id="test_fail")
 
-        # With branching constraints, node count is higher
+        # With the new architecture, the action precondition is just "switch must be off"
+        # The battery check is handled by the solver, which derives bulb.state = off when battery is empty
+        # So we check that when battery is empty, the solver correctly sets bulb off
         assert len(tree.nodes) >= 3
-        # Find the rejected turn_on node
-        rejected_nodes = [
-            n for n in tree.nodes.values() if n.action_name == "turn_on" and n.action_status == "rejected"
-        ]
-        assert len(rejected_nodes) >= 1
-        rejected = rejected_nodes[0]
-        assert rejected.action_error is not None
+
+        # Find nodes where bulb state is off after turn_on action (solver derived)
+        final_nodes = [n for n in tree.nodes.values() if not n.children_ids]
+        # At least one final node should have bulb.state = off (empty battery case)
+        bulb_states = []
+        for node in final_nodes:
+            bulb_state = node.snapshot.get_attribute_value("bulb.state")
+            if bulb_state:
+                bulb_states.append(bulb_state)
+        # With empty battery, bulb should be off
+        assert "off" in bulb_states
 
     def test_changes_recorded(self, registry_manager):
         """Changes are recorded in nodes."""
@@ -106,16 +112,35 @@ class TestTreeSimulationRunner:
 
         tree = runner.run("flashlight", actions)
 
+        # With the new architecture:
+        # - Action node (state1): only direct effects (switch.position, battery trend)
+        # - Solver node (state2+): derived effects (bulb.state, brightness)
         state1 = tree.nodes["state1"]
         assert len(state1.changes) > 0
 
-        # Should have changes for switch.position and bulb.state at minimum
+        # Action node should have switch.position change (direct effect)
         change_attrs = [c["attribute"] for c in state1.changes]
         assert "switch.position" in change_attrs
-        assert "bulb.state" in change_attrs
+
+        # Solver nodes should have bulb.state change (derived effect)
+        solver_nodes = [n for n in tree.nodes.values() if n.node_type == "solver"]
+        assert len(solver_nodes) >= 1
+
+        # Check that at least one solver node has bulb.state change
+        bulb_changed = False
+        for node in solver_nodes:
+            change_attrs = [c["attribute"] for c in node.changes]
+            if "bulb.state" in change_attrs:
+                bulb_changed = True
+                break
+        assert bulb_changed, "Solver should derive bulb.state change"
 
     def test_tv_simulation(self, registry_manager):
-        """Test TV object simulation."""
+        """Test TV object simulation with solver pattern.
+
+        TV now uses solver to derive screen.brightness and cooling.temperature trend.
+        Flow: action -> solver -> (time if trends) -> solver
+        """
         runner = TreeSimulationRunner(registry_manager)
         actions = [
             {"name": "turn_on", "parameters": {}},
@@ -125,7 +150,8 @@ class TestTreeSimulationRunner:
         tree = runner.run("tv", actions, simulation_id="test_tv")
 
         assert tree.object_type == "tv"
-        assert len(tree.nodes) == 3
+        # With solver pattern, more nodes are created (action + solver + time + solver)
+        assert len(tree.nodes) >= 3  # At minimum: initial + some action/solver nodes
 
     def test_action_with_parameters(self, registry_manager):
         """Test action with parameters."""
@@ -137,9 +163,15 @@ class TestTreeSimulationRunner:
 
         tree = runner.run("tv", actions, simulation_id="test_params")
 
-        state2 = tree.nodes["state2"]
-        assert state2.action_name == "adjust_volume"
-        assert state2.action_parameters == {"level": "high"}
+        # Find the adjust_volume action node (not a solver node)
+        adjust_volume_node = None
+        for node in tree.nodes.values():
+            if node.action_name == "adjust_volume":
+                adjust_volume_node = node
+                break
+
+        assert adjust_volume_node is not None, "adjust_volume action node should exist"
+        assert adjust_volume_node.action_parameters == {"level": "high"}
 
 
 class TestEndToEnd:
@@ -167,7 +199,11 @@ class TestEndToEnd:
         assert len(successful_nodes) >= 3  # root + at least some successes
 
     def test_full_tv_session(self, registry_manager):
-        """Full TV session simulation."""
+        """Full TV session simulation with solver pattern.
+
+        TV now uses solver to derive screen.brightness and cooling.temperature trend.
+        Node counts are higher due to solver nodes being created after each action.
+        """
         runner = TreeSimulationRunner(registry_manager)
         actions = [
             {"name": "turn_on", "parameters": {}},
@@ -179,14 +215,18 @@ class TestEndToEnd:
         tree = runner.run("tv", actions, simulation_id="tv_session")
 
         assert tree.object_type == "tv"
-        assert len(tree.nodes) == 5
+        # With solver pattern, more nodes are created (action + solver + time + solver per action)
+        assert len(tree.nodes) >= 5
 
     def test_kettle_workflow(self, registry_manager):
-        """Kettle workflow simulation."""
+        """Kettle workflow simulation with solver pattern.
+
+        Kettle now uses solver to derive heater.temperature from power and tank level.
+        """
         runner = TreeSimulationRunner(registry_manager)
         actions = [
-            {"name": "pour_water", "parameters": {"level": "full"}},
-            {"name": "heat", "parameters": {}},
+            {"name": "fill", "parameters": {}},
+            {"name": "turn_on", "parameters": {}},
             {"name": "turn_off", "parameters": {}},
         ]
 
@@ -312,15 +352,15 @@ class TestTreeNodeProperties:
     def test_node_failed_property(self, registry_manager):
         """TreeNode has failed property for rejected actions."""
         runner = TreeSimulationRunner(registry_manager)
+        # Use TV which still has precondition for turn_off (must be on)
         actions = [
-            {"name": "drain_battery", "parameters": {}},
-            {"name": "turn_on", "parameters": {}},
+            {"name": "turn_off", "parameters": {}},  # Should fail - TV starts off
         ]
 
-        tree = runner.run("flashlight", actions)
+        tree = runner.run("tv", actions)
 
-        # Find the rejected turn_on node (may not be state2 with branching constraints)
-        rejected = [n for n in tree.nodes.values() if n.action_name == "turn_on" and n.failed]
+        # Find the rejected turn_off node
+        rejected = [n for n in tree.nodes.values() if n.action_name == "turn_off" and n.failed]
         assert len(rejected) >= 1
         assert rejected[0].succeeded is False
 
@@ -341,9 +381,14 @@ class TestTreeNodeProperties:
 
         tree = runner.run("flashlight", actions)
 
+        # Action node has direct effects only (switch.position)
         changed = tree.nodes["state1"].get_changed_attributes()
         assert "switch.position" in changed
-        assert "bulb.state" in changed
+
+        # Solver nodes have derived effects (bulb.state)
+        solver_nodes = [n for n in tree.nodes.values() if n.node_type == "solver"]
+        bulb_in_solver = any("bulb.state" in n.get_changed_attributes() for n in solver_nodes)
+        assert bulb_in_solver, "bulb.state should be changed in solver node"
 
 
 class TestCLIMetadata:

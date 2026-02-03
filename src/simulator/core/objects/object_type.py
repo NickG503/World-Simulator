@@ -44,5 +44,7 @@ class ObjectType(BaseModel):
     constraints: List[ObjectConstraint] = Field(default_factory=list)
     behaviors: Dict[str, ObjectBehavior] = Field(default_factory=dict)  # action_name -> behavior
     compiled_constraints: List[Any] = Field(default_factory=list)
+    solver_specs: List[Any] = Field(default_factory=list)  # SolverRuleSpec instances
+    compiled_solver_rules: List[Any] = Field(default_factory=list)  # SolverRule instances
 
     model_config = {"arbitrary_types_allowed": True}

@@ -18,6 +18,7 @@ from simulator.core.attributes import AttributeSpec
 from simulator.core.constraints.specs import ConstraintSpec, parse_constraint_spec
 from simulator.core.objects import PartSpec
 from simulator.core.objects.object_type import ObjectBehavior, ObjectConstraint, ObjectType
+from simulator.core.solver.specs import SolverRuleSpec, parse_solver_rules
 
 
 class AttributeDefinitionSpec(BaseModel):
@@ -75,6 +76,7 @@ class ObjectFileSpec(BaseModel):
     global_attributes: Dict[str, AttributeDefinitionSpec] = Field(default_factory=dict)
     constraints: List[ConstraintSpec] = Field(default_factory=list)
     behaviors: Dict[str, BehaviorDefinitionSpec] = Field(default_factory=dict)
+    solver: List[SolverRuleSpec] = Field(default_factory=list)
 
     model_config = ConfigDict(extra="allow")
 
@@ -84,6 +86,11 @@ class ObjectFileSpec(BaseModel):
         if value is None:
             return []
         return [parse_constraint_spec(item) for item in value]
+
+    @field_validator("solver", mode="before")
+    @classmethod
+    def _parse_solver(cls, value):
+        return parse_solver_rules(value)
 
     def build_object_type(self) -> ObjectType:
         parts = {name: spec.build(name) for name, spec in self.parts.items()}
@@ -98,6 +105,8 @@ class ObjectFileSpec(BaseModel):
                 extras["name"] = spec.name  # type: ignore[attr-defined]
             if hasattr(spec, "effects"):
                 extras["effects"] = spec.effects  # type: ignore[attr-defined]
+            if hasattr(spec, "elif_cases"):
+                extras["elif_cases"] = spec.elif_cases  # type: ignore[attr-defined]
             if hasattr(spec, "else_effects"):
                 extras["else_effects"] = spec.else_effects  # type: ignore[attr-defined]
             constraint = ObjectConstraint(
@@ -113,6 +122,12 @@ class ObjectFileSpec(BaseModel):
         for name, spec in self.behaviors.items():
             behaviors[name] = spec.build()
 
+        # Compile solver rules
+        from simulator.core.solver.rule import compile_solver_rules
+
+        solver_specs = list(self.solver)
+        compiled_solver_rules = compile_solver_rules(solver_specs)
+
         return ObjectType(
             name=self.type.strip(),
             parts=parts,
@@ -120,6 +135,8 @@ class ObjectFileSpec(BaseModel):
             constraints=constraints,
             behaviors=behaviors,
             compiled_constraints=compiled_constraints,
+            solver_specs=solver_specs,
+            compiled_solver_rules=compiled_solver_rules,
         )
 
     @staticmethod
@@ -141,6 +158,28 @@ class ObjectFileSpec(BaseModel):
             if raw_effects is None:
                 raw_effects = constraint.model_extra.get("effects", []) if constraint.model_extra else []
             effects = [build_effect(parse_effect_spec(e)) for e in raw_effects]
+            # Get elif_cases
+            from simulator.core.constraints.constraint import ElifCase
+
+            raw_elif_cases = getattr(constraint, "elif_cases", None)
+            if raw_elif_cases is None:
+                raw_elif_cases = constraint.model_extra.get("elif_cases", []) if constraint.model_extra else []
+            elif_cases = []
+            for case_data in raw_elif_cases:
+                if hasattr(case_data, "condition"):
+                    # Already a spec object
+                    case_condition = build_condition(case_data.condition)
+                    case_raw_effects = getattr(case_data, "effects", [])
+                    case_effects = [build_effect(parse_effect_spec(e)) for e in case_raw_effects]
+                elif isinstance(case_data, dict):
+                    # Raw dict from YAML
+                    from simulator.core.actions.specs import build_condition_from_raw
+
+                    case_condition = build_condition_from_raw(case_data.get("condition"))
+                    case_effects = [build_effect(parse_effect_spec(e)) for e in case_data.get("effects", [])]
+                else:
+                    continue
+                elif_cases.append(ElifCase(condition=case_condition, effects=case_effects))
             # Get else_effects
             raw_else_effects = getattr(constraint, "else_effects", None)
             if raw_else_effects is None:
@@ -149,7 +188,13 @@ class ObjectFileSpec(BaseModel):
             name = getattr(constraint, "name", None)
             if name is None and constraint.model_extra:
                 name = constraint.model_extra.get("name")
-            return BranchingConstraint(condition=condition, effects=effects, else_effects=else_effects, name=name)
+            return BranchingConstraint(
+                condition=condition,
+                effects=effects,
+                elif_cases=elif_cases,
+                else_effects=else_effects,
+                name=name,
+            )
         raise ValueError(f"Unsupported constraint type: {constraint.type}")
 
 

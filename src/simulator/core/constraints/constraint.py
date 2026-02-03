@@ -58,18 +58,32 @@ class DependencyConstraint(Constraint):
         return f"If {_cond_to_text(self.condition)}, then {_cond_to_text(self.requires)}"
 
 
+class ElifCase(BaseModel):
+    """A single elif case in a branching constraint."""
+
+    condition: Condition  # The condition to check
+    effects: List[Any] = []  # Effects to apply when this condition matches
+
+    model_config = {"arbitrary_types_allowed": True}
+
+
 class BranchingConstraint(Constraint):
     """Constraint that creates branches based on atomic state conditions.
 
     When the condition attribute is a value set, this constraint creates
     separate branches for matching (IF) and non-matching (ELSE) values.
     Effects are applied to IF branch, else_effects are applied to ELSE branch.
+
+    When elif_cases are provided, non-IF values are matched against each
+    elif case individually, creating one branch per matching case instead
+    of a single ELSE branch.
     """
 
     type: str = "branching_constraint"
     name: str | None = None  # Optional name for visualization
     condition: Condition  # IF condition (typically AttributeCondition)
     effects: List[Any]  # List of Effect objects to apply when condition is true (IF)
+    elif_cases: List[ElifCase] = []  # Explicit elif cases for individual atom states
     else_effects: List[Any] = []  # List of Effect objects to apply when condition is false (ELSE)
 
     model_config = {"arbitrary_types_allowed": True}

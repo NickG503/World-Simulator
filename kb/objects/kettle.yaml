@@ -1,3 +1,8 @@
+# Kettle object definition
+# A simple electric kettle with power control, water tank, and heater
+#
+# ARCHITECTURE: Behaviors set direct effects only, Solver derives temperature
+
 type: kettle
 parts:
   control:
@@ -19,25 +24,115 @@ parts:
         default: cold
         mutable: true
 
+# =============================================================================
+# SOLVER: Derives heater.temperature from power and tank state
+# =============================================================================
+solver:
+  # Rule 1: Temperature depends on power AND water level
+  - name: heater_temperature_state
+    priority: 10
+    description: "Heater is hot when power on AND water available"
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: control.power
+          operator: equals
+          value: on
+        - type: attribute_check
+          target: tank.level
+          operator: not_equals
+          value: empty
+    implies:
+      - type: set_attribute
+        target: heater.temperature
+        value: hot
+    otherwise:
+      - type: set_attribute
+        target: heater.temperature
+        value: cold
+
+# =============================================================================
+# CONSTRAINTS: Time-based branching constraints
+# Handle what happens when attributes reach certain values over time
+# =============================================================================
+constraints:
+  # When tank is empty, heater must be cold (safety constraint)
+  - type: branching_constraint
+    name: tank_empty_safety
+    condition:
+      type: attribute_check
+      target: tank.level
+      operator: equals
+      value: empty
+    effects:
+      # When tank IS empty: heater turns off for safety
+      - type: set_attribute
+        target: heater.temperature
+        value: cold
+      - type: set_attribute
+        target: control.power
+        value: "off"
+      - type: set_trend
+        target: tank.level
+        direction: none
+    else_effects:
+      # When tank is NOT empty: normal operation
+      - type: set_attribute
+        target: tank.level
+        value: "!empty"
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles that
+# =============================================================================
 behaviors:
-  heat:
+  # Turn on the kettle
+  turn_on:
+    preconditions:
+      - type: attribute_check
+        target: control.power
+        operator: equals
+        value: off
+    effects:
+      - type: set_attribute
+        target: control.power
+        value: "on"
+      # heater.temperature is derived by solver
+
+  # Turn off the kettle
+  turn_off:
     preconditions:
       - type: attribute_check
         target: control.power
         operator: equals
         value: on
     effects:
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: tank.level
-          operator: not_equals
-          value: empty
-        then:
-          - type: set_attribute
-            target: heater.temperature
-            value: hot
-        else:
-          - type: set_attribute
-            target: heater.temperature
-            value: warm
+      - type: set_attribute
+        target: control.power
+        value: "off"
+      # heater.temperature is derived by solver
+
+  # Fill the tank
+  fill:
+    preconditions:
+      - type: attribute_check
+        target: tank.level
+        operator: not_equals
+        value: full
+    effects:
+      - type: set_attribute
+        target: tank.level
+        value: full
+
+  # Empty the tank
+  pour:
+    preconditions:
+      - type: attribute_check
+        target: tank.level
+        operator: not_equals
+        value: empty
+    effects:
+      - type: set_trend
+        target: tank.level
+        direction: down

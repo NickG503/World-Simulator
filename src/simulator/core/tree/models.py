@@ -32,7 +32,9 @@ class NodeType(str, Enum):
 
     ROOT = "root"  # Initial state node
     ACTION = "action"  # Result of an action execution
-    CONSTRAINT = "constraint"  # Result of branching constraint application
+    SOLVER = "solver"  # Result of solver rule application
+    TIME = "time"  # Result of time constraint (trend expansion)
+    CONSTRAINT = "constraint"  # Result of branching constraint application (legacy)
 
 
 class WorldSnapshot(BaseModel):
@@ -453,6 +455,9 @@ class SimulationTree(BaseModel):
     # Constraint definitions for visualization
     constraint_definitions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
 
+    # Solver definitions for visualization
+    solver_definitions: Dict[str, Dict[str, Any]] = Field(default_factory=dict)
+
     # Tree structure
     root_id: Optional[str] = None
     nodes: Dict[str, TreeNode] = Field(default_factory=dict)
@@ -699,6 +704,10 @@ class SimulationTree(BaseModel):
         # Include constraint definitions if present
         if self.constraint_definitions:
             result["constraint_definitions"] = self.constraint_definitions
+
+        # Include solver definitions if present
+        if self.solver_definitions:
+            result["solver_definitions"] = self.solver_definitions
 
         return result
 

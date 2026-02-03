@@ -22,6 +22,10 @@ from simulator.core.engine.transition_engine import TransitionEngine
 from simulator.core.objects.object_instance import ObjectInstance
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.simulation_runner import ActionRequest
+from simulator.core.solver.solver_branching import (
+    apply_solver_rules,
+    get_solver_rules,
+)
 from simulator.core.tree.constraint_branching import (
     apply_branching_constraints,
     get_branching_constraints,
@@ -44,6 +48,8 @@ from simulator.core.tree.node_factory import (
     create_error_node,
     create_or_merge_node,
     create_root_node,
+    create_solver_node,
+    create_time_node,
 )
 from simulator.core.tree.snapshot_utils import capture_snapshot
 from simulator.core.tree.utils.change_helpers import build_changes_list
@@ -133,19 +139,44 @@ class TreeSimulationRunner(
                     for result in results:
                         logger.info("Created node: %s", result.node.describe())
 
-            # Apply branching constraints to action results
-            constraint_leaves = self._apply_branching_constraints_to_leaves(
+            # Multi-step flow:
+            # Step 1: Action postcondition (already done above in new_leaves)
+            # Step 2: Apply solver rules
+            solver_leaves = self._apply_solver_to_leaves(
                 tree=tree,
                 leaves=new_leaves,
                 object_type=object_type,
                 verbose=verbose,
             )
 
-            # If constraint branching created new nodes, use them as leaves
-            if constraint_leaves:
-                leaves = constraint_leaves
+            # Check if any solver leaves have active trends
+            has_trends = any(
+                self._snapshot_has_active_trends(node.snapshot)
+                for node, _ in solver_leaves
+                if node.action_status == "ok"
+            )
+
+            if has_trends:
+                # Step 3: Apply time constraints (expand trends to value sets)
+                time_leaves = self._apply_time_constraints_to_leaves(
+                    tree=tree,
+                    leaves=solver_leaves,
+                    object_type=object_type,
+                    verbose=verbose,
+                )
+
+                # Step 4: Apply solver again (fix impossible states from time)
+                final_leaves = self._apply_solver_to_leaves(
+                    tree=tree,
+                    leaves=time_leaves,
+                    object_type=object_type,
+                    verbose=verbose,
+                    step_name="solver_fix",
+                )
+                leaves = final_leaves
             else:
-                leaves = new_leaves
+                # No trends - just use solver leaves
+                leaves = solver_leaves
 
             if verbose and layer_state_cache:
                 merged_count = sum(1 for n, _ in layer_state_cache.values() if n.has_multiple_parents)
@@ -609,6 +640,198 @@ class TreeSimulationRunner(
         return new_instance
 
     # =========================================================================
+    # Solver Application
+    # =========================================================================
+
+    def _apply_solver_to_leaves(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        object_type: str,
+        verbose: bool = False,
+        step_name: str = "solver",
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Apply solver rules to leaves, creating solver nodes.
+
+        Solver rules derive state from other state (e.g., bulb state from switch + battery).
+        This is Step 2 in the action flow (or Step 4 after time constraints).
+
+        Args:
+            tree: The simulation tree
+            leaves: List of (node, instance) tuples from previous step
+            object_type: Name of the object type
+            verbose: Whether to log debug info
+            step_name: Name for logging ("solver" or "solver_fix")
+
+        Returns:
+            List of (node, instance) tuples for next step
+        """
+        # Check if there are any solver rules
+        solver_rules = get_solver_rules(object_type, self.registry_manager)
+        if not solver_rules:
+            return leaves  # No solver rules, return leaves unchanged
+
+        # Store solver definitions for visualization
+        self._store_solver_definitions(tree, object_type)
+
+        # Also store constraint definitions (time constraints) for visualization
+        self._store_constraint_definitions(tree, object_type)
+
+        result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
+        layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
+
+        for parent_node, instance in leaves:
+            # Skip failed action nodes - they are terminal (no solver/time continues)
+            if parent_node.action_status != "ok":
+                result_leaves.append((parent_node, instance))
+                continue
+
+            # Apply solver rules to this node's snapshot
+            branches = apply_solver_rules(
+                snapshot=parent_node.snapshot,
+                object_type_name=object_type,
+                registry_manager=self.registry_manager,
+            )
+
+            for branch_snapshot, branch_info in branches:
+                if branch_info.branch_type == "none" and not branch_info.changes:
+                    # No changes from solver - use parent node
+                    result_leaves.append((parent_node, instance))
+                    continue
+
+                # Create solver node
+                solver_node = create_solver_node(
+                    tree=tree,
+                    parent_node=parent_node,
+                    snapshot=branch_snapshot,
+                    rule_name=branch_info.rule_name,
+                    branch_type=branch_info.branch_type,
+                    condition_attribute=branch_info.condition_attribute,
+                    condition_values=branch_info.condition_values,
+                    changes=branch_info.changes,
+                    layer_state_cache=layer_state_cache,
+                )
+
+                tree.add_node(solver_node)
+
+                if verbose:
+                    logger.info("Created %s node: %s", step_name, solver_node.describe())
+
+                # Create instance that matches the solver snapshot
+                constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
+                result_leaves.append((solver_node, constrained_instance))
+
+        return result_leaves if result_leaves else leaves
+
+    def _apply_time_constraints_to_leaves(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        object_type: str,
+        verbose: bool = False,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Apply time constraints to leaves with active trends.
+
+        This is Step 3 in the action flow. It expands trends to value sets
+        using branching constraints.
+
+        Args:
+            tree: The simulation tree
+            leaves: List of (node, instance) tuples from solver step
+            object_type: Name of the object type
+            verbose: Whether to log debug info
+
+        Returns:
+            List of (node, instance) tuples for solver fix step
+        """
+        # Check if there are any branching constraints
+        constraints = get_branching_constraints(object_type, self.registry_manager)
+        if not constraints:
+            return leaves  # No constraints, return leaves unchanged
+
+        result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
+        layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
+
+        for parent_node, instance in leaves:
+            # Skip failed nodes
+            if parent_node.action_status != "ok":
+                result_leaves.append((parent_node, instance))
+                continue
+
+            # Check if this node has active trends
+            has_trends = self._snapshot_has_active_trends(parent_node.snapshot)
+            if not has_trends:
+                # Create placeholder time node to maintain level alignment
+                # This ensures all branches stay at the same depth for proper DAG merging
+                placeholder_node = create_time_node(
+                    tree=tree,
+                    parent_node=parent_node,
+                    snapshot=parent_node.snapshot,  # Same snapshot, no changes
+                    branch_type="placeholder",
+                    condition_attribute="",
+                    condition_values=[],
+                    has_active_trends=False,
+                    changes=[],
+                    layer_state_cache=layer_state_cache,
+                )
+                tree.add_node(placeholder_node)
+
+                if verbose:
+                    logger.info("Created placeholder time node: %s", placeholder_node.id)
+
+                result_leaves.append((placeholder_node, instance))
+                continue
+
+            # Apply branching constraints to this node's snapshot
+            branches = apply_branching_constraints(
+                snapshot=parent_node.snapshot,
+                object_type_name=object_type,
+                registry_manager=self.registry_manager,
+            )
+
+            for branch_snapshot, branch_info in branches:
+                if branch_info.branch_type == "none" and not branch_info.constraint_name:
+                    # Still create placeholder for alignment
+                    placeholder_node = create_time_node(
+                        tree=tree,
+                        parent_node=parent_node,
+                        snapshot=parent_node.snapshot,
+                        branch_type="placeholder",
+                        condition_attribute="",
+                        condition_values=[],
+                        has_active_trends=False,
+                        changes=[],
+                        layer_state_cache=layer_state_cache,
+                    )
+                    tree.add_node(placeholder_node)
+                    result_leaves.append((placeholder_node, instance))
+                    continue
+
+                # Create time node
+                time_node = create_time_node(
+                    tree=tree,
+                    parent_node=parent_node,
+                    snapshot=branch_snapshot,
+                    branch_type=branch_info.branch_type,
+                    condition_attribute=branch_info.condition_attribute,
+                    condition_values=branch_info.condition_values,
+                    has_active_trends=branch_info.has_active_trends,
+                    changes=branch_info.changes,
+                    layer_state_cache=layer_state_cache,
+                )
+
+                tree.add_node(time_node)
+
+                if verbose:
+                    logger.info("Created time node: %s", time_node.describe())
+
+                # Create instance that matches the time snapshot
+                constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
+                result_leaves.append((time_node, constrained_instance))
+
+        return result_leaves if result_leaves else leaves
+
+    # =========================================================================
     # Branch Condition Extraction
     # =========================================================================
 
@@ -949,25 +1172,130 @@ class TreeSimulationRunner(
             return  # Already stored
 
         obj_type = self.registry_manager.objects.get(object_type)
-        if not obj_type or not obj_type.compiled_constraints:
+        if not obj_type:
             return
 
-        branching_constraints = [c for c in obj_type.compiled_constraints if isinstance(c, BranchingConstraint)]
-        if not branching_constraints:
-            return
-
-        # Serialize the branching constraints
         constraint_def = {"branches": []}
-        for bc in branching_constraints:
-            branch_def = {
-                "condition": self._serialize_condition_for_display(bc.condition),
-                "effects": [self._serialize_effect_for_display(e) for e in bc.effects],
-            }
-            if bc.else_effects:
-                branch_def["else_effects"] = [self._serialize_effect_for_display(e) for e in bc.else_effects]
-            constraint_def["branches"].append(branch_def)
 
-        tree.constraint_definitions["constraint"] = constraint_def
+        # First try compiled constraints
+        if obj_type.compiled_constraints:
+            branching_constraints = [c for c in obj_type.compiled_constraints if isinstance(c, BranchingConstraint)]
+            for bc in branching_constraints:
+                branch_def = {
+                    "condition": self._serialize_condition_for_display(bc.condition),
+                    "effects": [self._serialize_effect_for_display(e) for e in bc.effects],
+                }
+                if bc.elif_cases:
+                    branch_def["elif_cases"] = [
+                        {
+                            "condition": self._serialize_condition_for_display(ec.condition),
+                            "effects": [self._serialize_effect_for_display(e) for e in ec.effects],
+                        }
+                        for ec in bc.elif_cases
+                    ]
+                if bc.else_effects:
+                    branch_def["else_effects"] = [self._serialize_effect_for_display(e) for e in bc.else_effects]
+                constraint_def["branches"].append(branch_def)
+
+        # If no compiled constraints, try raw constraint specs
+        if not constraint_def["branches"] and obj_type.constraints:
+            for c in obj_type.constraints:
+                if hasattr(c, "type") and c.type == "branching_constraint":
+                    branch_def = {}
+                    if hasattr(c, "condition") and c.condition:
+                        branch_def["condition"] = self._serialize_condition_spec(c.condition)
+                    if hasattr(c, "effects") and c.effects:
+                        branch_def["effects"] = [self._serialize_effect_spec(e) for e in c.effects]
+                    if hasattr(c, "elif_cases") and c.elif_cases:
+                        branch_def["elif_cases"] = [
+                            {
+                                "condition": self._serialize_condition_spec(ec.condition)
+                                if hasattr(ec, "condition")
+                                else {},
+                                "effects": [self._serialize_effect_spec(e) for e in ec.effects]
+                                if hasattr(ec, "effects")
+                                else [],
+                            }
+                            for ec in c.elif_cases
+                        ]
+                    if hasattr(c, "else_effects") and c.else_effects:
+                        branch_def["else_effects"] = [self._serialize_effect_spec(e) for e in c.else_effects]
+                    if hasattr(c, "name"):
+                        branch_def["name"] = c.name
+                    constraint_def["branches"].append(branch_def)
+
+        if constraint_def["branches"]:
+            tree.constraint_definitions["constraint"] = constraint_def
+
+    def _serialize_condition_spec(self, condition) -> Dict[str, Any]:
+        """Serialize a raw condition spec for display."""
+        if hasattr(condition, "type"):
+            ctype = condition.type
+            if ctype == "attribute_check":
+                target = getattr(condition, "target", "")
+                operator = getattr(condition, "operator", "equals")
+                value = getattr(condition, "value", "")
+                op_map = {
+                    "equals": "==",
+                    "not_equals": "!=",
+                    "greater_than": ">",
+                    "less_than": "<",
+                    "in": "in",
+                }
+                op_str = op_map.get(operator, operator)
+                return {"description": f"{target} {op_str} {value}"}
+        return {"description": str(condition)}
+
+    def _serialize_effect_spec(self, effect) -> Dict[str, Any]:
+        """Serialize a raw effect spec for display."""
+        if hasattr(effect, "type"):
+            etype = effect.type
+            if etype == "set_attribute":
+                target = getattr(effect, "target", "")
+                value = getattr(effect, "value", "")
+                return {"target": target, "value": value}
+            elif etype == "set_trend":
+                target = getattr(effect, "target", "")
+                direction = getattr(effect, "direction", "none")
+                return {"target": target, "value": f"trend {direction}"}
+        return {"target": "unknown", "value": "unknown"}
+
+    def _store_solver_definitions(self, tree: SimulationTree, object_type: str) -> None:
+        """Store solver rule definitions in the tree for visualization."""
+        if "solver" in tree.solver_definitions:
+            return  # Already stored
+
+        rules = get_solver_rules(object_type, self.registry_manager)
+        if not rules:
+            return
+
+        # Serialize solver rules
+        solver_def = {"rules": []}
+        for rule in rules:
+            rule_def = {
+                "name": rule.name,
+                "priority": rule.priority,
+                "description": rule.description or rule.describe(),
+            }
+            if rule.condition:
+                rule_def["condition"] = self._serialize_condition(rule.condition)
+            if rule.precondition:
+                rule_def["precondition"] = self._serialize_condition(rule.precondition)
+            if rule.implies:
+                rule_def["implies"] = [self._serialize_effect_for_display(e) for e in rule.implies]
+            if rule.otherwise:
+                rule_def["otherwise"] = [self._serialize_effect_for_display(e) for e in rule.otherwise]
+            if rule.cases:
+                rule_def["cases"] = []
+                for case in rule.cases:
+                    case_def = {
+                        "condition": self._serialize_condition(case.condition),
+                        "implies": [self._serialize_effect_for_display(e) for e in case.implies],
+                    }
+                    rule_def["cases"].append(case_def)
+            solver_def["rules"].append(rule_def)
+
+        tree.solver_definitions["solver"] = solver_def
 
     def _serialize_condition_for_display(self, condition) -> Dict[str, Any]:
         """Serialize a condition for visualization display."""
@@ -988,12 +1316,19 @@ class TreeSimulationRunner(
     def _serialize_effect_for_display(self, effect) -> Dict[str, Any]:
         """Serialize an effect for visualization display."""
         from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
+        from simulator.core.actions.effects.trend_effects import TrendEffect
 
         if isinstance(effect, SetAttributeEffect):
             return {
                 "type": "set_attribute",
                 "target": effect.target.to_string(),
                 "value": effect.value,
+            }
+        elif isinstance(effect, TrendEffect):
+            return {
+                "type": "set_trend",
+                "target": effect.target.to_string(),
+                "value": f"trend {effect.direction}",
             }
         return {"type": effect.__class__.__name__}
 

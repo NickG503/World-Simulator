@@ -1,5 +1,7 @@
 # Coffee Machine - demonstrates comparison operators and AND conditions
 # A realistic espresso machine with water tank, bean hopper, and heater
+#
+# ARCHITECTURE: Behaviors set direct effects only, Solver derives status.ready
 
 type: coffee_machine
 parts:
@@ -31,6 +33,106 @@ parts:
         default: 'off'
         mutable: true
 
+# =============================================================================
+# SOLVER: Derives status.ready from other attributes
+# =============================================================================
+solver:
+  # Rule 1: Machine is ready when water is available and heater is hot
+  - name: machine_ready_state
+    priority: 10
+    description: "Machine ready when water >= low AND heater is hot"
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: water_tank.level
+          operator: gte
+          value: low
+        - type: attribute_check
+          target: heater.temperature
+          operator: equals
+          value: hot
+    implies:
+      - type: set_attribute
+        target: status.ready
+        value: "on"
+    otherwise:
+      - type: set_attribute
+        target: status.ready
+        value: "off"
+
+# =============================================================================
+# CONSTRAINTS: Time-based branching constraints
+# Handle what happens when attributes reach certain values over time
+# =============================================================================
+constraints:
+  # When heater temperature reaches hot, stop the heating trend
+  - type: branching_constraint
+    name: heater_max_temperature
+    condition:
+      type: attribute_check
+      target: heater.temperature
+      operator: equals
+      value: hot
+    effects:
+      # At max temperature, trend stops
+      - type: set_trend
+        target: heater.temperature
+        direction: none
+    else_effects:
+      # Not at max, trend can continue
+      - type: set_attribute
+        target: heater.temperature
+        value: "!hot"
+
+  # When water tank is empty, can't brew
+  - type: branching_constraint
+    name: water_tank_empty_state
+    condition:
+      type: attribute_check
+      target: water_tank.level
+      operator: equals
+      value: empty
+    effects:
+      # When water IS empty: can't be ready
+      - type: set_attribute
+        target: status.ready
+        value: "off"
+      - type: set_trend
+        target: water_tank.level
+        direction: none
+    else_effects:
+      # When water is NOT empty: normal operation
+      - type: set_attribute
+        target: water_tank.level
+        value: "!empty"
+
+  # When bean hopper is empty, can't brew
+  - type: branching_constraint
+    name: bean_hopper_empty_state
+    condition:
+      type: attribute_check
+      target: bean_hopper.amount
+      operator: equals
+      value: empty
+    effects:
+      # When beans ARE empty: can't be ready
+      - type: set_attribute
+        target: status.ready
+        value: "off"
+      - type: set_trend
+        target: bean_hopper.amount
+        direction: none
+    else_effects:
+      # When beans are NOT empty: normal operation
+      - type: set_attribute
+        target: bean_hopper.amount
+        value: "!empty"
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles that
+# =============================================================================
 behaviors:
   # Comparison operator: heater.temperature < hot
   # Demonstrates < operator expanding to value set {cold, warm}
@@ -46,8 +148,7 @@ behaviors:
         direction: up
 
   # AND condition with comparison operators
-  # Requires: water.level >= low AND beans.amount >= low
-  # Demonstrates AND + >= operators together
+  # Requires: water.level >= low AND beans.amount >= low AND heater hot
   brew_espresso:
     preconditions:
       - type: and
@@ -73,7 +174,7 @@ behaviors:
         direction: down
 
   # AND condition with higher thresholds
-  # Requires: water.level >= medium AND beans.amount >= medium
+  # Requires: water.level >= medium AND beans.amount >= medium AND heater hot
   brew_large:
     preconditions:
       - type: and
@@ -97,32 +198,6 @@ behaviors:
       - type: set_trend
         target: bean_hopper.amount
         direction: down
-
-  # AND condition in POSTCONDITION with De Morgan's law
-  # If water >= low AND temperature == hot, then status = ready
-  check_ready:
-    preconditions:
-      - type: attribute_check
-        target: status.ready
-        operator: equals
-        value: off
-    effects:
-      - type: conditional
-        condition:
-          type: and
-          conditions:
-            - type: attribute_check
-              target: water_tank.level
-              operator: gte
-              value: low
-            - type: attribute_check
-              target: heater.temperature
-              operator: equals
-              value: hot
-        then:
-          - type: set_attribute
-            target: status.ready
-            value: "on"
 
   # Refill water tank
   refill_water:
@@ -159,43 +234,3 @@ behaviors:
       - type: set_trend
         target: heater.temperature
         direction: down
-
-  # ============================================================
-  # FLAT IF/ELIF/ELSE: Tests nested else handling at one level
-  # ============================================================
-  # if water >= medium: status = on (ready)
-  # elif temp == hot: status = on (warming up)
-  # else: status = off (not ready)
-  check_status:
-    preconditions:
-      - type: attribute_check
-        target: water_tank.level
-        operator: gte
-        value: empty
-    effects:
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: water_tank.level
-          operator: gte
-          value: medium
-        then:
-          - type: set_attribute
-            target: status.ready
-            value: on
-        else:
-          - type: conditional
-            condition:
-              type: attribute_check
-              target: heater.temperature
-              operator: equals
-              value: hot
-            then:
-              - type: set_attribute
-                target: status.ready
-                value: on
-            else:
-              - type: set_attribute
-                target: status.ready
-                value: off
-

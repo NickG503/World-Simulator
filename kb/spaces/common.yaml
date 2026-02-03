@@ -56,7 +56,7 @@ spaces:
   # Prize level
   - id: prize_level
     name: Prize Level
-    levels: ["none", "small", "medium", "big", "jackpot"]
+    levels: ["unknown", "none", "small", "medium", "big", "jackpot"]
 
   # Dice colors
   - id: dice_color

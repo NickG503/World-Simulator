@@ -1,20 +1,13 @@
 # Dice object definition - SAME ATTRIBUTE in precondition AND postcondition
-# This demonstrates intersection logic when both check the same attribute
+# ARCHITECTURE: Behaviors set direct effects only, Solver validates and derives state
 #
 # Scenario:
-# - Precondition: face in {3, 5, 6} (face={1,2,4} FAILS, face={3,5,6} SUCCEEDS)
-# - Postcondition: checks FACE (SAME attribute!)
-#     if face == 6 → small prize
-#     else (face={3,5}) → big prize
+# - Action effect: Sets prize.result = win (direct effect)
+# - Solver: Validates win based on face (invalidates for face={1,2,4})
+# - Solver: Derives prize.level based on cube.face
 #
 # When face=unknown:
-# Creates 3 branches:
-#   1. FAIL: face={1,2,4} (precondition failed - NOT in {3,5,6})
-#   2. SUCCESS + face=6: small prize
-#   3. SUCCESS + else: face={3,5} → big prize (grouped same effect)
-#
-# Key principle: Different if/elif conditions = different effects = different branches
-# Same effect = group in else = single branch with value SET
+# Creates branches through solver rules only (purple nodes, no green action branches).
 
 type: dice_same_attr
 parts:
@@ -28,45 +21,98 @@ parts:
     attributes:
       level:
         space: prize_level
-        default: none
+        default: unknown  # Changed from 'none' to ensure solver always creates a node
         mutable: true
       result:
         space: result_state
         default: none
         mutable: true
 
-behaviors:
-  # Check win - SAME attribute (face for both precond AND postcond)
-  check_win:
-    # Precondition: face must be IN {3, 5, 6} to succeed
-    # face={1, 2, 4} will FAIL
-    preconditions:
-      - type: attribute_check
-        target: cube.face
-        operator: in
-        value: ["3", "5", "6"]
-    effects:
-      # Set result to win
+# =============================================================================
+# SOLVER: Validates win and derives prize.level from cube.face
+# =============================================================================
+solver:
+  # Rule 0: Invalidate win for non-winning faces (1, 2, 4)
+  - name: invalidate_bad_faces
+    priority: 4
+    description: "Win is only valid for faces 3, 5, 6"
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: prize.result
+          operator: equals
+          value: win
+        - type: attribute_check
+          target: cube.face
+          operator: in
+          value: ["1", "2", "4"]
+    implies:
       - type: set_attribute
         target: prize.result
-        value: win
-      # Postcondition branches on FACE (SAME as precondition!)
-      # IF face == 6 -> small prize
-      # ELSE (face={3,5}) -> big prize
-      - type: conditional
-        condition:
+        value: lose
+
+  # Rule 1: Prize level depends on face (only when result is win)
+  - name: prize_level_from_face
+    priority: 10
+    description: "Prize level derived from cube face when result is win"
+    precondition:
+      type: attribute_check
+      target: prize.result
+      operator: equals
+      value: win
+    cases:
+      - condition:
           type: attribute_check
           target: cube.face
           operator: equals
           value: "6"
-        then:
+        implies:
           - type: set_attribute
             target: prize.level
             value: small
-        else:
+      - condition:
+          type: attribute_check
+          target: cube.face
+          operator: in
+          value: ["3", "5"]
+        implies:
           - type: set_attribute
             target: prize.level
             value: big
+    otherwise:
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+  # Rule 2: No prize level when result is not win
+  - name: no_prize_when_no_win
+    priority: 20
+    description: "Prize level is none when result is not win"
+    condition:
+      type: attribute_check
+      target: prize.result
+      operator: not_equals
+      value: win
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: none
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles prize.level and result validation
+# =============================================================================
+behaviors:
+  # Check win - sets prize.result, solver validates and handles prize.level
+  check_win:
+    preconditions: []  # No preconditions - solver handles face-based validation
+    effects:
+      # Set result to win - solver will validate based on face
+      # prize.level is derived by solver based on face
+      - type: set_attribute
+        target: prize.result
+        value: win
 
   # Reset the dice - resets everything including face
   reset:
@@ -82,6 +128,4 @@ behaviors:
       - type: set_attribute
         target: prize.result
         value: none
-      - type: set_attribute
-        target: prize.level
-        value: none
+      # prize.level is derived by solver (will be set to none)

@@ -33,6 +33,27 @@ class DependencyConstraintSpec(ConstraintSpec):
         return parse_condition_spec(value)
 
 
+class BranchingConstraintElifCaseSpec(BaseModel):
+    """Spec for a single elif case in a branching constraint."""
+
+    condition: ConditionSpec
+    effects: List[EffectSpec] = []
+
+    @field_validator("condition", mode="before")
+    @classmethod
+    def _parse_condition(cls, value: Any) -> ConditionSpec:
+        return parse_condition_spec(value)
+
+    @field_validator("effects", mode="before")
+    @classmethod
+    def _parse_effects(cls, value: Any) -> List[EffectSpec]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [parse_effect_spec(item) for item in value]
+        return [parse_effect_spec(value)]
+
+
 class BranchingConstraintSpec(ConstraintSpec):
     """Spec for a branching constraint that creates atomic state branches."""
 
@@ -40,6 +61,7 @@ class BranchingConstraintSpec(ConstraintSpec):
     name: Optional[str] = None  # Optional name for visualization
     condition: ConditionSpec  # IF condition
     effects: List[EffectSpec]  # Effects when condition is true (IF branch)
+    elif_cases: List[BranchingConstraintElifCaseSpec] = []  # Explicit elif cases
     else_effects: List[EffectSpec] = []  # Effects when condition is false (ELSE branch)
 
     @field_validator("condition", mode="before")
@@ -55,6 +77,20 @@ class BranchingConstraintSpec(ConstraintSpec):
         if isinstance(value, list):
             return [parse_effect_spec(item) for item in value]
         return [parse_effect_spec(value)]
+
+    @field_validator("elif_cases", mode="before")
+    @classmethod
+    def _parse_elif_cases(cls, value: Any) -> List[BranchingConstraintElifCaseSpec]:
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [
+                item
+                if isinstance(item, BranchingConstraintElifCaseSpec)
+                else BranchingConstraintElifCaseSpec.model_validate(item)
+                for item in value
+            ]
+        return []
 
 
 _SPEC_MAP: Dict[str, Type[ConstraintSpec]] = {
@@ -79,5 +115,6 @@ __all__ = [
     "ConstraintSpec",
     "DependencyConstraintSpec",
     "BranchingConstraintSpec",
+    "BranchingConstraintElifCaseSpec",
     "parse_constraint_spec",
 ]

@@ -127,6 +127,61 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             color: var(--accent-green);
         }}
 
+        .header-controls {{
+            display: flex;
+            gap: 12px;
+            margin-left: auto;
+        }}
+
+        .toggle-btn {{
+            padding: 6px 12px;
+            background: var(--bg-dark);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            color: var(--text-dim);
+            cursor: pointer;
+            font-size: 0.85em;
+            transition: all 0.2s ease;
+        }}
+
+        .toggle-btn:hover {{
+            border-color: var(--accent-cyan);
+            color: var(--text);
+        }}
+
+        .toggle-btn.active {{
+            border-color: var(--accent-purple);
+            color: var(--accent-purple);
+            background: rgba(163, 113, 247, 0.1);
+        }}
+
+        /* Layer legend */
+        .layer-legend {{
+            display: flex;
+            gap: 16px;
+            padding: 8px 16px;
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 6px;
+            font-size: 0.8em;
+        }}
+
+        .legend-item {{
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }}
+
+        .legend-dot {{
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            border: 2px solid;
+        }}
+
+        .legend-dot.action {{ border-color: var(--accent-green); }}
+        .legend-dot.solver {{ border-color: var(--accent-purple); }}
+        .legend-dot.time {{ border-color: var(--accent-cyan); }}
+
         .graph-container {{
             position: relative;
             overflow: auto;
@@ -401,6 +456,21 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             stroke: var(--accent-red);
         }}
 
+        .node.solver .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-purple);
+        }}
+
+        .node.time .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-cyan);
+        }}
+
+        .node.constraint .node-circle {{
+            fill: var(--bg-card);
+            stroke: var(--accent-cyan);
+        }}
+
         .node.selected .node-circle {{
             stroke-width: 4;
             filter: drop-shadow(0 0 8px currentColor);
@@ -425,6 +495,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             stroke: var(--accent-cyan);
             stroke-width: 3;
         }}
+
 
         /* Action label on the left side per level */
         .level-action {{
@@ -655,6 +726,13 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 </div>
                 {f'<div class="cli-command">{cli_command}</div>' if cli_command else ""}
             </div>
+            <div class="header-controls">
+                <div class="layer-legend">
+                    <div class="legend-item"><span class="legend-dot action"></span>Action</div>
+                    <div class="legend-item"><span class="legend-dot solver"></span>Solver</div>
+                    <div class="legend-item"><span class="legend-dot time"></span>Time</div>
+                </div>
+            </div>
         </header>
 
         <div class="graph-container">
@@ -682,93 +760,458 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
         let selectedNodeId = null;
         let selectedActionName = null;
+        let selectedLabelType = null;  // 'solver' or 'time'
         const sectionStates = {{}};  // Track collapsed state per node
         const otherAttrsStates = {{}};  // Track "other attributes" expanded state per node
+        const collapsedActionIndices = new Set();  // Track which action INDICES (instances) are collapsed
         const NODE_RADIUS = 28;
-        const LEVEL_HEIGHT = 120;
-        const NODE_SPACING = 80;
-        const MIN_SIBLING_SPACING = 20;
+        const LEVEL_HEIGHT = 100;        // Vertical distance between levels
+        const NODE_SPACING = 70;         // Minimum space between node centers
 
-        // Calculate tree layout using proper hierarchical algorithm
-        // This groups children under their parent and centers parents over children
+        // Build a map from action node IDs to their instance index in the action sequence
+        // This allows distinguishing between multiple occurrences of the same action name
+        const actionNodeToIndex = {{}};
+        const actionIndexToNodes = {{}};
+
+        function buildActionInstanceMaps() {{
+            const nodes = treeData.nodes || {{}};
+            const actionSequence = treeData.actions || [];
+
+            // For each action in sequence, find which action nodes belong to it
+            // Action nodes belong to an instance if they match the name AND come in the right order
+            const actionCounts = {{}};  // Track how many times each action name has been seen
+
+            // First, collect all action nodes and their depths
+            const actionNodes = [];
+            for (const [nodeId, node] of Object.entries(nodes)) {{
+                if (node.node_type === 'action' && node.action_name) {{
+                    // Calculate depth by walking up to root
+                    let depth = 0;
+                    let currentId = nodeId;
+                    const visited = new Set();
+                    while (currentId && !visited.has(currentId)) {{
+                        visited.add(currentId);
+                        const n = nodes[currentId];
+                        if (!n) break;
+                        if (n.node_type === 'root') break;
+                        const parents = n.parent_ids || [];
+                        if (parents.length > 0) {{
+                            currentId = parents[0];
+                            depth++;
+                        }} else {{
+                            break;
+                        }}
+                    }}
+                    actionNodes.push({{ nodeId, node, depth, actionName: node.action_name }});
+                }}
+            }}
+
+            // Sort by depth to process in order
+            actionNodes.sort((a, b) => a.depth - b.depth);
+
+            // Now assign each action node to an instance index based on depth and sequence
+            // Group by depth first
+            const byDepth = {{}};
+            for (const an of actionNodes) {{
+                if (!byDepth[an.depth]) byDepth[an.depth] = [];
+                byDepth[an.depth].push(an);
+            }}
+
+            // For each depth level, assign instance indices
+            // Assumption: at each depth, all action nodes with the same name belong to the same instance
+            const depths = Object.keys(byDepth).map(Number).sort((a, b) => a - b);
+            let currentSequenceIdx = 0;
+
+            for (const depth of depths) {{
+                const nodesAtDepth = byDepth[depth];
+                // Get unique action names at this depth
+                const namesAtDepth = [...new Set(nodesAtDepth.map(n => n.actionName))];
+
+                for (const name of namesAtDepth) {{
+                    // Find which instance index this corresponds to
+                    // It should be the next occurrence of this name in the sequence
+                    while (currentSequenceIdx < actionSequence.length &&
+                           actionSequence[currentSequenceIdx] !== name) {{
+                        currentSequenceIdx++;
+                    }}
+
+                    if (currentSequenceIdx < actionSequence.length) {{
+                        // Assign all nodes with this name at this depth to this instance
+                        for (const an of nodesAtDepth) {{
+                            if (an.actionName === name) {{
+                                actionNodeToIndex[an.nodeId] = currentSequenceIdx;
+                                if (!actionIndexToNodes[currentSequenceIdx]) {{
+                                    actionIndexToNodes[currentSequenceIdx] = [];
+                                }}
+                                actionIndexToNodes[currentSequenceIdx].push(an.nodeId);
+                            }}
+                        }}
+                        currentSequenceIdx++;
+                    }}
+                }}
+            }}
+        }}
+        buildActionInstanceMaps();
+
+        // Toggle collapse state for an action by INDEX
+        function toggleActionCollapse(actionIndex) {{
+            if (collapsedActionIndices.has(actionIndex)) {{
+                collapsedActionIndices.delete(actionIndex);
+            }} else {{
+                collapsedActionIndices.add(actionIndex);
+            }}
+            renderGraph();
+        }}
+
+        // Check if a node is an intermediate layer (solver/time)
+        function isIntermediateNode(node) {{
+            const nodeType = node.node_type || 'action';
+            return nodeType === 'solver' || nodeType === 'time' || nodeType === 'constraint';
+        }}
+
+        // Find the action instance INDEX that this node belongs to
+        function findParentActionIndex(nodeId) {{
+            const nodes = treeData.nodes || {{}};
+            const visited = new Set();
+
+            function search(currentId) {{
+                if (visited.has(currentId)) return null;
+                visited.add(currentId);
+
+                const node = nodes[currentId];
+                if (!node) return null;
+
+                // If this is an action node, return its instance index
+                if (node.node_type === 'action' && actionNodeToIndex[currentId] !== undefined) {{
+                    return actionNodeToIndex[currentId];
+                }}
+
+                // If root, stop
+                if (node.node_type === 'root') return null;
+
+                // Look at parents
+                const parentIds = node.parent_ids || (node.parent_id ? [node.parent_id] : []);
+                for (const parentId of parentIds) {{
+                    const result = search(parentId);
+                    if (result !== null) return result;
+                }}
+                return null;
+            }}
+
+            return search(nodeId);
+        }}
+
+        // Find the action name that this intermediate node belongs to (for display purposes)
+        function findParentActionName(nodeId) {{
+            const actionIndex = findParentActionIndex(nodeId);
+            if (actionIndex !== null) {{
+                const actionSequence = treeData.actions || [];
+                return actionSequence[actionIndex] || null;
+            }}
+            return null;
+        }}
+
+        // Find all leaf nodes (nodes with no children) in a subtree
+        function findLeafNodes(nodeId) {{
+            const nodes = treeData.nodes || {{}};
+            const node = nodes[nodeId];
+            if (!node) return [];
+
+            const children = node.children_ids || [];
+            if (children.length === 0) {{
+                return [nodeId];
+            }}
+
+            const leaves = [];
+            for (const childId of children) {{
+                leaves.push(...findLeafNodes(childId));
+            }}
+            return leaves;
+        }}
+
+        // Find "action boundary" nodes - the last nodes before the next action starts
+        // These are nodes that either have no children OR whose children are all action nodes
+        function findActionBoundaryNodes(actionNodeId) {{
+            // When an action is collapsed, find the next visible nodes to show
+            // Skip intermediate (solver/time/constraint) nodes and return next action nodes or leaves
+            const nodes = treeData.nodes || {{}};
+            const actionNode = nodes[actionNodeId];
+            if (!actionNode) return [];
+
+            const boundaryNodes = [];
+            const visited = new Set();
+
+            function traverse(nodeId) {{
+                if (visited.has(nodeId)) return;
+                visited.add(nodeId);
+
+                const node = nodes[nodeId];
+                if (!node) return;
+
+                // If this is an ACTION node (not the starting one), it's a boundary
+                if (node.node_type === 'action') {{
+                    boundaryNodes.push(nodeId);
+                    return;
+                }}
+
+                const children = node.children_ids || [];
+
+                // If no children, this is a leaf intermediate node - include it
+                if (children.length === 0) {{
+                    boundaryNodes.push(nodeId);
+                    return;
+                }}
+
+                // Continue traversing through intermediate nodes
+                for (const childId of children) {{
+                    traverse(childId);
+                }}
+            }}
+
+            // Start from the action node's children (skip the action node itself)
+            const children = actionNode.children_ids || [];
+            for (const childId of children) {{
+                traverse(childId);
+            }}
+
+            return boundaryNodes;
+        }}
+
+        // Check if an action has intermediate children (solver/time/constraint nodes)
+        function hasIntermediateChildren(actionNodeId) {{
+            const nodes = treeData.nodes || {{}};
+            const actionNode = nodes[actionNodeId];
+            if (!actionNode) return false;
+
+            const children = actionNode.children_ids || [];
+            for (const childId of children) {{
+                const child = nodes[childId];
+                if (child && isIntermediateNode(child)) {{
+                    return true;
+                }}
+            }}
+            return false;
+        }}
+
+        // Check if a node should be visible
+        function isNodeVisible(node, nodeId) {{
+            // Root is always visible
+            if (node.node_type === 'root') {{
+                return true;
+            }}
+
+            // Action nodes visibility rules
+            if (node.node_type === 'action') {{
+                const status = node.action_status || 'ok';
+
+                // FAILED action nodes are ALWAYS visible - they are terminal (red nodes)
+                if (status !== 'ok') {{
+                    return true;
+                }}
+
+                // Successful action nodes: hide when collapsed, show when expanded
+                const actionIndex = actionNodeToIndex[nodeId];
+                if (actionIndex !== null && actionIndex !== undefined && collapsedActionIndices.has(actionIndex)) {{
+                    return false;
+                }}
+                return true;
+            }}
+
+            // For intermediate nodes (solver/time/constraint)
+            if (isIntermediateNode(node)) {{
+                const children = node.children_ids || [];
+
+                // LEAF intermediate nodes (no children) are ALWAYS visible
+                // These are the final outputs of an action chain
+                if (children.length === 0) {{
+                    return true;
+                }}
+
+                // Check if all children are action nodes (this node is the last before next action)
+                const nodes = treeData.nodes || {{}};
+                const allChildrenAreActions = children.every(childId => {{
+                    const child = nodes[childId];
+                    return child && child.node_type === 'action';
+                }});
+
+                // If all children are actions, this is a "boundary" solver - ALWAYS show it
+                // When collapsed: this is the visible result (purple)
+                // When expanded: still visible as part of the chain
+                if (allChildrenAreActions) {{
+                    return true;
+                }}
+
+                // Otherwise, hide if parent action is collapsed
+                const parentActionIndex = findParentActionIndex(nodeId);
+                if (parentActionIndex !== null && collapsedActionIndices.has(parentActionIndex)) {{
+                    return false;
+                }}
+            }}
+
+            return true;
+        }}
+
+        // Get visible children of a node (skips hidden nodes)
+        function getVisibleChildren(nodeId) {{
+            const nodes = treeData.nodes || {{}};
+            const node = nodes[nodeId];
+            if (!node) return [];
+
+            const directChildren = node.children_ids || [];
+
+            // Return visible children, recursively skipping hidden nodes
+            const result = [];
+            for (const childId of directChildren) {{
+                const childNode = nodes[childId];
+                if (!childNode) continue;
+
+                if (isNodeVisible(childNode, childId)) {{
+                    result.push(childId);
+                }} else {{
+                    // Child is hidden, get its visible children recursively
+                    result.push(...getVisibleChildren(childId));
+                }}
+            }}
+            return result;
+        }}
+
+        // Get all visible node IDs
+        function getVisibleNodeIds() {{
+            const nodes = treeData.nodes || {{}};
+            const visibleIds = [];
+            for (const [id, node] of Object.entries(nodes)) {{
+                if (isNodeVisible(node, id)) {{
+                    visibleIds.push(id);
+                }}
+            }}
+            return visibleIds;
+        }}
+
+        // Calculate tree layout using a simple level-based algorithm
+        // This is more robust for DAG structures and prevents overlapping
         function calculateLayout() {{
             const nodes = treeData.nodes || {{}};
             const rootId = treeData.root_id;
             const layout = {{}};
 
-            // Build adjacency list
+            // Build adjacency list using visible children
             const children = {{}};
             for (const [id, node] of Object.entries(nodes)) {{
-                children[id] = node.children_ids || [];
+                if (isNodeVisible(node, id)) {{
+                    children[id] = getVisibleChildren(id);
+                }}
             }}
 
-            // Calculate depth (level) for each node
+            // Calculate depth (level) for each visible node using BFS
+            // This handles DAGs correctly by taking the minimum depth
             const depths = {{}};
-            function calcDepth(nodeId, depth) {{
+            const visited = new Set();
+            const queue = [[rootId, 0]];
+
+            while (queue.length > 0) {{
+                const [nodeId, depth] = queue.shift();
+                const node = nodes[nodeId];
+                if (!node || !isNodeVisible(node, nodeId)) continue;
+                if (visited.has(nodeId)) continue;
+
+                visited.add(nodeId);
                 depths[nodeId] = depth;
+
                 for (const childId of children[nodeId] || []) {{
-                    calcDepth(childId, depth + 1);
+                    if (!visited.has(childId)) {{
+                        queue.push([childId, depth + 1]);
+                    }}
                 }}
             }}
-            calcDepth(rootId, 0);
 
-            // Calculate subtree width for each node (bottom-up)
-            const subtreeWidth = {{}};
-            function calcWidth(nodeId) {{
-                const kids = children[nodeId] || [];
-                if (kids.length === 0) {{
-                    subtreeWidth[nodeId] = NODE_SPACING;
-                    return NODE_SPACING;
-                }}
-                let totalWidth = 0;
-                for (const childId of kids) {{
-                    totalWidth += calcWidth(childId);
-                }}
-                // Add spacing between siblings
-                totalWidth += (kids.length - 1) * MIN_SIBLING_SPACING;
-                subtreeWidth[nodeId] = Math.max(NODE_SPACING, totalWidth);
-                return subtreeWidth[nodeId];
-            }}
-            calcWidth(rootId);
-
-            // Assign x positions (top-down), centering parent over children
-            let maxWidth = 0;
-            function assignX(nodeId, leftX) {{
-                const kids = children[nodeId] || [];
-                const width = subtreeWidth[nodeId];
-
-                if (kids.length === 0) {{
-                    // Leaf node: center in its allocated space
-                    layout[nodeId] = {{ x: leftX + width / 2 }};
-                }} else {{
-                    // Internal node: place children, then center self
-                    let childX = leftX;
-                    let firstChildCenter = 0;
-                    let lastChildCenter = 0;
-
-                    kids.forEach((childId, idx) => {{
-                        assignX(childId, childX);
-                        if (idx === 0) firstChildCenter = layout[childId].x;
-                        if (idx === kids.length - 1) lastChildCenter = layout[childId].x;
-                        childX += subtreeWidth[childId] + MIN_SIBLING_SPACING;
-                    }});
-
-                    // Center parent over children
-                    layout[nodeId] = {{ x: (firstChildCenter + lastChildCenter) / 2 }};
-                }}
-
-                maxWidth = Math.max(maxWidth, Math.abs(layout[nodeId].x));
-            }}
-
-            // Start from center (negative half of root subtree width)
-            const rootWidth = subtreeWidth[rootId];
-            assignX(rootId, -rootWidth / 2);
-
-            // Assign y positions based on depth
+            // Group nodes by their level
+            const levels = {{}};
             let maxLevel = 0;
             for (const [nodeId, depth] of Object.entries(depths)) {{
-                layout[nodeId].y = depth * LEVEL_HEIGHT + NODE_RADIUS + 40;
+                if (!levels[depth]) levels[depth] = [];
+                levels[depth].push(nodeId);
                 maxLevel = Math.max(maxLevel, depth);
+            }}
+
+            // Position nodes within each level
+            // Use a simple even distribution with minimum spacing
+            let maxWidth = 0;
+            const MIN_NODE_SPACING = NODE_SPACING + 10;  // Minimum space between node centers
+
+            for (let level = 0; level <= maxLevel; level++) {{
+                const nodesAtLevel = levels[level] || [];
+                const count = nodesAtLevel.length;
+
+                if (count === 0) continue;
+
+                // Calculate total width needed for this level
+                const levelWidth = (count - 1) * MIN_NODE_SPACING;
+                const startX = -levelWidth / 2;
+
+                // Sort nodes to minimize edge crossings
+                // Try to place children near their parents
+                if (level > 0) {{
+                    nodesAtLevel.sort((a, b) => {{
+                        const nodeA = nodes[a];
+                        const nodeB = nodes[b];
+                        const parentA = (nodeA.parent_ids || [])[0];
+                        const parentB = (nodeB.parent_ids || [])[0];
+                        const posA = parentA && layout[parentA] ? layout[parentA].x : 0;
+                        const posB = parentB && layout[parentB] ? layout[parentB].x : 0;
+                        return posA - posB;
+                    }});
+                }}
+
+                // Assign x positions
+                nodesAtLevel.forEach((nodeId, idx) => {{
+                    const x = startX + idx * MIN_NODE_SPACING;
+                    layout[nodeId] = {{
+                        x: x,
+                        y: level * LEVEL_HEIGHT + NODE_RADIUS + 40,
+                        level: level
+                    }};
+                    maxWidth = Math.max(maxWidth, Math.abs(x));
+                }});
+            }}
+
+            // Second pass: try to center parents over their children
+            for (let level = maxLevel - 1; level >= 0; level--) {{
+                const nodesAtLevel = levels[level] || [];
+
+                for (const nodeId of nodesAtLevel) {{
+                    const childIds = children[nodeId] || [];
+                    if (childIds.length === 0) continue;
+
+                    // Calculate average position of children
+                    let sumX = 0;
+                    let count = 0;
+                    for (const childId of childIds) {{
+                        if (layout[childId]) {{
+                            sumX += layout[childId].x;
+                            count++;
+                        }}
+                    }}
+
+                    if (count > 0) {{
+                        const targetX = sumX / count;
+                        // Only move if it doesn't cause overlap with siblings
+                        const siblings = levels[level];
+                        const myIdx = siblings.indexOf(nodeId);
+                        const leftNeighbor = myIdx > 0 ? layout[siblings[myIdx - 1]] : null;
+                        const rightNeighbor = myIdx < siblings.length - 1 ? layout[siblings[myIdx + 1]] : null;
+
+                        let newX = targetX;
+                        if (leftNeighbor && newX < leftNeighbor.x + MIN_NODE_SPACING) {{
+                            newX = leftNeighbor.x + MIN_NODE_SPACING;
+                        }}
+                        if (rightNeighbor && newX > rightNeighbor.x - MIN_NODE_SPACING) {{
+                            newX = rightNeighbor.x - MIN_NODE_SPACING;
+                        }}
+
+                        layout[nodeId].x = newX;
+                        maxWidth = Math.max(maxWidth, Math.abs(newX));
+                    }}
+                }}
             }}
 
             return {{ layout, maxWidth, maxLevel }};
@@ -787,60 +1230,242 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
             let html = '';
 
-            // Track which actions we've labeled per level (to avoid duplicates)
-            const levelActions = {{}};
+            // ============================================
+            // SIMPLIFIED LABEL SYSTEM
+            // ============================================
+            //
+            // The key insight: labels should be placed based on the ACTION SEQUENCE,
+            // not based on level numbers. The action sequence is the same regardless
+            // of which actions are collapsed/expanded.
+            //
+            // For each action in sequence:
+            //   - Find the Y position where that action's nodes appear (or boundary if collapsed)
+            //   - Place label between the previous action's area and this action's area
+            //
+            // For solver/time labels:
+            //   - Only show them at levels where there's no action label
+
+            const nodes = treeData.nodes || {{}};
+            const leftX = -width / 2 + 60;
+            const actionSequence = treeData.actions || [];
 
             // Draw edges first (so they're behind nodes)
-            // For DAG support, we draw edges from parent to child by iterating children
-            // and checking parent_ids (which may contain multiple parents for merged nodes)
-            const nodes = treeData.nodes || {{}};
-
             for (const [nodeId, node] of Object.entries(nodes)) {{
+                if (!isNodeVisible(node, nodeId)) continue;
+
                 const pos = layout[nodeId];
                 if (!pos) continue;
 
-                for (const childId of node.children_ids || []) {{
+                const visibleKids = getVisibleChildren(nodeId);
+
+                for (const childId of visibleKids) {{
+                    const childNode = nodes[childId];
+                    if (!childNode) continue;
+
                     const childPos = layout[childId];
                     if (!childPos) continue;
 
-                    // Curved path - all edges use same style
                     const midY = (pos.y + childPos.y) / 2;
                     const pathD = `M${{pos.x}},${{pos.y + NODE_RADIUS}} ` +
                                   `Q${{pos.x}},${{midY}} ${{childPos.x}},${{childPos.y - NODE_RADIUS}}`;
-                    html += `<path class="edge" d="${{pathD}}" />`;
 
-                    // Track action for this level transition (only label once per level)
-                    const childNode = nodes[childId];
-                    if (childNode && childNode.action_name) {{
-                        const levelKey = Math.round(childPos.y);
-                        if (!levelActions[levelKey]) {{
-                            levelActions[levelKey] = {{
-                                action: childNode.action_name,
-                                y: midY,
-                                hasFailure: childNode.action_status !== 'ok'
-                            }};
-                        }} else if (childNode.action_status !== 'ok') {{
-                            levelActions[levelKey].hasFailure = true;
-                        }}
-                    }}
+                    html += `<path class="edge" d="${{pathD}}" />`;
                 }}
             }}
 
-            // Draw action labels on the left side (once per level)
-            const leftX = -width / 2 + 60;
-            for (const [levelY, info] of Object.entries(levelActions)) {{
-                const isSelected = selectedActionName === info.action;
-                let labelClass = 'level-action';
-                if (info.hasFailure) labelClass += ' has-failure';
-                if (isSelected) labelClass += ' selected';
-                const txt = `<text class="${{labelClass}}" x="${{leftX}}" y="${{info.y}}" ` +
-                    `text-anchor="start" onclick="toggleActionPanel('${{info.action}}')" ` +
-                    `style="cursor: pointer;">${{info.action}}</text>`;
-                html += txt;
+            // ============================================
+            // BUILD LABEL LIST FROM ACTION SEQUENCE (BY INSTANCE INDEX)
+            // ============================================
+
+            // For each action INSTANCE, find the minimum Y position of nodes belonging to it
+            // (either action node itself if expanded, or boundary nodes if collapsed)
+            const actionInstanceYPositions = {{}};  // Map from instance index to {{ minY, maxY }}
+
+            for (let instanceIdx = 0; instanceIdx < actionSequence.length; instanceIdx++) {{
+                let minY = Infinity;
+                let maxY = -Infinity;
+
+                // Find all visible nodes that belong to this action instance
+                for (const [nodeId, pos] of Object.entries(layout)) {{
+                    const node = nodes[nodeId];
+                    if (!node) continue;
+
+                    // Check if this node belongs to this action instance
+                    const parentActionIdx = findParentActionIndex(nodeId);
+                    if (parentActionIdx === instanceIdx) {{
+                        minY = Math.min(minY, pos.y);
+                        maxY = Math.max(maxY, pos.y);
+                    }}
+
+                    // Also check if this IS the action node for this instance
+                    if (node.node_type === 'action' && actionNodeToIndex[nodeId] === instanceIdx) {{
+                        minY = Math.min(minY, pos.y);
+                        maxY = Math.max(maxY, pos.y);
+                    }}
+                }}
+
+                if (minY !== Infinity) {{
+                    actionInstanceYPositions[instanceIdx] = {{ minY, maxY }};
+                }}
             }}
 
-            // Draw nodes
+            // Build labels array with proper Y ordering based on action sequence
+            const labelsToRender = [];
+            let prevMaxY = layout[treeData.root_id]?.y || 0;  // Start after root
+
+            for (let instanceIdx = 0; instanceIdx < actionSequence.length; instanceIdx++) {{
+                const actionName = actionSequence[instanceIdx];
+                const positions = actionInstanceYPositions[instanceIdx];
+
+                if (!positions) continue;
+
+                // Label Y = midpoint between previous action's end and this action's start
+                const labelY = (prevMaxY + positions.minY) / 2;
+
+                labelsToRender.push({{
+                    type: 'action',
+                    name: actionName,
+                    instanceIndex: instanceIdx,  // Track instance for click handling
+                    y: labelY,
+                    isCollapsed: collapsedActionIndices.has(instanceIdx),
+                    hasFailure: false  // Will check below
+                }});
+
+                // Check for failures in this action instance's nodes
+                const instanceNodes = actionIndexToNodes[instanceIdx] || [];
+                for (const nodeId of instanceNodes) {{
+                    const node = nodes[nodeId];
+                    if (node && node.action_status !== 'ok') {{
+                        labelsToRender[labelsToRender.length - 1].hasFailure = true;
+                        break;
+                    }}
+                }}
+
+                prevMaxY = positions.maxY;
+            }}
+
+            // Now add Solver/Time labels for intermediate nodes
+            // ONLY show these labels when the parent action is EXPANDED
+            const actionLabelYs = new Set(labelsToRender.map(l => Math.round(l.y)));
+            const solverTimeLabels = [];
+
             for (const [nodeId, node] of Object.entries(nodes)) {{
+                if (!isNodeVisible(node, nodeId)) continue;
+                const pos = layout[nodeId];
+                if (!pos) continue;
+
+                const nodeType = node.node_type || 'action';
+                if (nodeType !== 'solver' && nodeType !== 'time' && nodeType !== 'constraint') continue;
+
+                // CRITICAL: Only show solver/time labels when parent action is EXPANDED
+                // If the parent action is collapsed, the intermediate nodes are hidden
+                // and showing a label would be confusing ("out of nowhere")
+                const parentActionIndex = findParentActionIndex(nodeId);
+                if (parentActionIndex !== null && collapsedActionIndices.has(parentActionIndex)) {{
+                    continue;  // Skip label for collapsed action's intermediate nodes
+                }}
+
+                // Find the previous visible node to calculate label Y
+                const parentIds = node.parent_ids || [];
+                let parentY = pos.y - LEVEL_HEIGHT;
+                for (const pid of parentIds) {{
+                    if (layout[pid]) {{
+                        parentY = layout[pid].y;
+                        break;
+                    }}
+                }}
+
+                const labelY = (parentY + pos.y) / 2;
+                const roundedY = Math.round(labelY);
+
+                // Skip if too close to an action label
+                let tooClose = false;
+                for (const aY of actionLabelYs) {{
+                    if (Math.abs(roundedY - aY) < 30) {{
+                        tooClose = true;
+                        break;
+                    }}
+                }}
+                if (tooClose) continue;
+
+                // Check if we already have a label at this Y position
+                const existingLabel = solverTimeLabels.find(l => Math.abs(Math.round(l.y) - roundedY) < 30);
+                if (!existingLabel) {{
+                    solverTimeLabels.push({{
+                        type: nodeType === 'solver' ? 'solver' : 'time',
+                        y: labelY
+                    }});
+                }}
+            }}
+
+            // Merge solver/time labels into main list
+            labelsToRender.push(...solverTimeLabels);
+
+            // Sort by Y position
+            labelsToRender.sort((a, b) => a.y - b.y);
+
+            // Final collision avoidance pass
+            const MIN_LABEL_SPACING = 28;
+            const usedYPositions = [];
+
+            for (const label of labelsToRender) {{
+                let y = label.y;
+
+                for (const usedY of usedYPositions) {{
+                    if (Math.abs(y - usedY) < MIN_LABEL_SPACING) {{
+                        y = usedY + MIN_LABEL_SPACING;
+                    }}
+                }}
+
+                label.y = y;
+                usedYPositions.push(y);
+            }}
+
+            // Render all labels
+            for (const label of labelsToRender) {{
+                if (label.type === 'action') {{
+                    const isSelected = selectedActionName === label.name;
+                    let labelClass = 'level-action';
+                    if (label.hasFailure) labelClass += ' has-failure';
+                    if (isSelected) labelClass += ' selected';
+
+                    const toggleIcon = label.isCollapsed ? '+' : '−';
+                    const toggleColor = label.isCollapsed ? 'var(--accent-gold)' : 'var(--text-dim)';
+                    const toggleX = leftX - 25;
+
+                    html += `
+                        <g transform="translate(${{toggleX}}, ${{label.y}})"
+                           onclick="event.stopPropagation(); toggleActionCollapse(${{label.instanceIndex}})"
+                           style="cursor: pointer;">
+                            <circle r="10" fill="var(--bg-card)" stroke="${{toggleColor}}" stroke-width="1.5" />
+                            <text y="4" fill="${{toggleColor}}" font-size="14" font-weight="bold"
+                                  text-anchor="middle">${{toggleIcon}}</text>
+                        </g>
+                    `;
+
+                    html += `<text class="${{labelClass}}" x="${{leftX}}" y="${{label.y}}" ` +
+                        `text-anchor="start" onclick="toggleActionPanel('${{label.name}}')" ` +
+                        `style="cursor: pointer;">${{label.name}}</text>`;
+
+                }} else if (label.type === 'solver') {{
+                    const labelClass = selectedLabelType === 'solver' ? 'level-action selected' : 'level-action';
+                    html += `<text class="${{labelClass}}" x="${{leftX}}" y="${{label.y}}" ` +
+                        `text-anchor="start" onclick="showLabelPanel('solver')" ` +
+                        `style="cursor: pointer; fill: var(--accent-purple);">Solver</text>`;
+
+                }} else if (label.type === 'time') {{
+                    const labelClass = selectedLabelType === 'time' ? 'level-action selected' : 'level-action';
+                    html += `<text class="${{labelClass}}" x="${{leftX}}" y="${{label.y}}" ` +
+                        `text-anchor="start" onclick="showLabelPanel('time')" ` +
+                        `style="cursor: pointer; fill: var(--accent-cyan);">Time</text>`;
+                }}
+            }}
+
+            // Draw nodes (only visible ones)
+            for (const [nodeId, node] of Object.entries(nodes)) {{
+                // Skip hidden nodes
+                if (!isNodeVisible(node, nodeId)) continue;
+
                 const pos = layout[nodeId];
                 if (!pos) continue;
 
@@ -849,7 +1474,23 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 const isRoot = parentIds.length === 0;
                 const isSelected = nodeId === selectedNodeId;
                 const status = node.action_status || 'ok';
-                const statusClass = isRoot ? 'root' : (status === 'ok' ? 'success' : 'failed');
+                const nodeType = node.node_type || 'action';
+
+                // Determine status class based on node_type
+                let statusClass;
+                if (isRoot) {{
+                    statusClass = 'root';
+                }} else if (nodeType === 'solver') {{
+                    statusClass = 'solver';
+                }} else if (nodeType === 'time') {{
+                    statusClass = 'time';
+                }} else if (nodeType === 'constraint') {{
+                    statusClass = 'constraint';
+                }} else if (status !== 'ok') {{
+                    statusClass = 'failed';
+                }} else {{
+                    statusClass = 'success';
+                }}
 
                 const classes = `node ${{statusClass}} ${{isSelected ? 'selected' : ''}}`;
                 html += `
@@ -888,6 +1529,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
         function showActionPanel(actionName) {{
             selectedActionName = actionName;
+            selectedLabelType = null;  // Clear label selection
             const panel = document.getElementById('action-panel');
             const title = document.getElementById('action-panel-title');
             const content = document.getElementById('action-panel-content');
@@ -904,8 +1546,38 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
 
         function hideActionPanel() {{
             selectedActionName = null;
+            selectedLabelType = null;
             const panel = document.getElementById('action-panel');
             panel.classList.remove('visible');
+            renderGraph();  // Re-render to update selected state
+        }}
+
+        // Show Solver or Time panel
+        function showLabelPanel(labelType) {{
+            if (selectedLabelType === labelType) {{
+                hideActionPanel();
+                return;
+            }}
+
+            selectedLabelType = labelType;
+            selectedActionName = null;  // Clear action selection
+            const panel = document.getElementById('action-panel');
+            const title = document.getElementById('action-panel-title');
+            const content = document.getElementById('action-panel-content');
+
+            if (labelType === 'solver') {{
+                title.textContent = 'Solver Rules';
+                const rules = treeData.solver_definitions?.solver?.rules;
+                content.innerHTML = rules ? renderSolverRules(rules) :
+                    '<p style="color: var(--text-dim);">No solver rules defined</p>';
+            }} else if (labelType === 'time') {{
+                title.textContent = 'Time Constraints';
+                const branches = treeData.constraint_definitions?.constraint?.branches;
+                content.innerHTML = branches ? renderConstraintBranches(branches) :
+                    '<p style="color: var(--text-dim);">No time constraints defined</p>';
+            }}
+
+            panel.classList.add('visible');
             renderGraph();  // Re-render to update selected state
         }}
 
@@ -1135,10 +1807,35 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             const status = node.action_status || 'ok';
             const statusClass = isRoot ? '' : (status === 'ok' ? 'success' : 'failed');
 
+            const nodeType = node.node_type || 'action';
+
+            // Determine node type label and color
+            let nodeTypeLabel = 'Action';
+            let nodeTypeColor = 'var(--accent-green)';
+            if (nodeType === 'root') {{
+                nodeTypeLabel = 'Initial State';
+                nodeTypeColor = 'var(--accent-gold)';
+            }} else if (nodeType === 'solver') {{
+                nodeTypeLabel = 'Solver';
+                nodeTypeColor = 'var(--accent-purple)';
+            }} else if (nodeType === 'time') {{
+                nodeTypeLabel = 'Time';
+                nodeTypeColor = 'var(--accent-cyan)';
+            }} else if (nodeType === 'constraint') {{
+                nodeTypeLabel = 'Constraint';
+                nodeTypeColor = 'var(--accent-cyan)';
+            }}
+
             let html = `
                 <div class="detail-header">
                     <h2>${{nodeId}}</h2>
-                    <div class="action ${{statusClass}}">${{node.action_name || 'Initial State'}}</div>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <span style="background: ${{nodeTypeColor}}; color: #0d1117; padding: 2px 8px;
+                                     border-radius: 4px; font-size: 0.75em; font-weight: 600;">
+                            ${{nodeTypeLabel}}
+                        </span>
+                        <div class="action ${{statusClass}}">${{node.action_name || 'Initial State'}}</div>
+                    </div>
             `;
 
             if (node.branch_condition) {{
@@ -1378,6 +2075,199 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             }}
         }}
 
+        // Render solver rules for the detail panel
+        function renderSolverRules(rules) {{
+            if (!rules || rules.length === 0) return '<p style="color: var(--text-dim);">No rules defined</p>';
+
+            let html = '<div class="solver-rules">';
+            for (const rule of rules) {{
+                html += `
+                    <div style="margin-bottom: 12px; padding: 10px; background: rgba(163, 113, 247, 0.1);
+                                border-left: 3px solid var(--accent-purple); border-radius: 4px;">
+                        <div style="font-weight: 600; color: var(--accent-purple);">${{rule.name}}</div>
+                        <div style="font-size: 0.85em; color: var(--text-dim); margin-top: 4px;">
+                            ${{rule.description || ''}}
+                        </div>
+                `;
+
+                if (rule.condition) {{
+                    html += `<div style="margin-top: 8px; font-size: 0.85em;">
+                        <span style="color: var(--text-dim);">IF:</span>
+                        <span style="color: var(--text);">${{rule.condition.description || 'condition'}}</span>
+                    </div>`;
+                }}
+
+                if (rule.implies && rule.implies.length > 0) {{
+                    html += `<div style="margin-top: 4px; font-size: 0.85em;">
+                        <span style="color: var(--accent-green);">THEN:</span>
+                    </div>`;
+                    for (const effect of rule.implies) {{
+                        html += `<div style="margin-left: 16px; font-size: 0.85em;">
+                            <span style="color: var(--text);">${{effect.target}} = ${{effect.value}}</span>
+                        </div>`;
+                    }}
+                }}
+
+                // For simple rules with condition/implies/otherwise (no cases)
+                if (rule.otherwise && rule.otherwise.length > 0 && (!rule.cases || rule.cases.length === 0)) {{
+                    html += `<div style="margin-top: 4px; font-size: 0.85em;">
+                        <span style="color: var(--accent-red);">ELSE:</span>
+                    </div>`;
+                    for (const effect of rule.otherwise) {{
+                        html += `<div style="margin-left: 16px; font-size: 0.85em;">
+                            <span style="color: var(--text);">${{effect.target}} = ${{effect.value}}</span>
+                        </div>`;
+                    }}
+                }}
+
+                // For case-based rules: show cases first, then otherwise
+                if (rule.cases && rule.cases.length > 0) {{
+                    html += '<div style="margin-top: 8px; font-size: 0.85em;">';
+                    for (let i = 0; i < rule.cases.length; i++) {{
+                        const c = rule.cases[i];
+                        const label = i === 0 ? 'IF' : 'ELIF';
+                        html += `<div style="margin-top: 4px;">
+                            <span style="color: var(--accent-gold);">${{label}}:</span>
+                            <span style="color: var(--text);">${{c.condition?.description || 'condition'}}</span>
+                        </div>`;
+                        html += `<div style="margin-left: 16px;">
+                            <span style="color: var(--accent-green);">THEN:</span>
+                        </div>`;
+                        for (const effect of c.implies || []) {{
+                            html += `<div style="margin-left: 32px;">
+                                <span style="color: var(--text);">${{effect.target}} = ${{effect.value}}</span>
+                            </div>`;
+                        }}
+                    }}
+                    // Show otherwise AFTER cases
+                    if (rule.otherwise && rule.otherwise.length > 0) {{
+                        html += `<div style="margin-top: 4px;">
+                            <span style="color: var(--accent-red);">ELSE:</span>
+                        </div>`;
+                        html += `<div style="margin-left: 16px;">
+                            <span style="color: var(--accent-green);">THEN:</span>
+                        </div>`;
+                        for (const effect of rule.otherwise) {{
+                            html += `<div style="margin-left: 32px;">
+                                <span style="color: var(--text);">${{effect.target}} = ${{effect.value}}</span>
+                            </div>`;
+                        }}
+                    }}
+                    html += '</div>';
+                }}
+
+                html += '</div>';
+            }}
+            html += '</div>';
+            return html;
+        }}
+
+        // Render constraint branches for the detail panel
+        function renderConstraintBranches(branches) {{
+            if (!branches || branches.length === 0) return '<p style="color: var(--text-dim);">No constraints</p>';
+
+            // Known space complements for resolving negated values
+            const spaceComplements = {{
+                // binary_state: off, on
+                'off': 'on',
+                'on': 'off',
+                // brightness_level: none, low, medium, high
+                'none': '{{low, medium, high}}',
+                'low': '{{none, medium, high}}',
+                'medium': '{{none, low, high}}',
+                'high': '{{none, low, medium}}',
+                // battery_level: empty, low, medium, high, full
+                'empty': '{{low, medium, high, full}}',
+                'full': '{{empty, low, medium, high}}',
+            }};
+
+            // Helper to format values - resolve negated values to actual valid values
+            function formatValue(val) {{
+                if (typeof val === 'string' && val.startsWith('!')) {{
+                    const excluded = val.slice(1);
+                    // Look up the complement in known spaces
+                    if (spaceComplements[excluded]) {{
+                        return spaceComplements[excluded];
+                    }}
+                    // Fallback to "not X" if unknown
+                    return `not ${{excluded}}`;
+                }}
+                return val;
+            }}
+
+            let html = '<div class="constraint-branches">';
+
+            // Add explanation header
+            html += `<p style="color: var(--text-dim); font-size: 0.85em; margin-bottom: 12px;">
+                Time constraints define what states are possible when time passes and values change due to trends.
+                They ensure the world stays consistent over time.
+            </p>`;
+
+            for (const branch of branches) {{
+                html += `
+                    <div style="margin-bottom: 12px; padding: 10px; background: rgba(88, 166, 255, 0.1);
+                                border-left: 3px solid var(--accent-cyan); border-radius: 4px;">
+                `;
+
+                if (branch.condition) {{
+                    html += `<div style="font-size: 0.85em;">
+                        <span style="color: var(--accent-gold);">IF:</span>
+                        <span style="color: var(--text);">${{branch.condition.description || 'condition'}}</span>
+                    </div>`;
+                }}
+
+                if (branch.effects && branch.effects.length > 0) {{
+                    html += `<div style="margin-top: 4px; margin-left: 16px; font-size: 0.85em;">
+                        <span style="color: var(--accent-green);">THEN:</span>
+                    </div>`;
+                    for (const effect of branch.effects) {{
+                        html += `<div style="margin-left: 32px; font-size: 0.85em;">
+                            <span style="color: var(--text);">${{effect.target}} = ${{formatValue(effect.value)}}</span>
+                        </div>`;
+                    }}
+                }}
+
+                // Render elif_cases
+                if (branch.elif_cases && branch.elif_cases.length > 0) {{
+                    for (const elifCase of branch.elif_cases) {{
+                        html += `<div style="margin-top: 4px; font-size: 0.85em;">
+                            <span style="color: var(--accent-gold);">ELIF:</span>
+                            <span style="color: var(--text);">${{elifCase.condition?.description || 'condition'}}</span>
+                        </div>`;
+                        if (elifCase.effects && elifCase.effects.length > 0) {{
+                            html += `<div style="margin-left: 16px; font-size: 0.85em;">
+                                <span style="color: var(--accent-green);">THEN:</span>
+                            </div>`;
+                            for (const effect of elifCase.effects) {{
+                                const fv = formatValue(effect.value);
+                                html += `<div style="margin-left: 32px; font-size: 0.85em;">
+                                    <span style="color: var(--text);">${{effect.target}} = ${{fv}}</span>
+                                </div>`;
+                            }}
+                        }}
+                    }}
+                }}
+
+                if (branch.else_effects && branch.else_effects.length > 0) {{
+                    html += `<div style="margin-top: 4px; font-size: 0.85em;">
+                        <span style="color: var(--accent-red);">ELSE:</span>
+                    </div>`;
+                    html += `<div style="margin-left: 16px; font-size: 0.85em;">
+                        <span style="color: var(--accent-green);">THEN:</span>
+                    </div>`;
+                    for (const effect of branch.else_effects) {{
+                        html += `<div style="margin-left: 32px; font-size: 0.85em;">
+                            <span style="color: var(--text);">${{effect.target}} = ${{formatValue(effect.value)}}</span>
+                        </div>`;
+                    }}
+                }}
+
+                html += '</div>';
+            }}
+            html += '</div>';
+            return html;
+        }}
+
         function formatBranchCondition(bc) {{
             // Handle compound conditions (AND/OR)
             if (bc.compound_type && bc.sub_conditions && bc.sub_conditions.length > 0) {{
@@ -1506,6 +2396,17 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         function hideTooltip() {{
             document.getElementById('tooltip').classList.remove('visible');
         }}
+
+        // Initialize: collapse all action instances by default
+        // When collapsed: shows solver boundary nodes (purple) instead of action nodes (green)
+        // Users can click action labels (+) to expand and see the action nodes
+        function initializeCollapsedActions() {{
+            const actionSequence = treeData.actions || [];
+            for (let i = 0; i < actionSequence.length; i++) {{
+                collapsedActionIndices.add(i);
+            }}
+        }}
+        initializeCollapsedActions();
 
         // Initial render
         renderGraph();

@@ -48,3 +48,4 @@ __all__ = [
     "get_condition_registry",
     "register_condition",
 ]
+# todo : add something about the registry in the readme

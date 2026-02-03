@@ -1,5 +1,5 @@
 # Flashlight object definition
-# Simplified for tree-based simulation with flat if-elif-else structure
+# Actions only set DIRECT effects. Solver derives dependent state.
 
 type: flashlight
 parts:
@@ -29,6 +29,130 @@ parts:
         mutable: true
         default: AA
 
+# =============================================================================
+# SOLVER RULES: Dependency-based state derivation
+# These define HOW state derives from other state (causal relationships)
+# =============================================================================
+solver:
+  # Rule 0: Battery drain depends on switch position
+  # "When switch is on, battery drains over time"
+  - name: battery_drain_when_on
+    priority: 5
+    description: "Battery drains when switch is on"
+    condition:
+      type: attribute_check
+      target: switch.position
+      operator: equals
+      value: on
+    implies:
+      - type: set_trend
+        target: battery.level
+        direction: down
+    otherwise:
+      - type: set_trend
+        target: battery.level
+        direction: none
+
+  # Rule 0b: Empty battery cannot drain further
+  # "If battery is already empty, no downward trend is possible"
+  - name: empty_battery_no_drain
+    priority: 6
+    description: "Empty battery cannot drain further"
+    condition:
+      type: attribute_check
+      target: battery.level
+      operator: equals
+      value: empty
+    implies:
+      - type: set_trend
+        target: battery.level
+        direction: none
+
+  # Rule 1: Bulb state depends on switch AND battery
+  # "If switch is on AND battery is not empty, then bulb is on"
+  - name: bulb_on_when_powered
+    priority: 10
+    description: "Bulb turns on when switch is on and battery has power"
+    condition:
+      type: and
+      conditions:
+        - type: attribute_check
+          target: switch.position
+          operator: equals
+          value: on
+        - type: attribute_check
+          target: battery.level
+          operator: not_equals
+          value: empty
+    implies:
+      - type: set_attribute
+        target: bulb.state
+        value: on
+    otherwise:
+      - type: set_attribute
+        target: bulb.state
+        value: off
+
+  # Rule 2: Brightness depends on battery level (only when bulb is on)
+  - name: brightness_from_battery
+    priority: 20
+    description: "Brightness level derived from battery level"
+    precondition:
+      type: attribute_check
+      target: bulb.state
+      operator: equals
+      value: on
+    cases:
+      - condition:
+          type: attribute_check
+          target: battery.level
+          operator: in
+          value: [full, high]
+        implies:
+          - type: set_attribute
+            target: bulb.brightness
+            value: high
+      - condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: medium
+        implies:
+          - type: set_attribute
+            target: bulb.brightness
+            value: medium
+      - condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: low
+        implies:
+          - type: set_attribute
+            target: bulb.brightness
+            value: low
+    otherwise:
+      - type: set_attribute
+        target: bulb.brightness
+        value: none
+
+  # Rule 3: Brightness is none when bulb is off
+  - name: no_brightness_when_off
+    priority: 30
+    description: "No brightness when bulb is off"
+    condition:
+      type: attribute_check
+      target: bulb.state
+      operator: equals
+      value: off
+    implies:
+      - type: set_attribute
+        target: bulb.brightness
+        value: none
+
+# =============================================================================
+# CONSTRAINTS: Time-based state consistency
+# These define what states can COEXIST over time (temporal consistency)
+# =============================================================================
 constraints:
   # Dependency constraint: bulb can only be on if battery is not empty
   - type: dependency
@@ -43,122 +167,136 @@ constraints:
       operator: not_equals
       value: empty
 
-  # Branching constraint: defines atomic states based on battery level
-  # IF battery is empty: bulb must be off and brightness must be none
-  # ELSE (battery not empty): bulb can't be off and brightness can't be none
+  # Branching constraint: Split on battery level condition
+  # TIME step expands trend (e.g., medium + down -> {empty, low, medium})
+  # Then this constraint creates one branch per atom state:
+  #   1. empty branch - battery depleted, trend stops, bulb off
+  #   2. high branch - battery at high level
+  #   3. full branch - battery at full level
+  #   4. low branch - battery at low level
+  #   5. medium branch - battery at medium level
   - type: branching_constraint
+    name: battery_depleted_check
     condition:
       type: attribute_check
       target: battery.level
       operator: equals
       value: empty
     effects:
+      # Empty branch: battery is depleted
+      - type: set_attribute
+        target: battery.level
+        value: empty
+      - type: set_trend
+        target: battery.level
+        direction: none
       - type: set_attribute
         target: bulb.brightness
         value: none
       - type: set_attribute
         target: bulb.state
         value: off
-    else_effects:
-      # Exclude "off" from bulb.state when battery is not empty
-      - type: set_attribute
-        target: bulb.state
-        value: "!off"
-      # Exclude "none" from brightness when battery is not empty
-      - type: set_attribute
-        target: bulb.brightness
-        value: "!none"
-
-behaviors:
-  # Turn on: All consumables trend down when in use
-  turn_on:
-    # Precondition: battery must not be empty
-    preconditions:
-      - type: attribute_check
-        target: battery.level
-        operator: not_equals
-        value: empty
-    effects:
-      # Always set switch on
-      - type: set_attribute
-        target: switch.position
-        value: "on"
-      # Bulb turns on, but trends down (will turn off when battery empty)
-      - type: set_attribute
-        target: bulb.state
-        value: "on"
-      - type: set_trend
-        target: bulb.state
-        direction: down
-      # Battery drains (trend down)
-      - type: set_trend
-        target: battery.level
-        direction: down
-      # Brightness will dim (trend down)
-      - type: set_trend
-        target: bulb.brightness
-        direction: down
-      # Flat if-elif-else for brightness based on battery.level
-      # IF battery.level in {full, high} -> brightness = high
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: battery.level
-          operator: in
-          value: [full, high]
-        then:
-          - type: set_attribute
-            target: bulb.brightness
-            value: high
-      # ELIF battery.level == medium -> brightness = medium
-      - type: conditional
-        condition:
+    elif_cases:
+      - condition:
           type: attribute_check
           target: battery.level
           operator: equals
-          value: medium
-        then:
+          value: high
+        effects:
+          - type: set_attribute
+            target: battery.level
+            value: high
+          - type: set_attribute
+            target: bulb.state
+            value: on
           - type: set_attribute
             target: bulb.brightness
-            value: medium
-      # ELIF battery.level == low -> brightness = low
-      - type: conditional
-        condition:
+            value: high
+      - condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: full
+        effects:
+          - type: set_attribute
+            target: battery.level
+            value: full
+          - type: set_attribute
+            target: bulb.state
+            value: on
+          - type: set_attribute
+            target: bulb.brightness
+            value: high
+      - condition:
           type: attribute_check
           target: battery.level
           operator: equals
           value: low
-        then:
+        effects:
+          - type: set_attribute
+            target: battery.level
+            value: low
+          - type: set_attribute
+            target: bulb.state
+            value: on
           - type: set_attribute
             target: bulb.brightness
             value: low
+      - condition:
+          type: attribute_check
+          target: battery.level
+          operator: equals
+          value: medium
+        effects:
+          - type: set_attribute
+            target: battery.level
+            value: medium
+          - type: set_attribute
+            target: bulb.state
+            value: on
+          - type: set_attribute
+            target: bulb.brightness
+            value: medium
 
-  # Turn off: Stop all consumption trends
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles that
+# =============================================================================
+behaviors:
+  # Turn on: ONLY sets switch position (solver handles everything else)
+  turn_on:
+    preconditions:
+      # Switch must be off to turn on
+      - type: attribute_check
+        target: switch.position
+        operator: equals
+        value: off
+    effects:
+      # ONLY the direct physical effect: switch turns on
+      - type: set_attribute
+        target: switch.position
+        value: "on"
+
+  # Turn off: ONLY sets switch position (solver handles everything else)
   turn_off:
     preconditions:
+      # Switch must be on to turn off
       - type: attribute_check
         target: switch.position
         operator: equals
         value: "on"
     effects:
+      # ONLY the direct physical effect: switch turns off
       - type: set_attribute
         target: switch.position
         value: off
-      # Bulb turns off, trend stops
-      - type: set_attribute
-        target: bulb.state
-        value: off
-      - type: set_trend
-        target: bulb.state
-        direction: none
-      # Brightness goes to none, trend stops
-      - type: set_attribute
-        target: bulb.brightness
-        value: none
-      - type: set_trend
-        target: bulb.brightness
-        direction: none
-      # Battery stops draining
-      - type: set_trend
-        target: battery.level
-        direction: none
+
+  # Shake: a passive action that does nothing to switch or battery
+  # The trend continues, so time constraints branch again
+  shake:
+    preconditions:
+      - type: attribute_check
+        target: switch.position
+        operator: equals
+        value: "on"
+    effects: []

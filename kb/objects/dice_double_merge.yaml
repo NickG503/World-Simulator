@@ -1,15 +1,8 @@
 # Dice object for demonstrating DOUBLE MERGE
+# ARCHITECTURE: Behaviors set direct effects only, Solver derives prize.level
+#
 # Has TWO independent unknown attributes: face and color
 # Each causes branching, and reset merges all branches
-#
-# Simulation: roll_face → reset → roll_color → reset
-#
-# Layer 1 (roll_face): face unknown → 3 branches
-# Layer 2 (reset): ALL 3 merge into 1 (all attributes reset)
-# Layer 3 (roll_color): color unknown → 3 branches
-# Layer 4 (reset): ALL 3 merge into 1 again
-#
-# Visual result: TWO "many parents → single node" patterns!
 
 type: dice_double_merge
 parts:
@@ -29,9 +22,77 @@ parts:
         space: prize_level
         default: none
         mutable: true
+      result:
+        space: result_state
+        default: none
+        mutable: true
 
+# =============================================================================
+# SOLVER: Derives prize.level from cube.face and cube.color
+# =============================================================================
+solver:
+  # Rule 1: Jackpot when face=6 and result is win_face
+  - name: jackpot_from_face
+    priority: 10
+    description: "Jackpot when face is 6"
+    condition:
+      type: attribute_check
+      target: cube.face
+      operator: equals
+      value: "6"
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: jackpot
+
+  # Rule 2: Jackpot when color=red
+  - name: jackpot_from_color
+    priority: 15
+    description: "Jackpot when color is red"
+    condition:
+      type: attribute_check
+      target: cube.color
+      operator: equals
+      value: red
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: jackpot
+
+  # Rule 3: Small prize when face in {3,5} (not 6)
+  - name: small_from_face
+    priority: 20
+    description: "Small prize when face is 3 or 5"
+    condition:
+      type: attribute_check
+      target: cube.face
+      operator: in
+      value: ["3", "5"]
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: small
+
+  # Rule 4: Small prize when color in {green, blue} (not red)
+  - name: small_from_color
+    priority: 25
+    description: "Small prize when color is green or blue"
+    condition:
+      type: attribute_check
+      target: cube.color
+      operator: in
+      value: ["green", "blue"]
+    implies:
+      - type: set_attribute
+        target: prize.level
+        value: small
+
+# =============================================================================
+# BEHAVIORS: Direct action effects ONLY
+# No derived state here - solver handles prize.level
+# =============================================================================
 behaviors:
-  # Roll face - branches on face value (3 branches when unknown)
+  # Roll face - ONLY sets result, solver derives prize.level
   roll_face:
     preconditions:
       - type: attribute_check
@@ -39,22 +100,11 @@ behaviors:
         operator: in
         value: ["3", "5", "6"]
     effects:
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.face
-          operator: equals
-          value: "6"
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: jackpot
-        else:
-          - type: set_attribute
-            target: prize.level
-            value: small
+      - type: set_attribute
+        target: prize.result
+        value: win
 
-  # Roll color - branches on color value (3 branches when unknown)
+  # Roll color - ONLY sets result, solver derives prize.level
   roll_color:
     preconditions:
       - type: attribute_check
@@ -62,22 +112,11 @@ behaviors:
         operator: in
         value: ["green", "blue", "red"]
     effects:
-      - type: conditional
-        condition:
-          type: attribute_check
-          target: cube.color
-          operator: equals
-          value: "red"
-        then:
-          - type: set_attribute
-            target: prize.level
-            value: jackpot
-        else:
-          - type: set_attribute
-            target: prize.level
-            value: small
+      - type: set_attribute
+        target: prize.result
+        value: win
 
-  # Reset face - Only resets face and prize, NOT color
+  # Reset face - Only resets face, solver derives prize.level
   reset_face:
     preconditions:
       - type: attribute_check
@@ -89,10 +128,10 @@ behaviors:
         target: cube.face
         value: "3"
       - type: set_attribute
-        target: prize.level
+        target: prize.result
         value: none
 
-  # Reset color - Resets color and prize
+  # Reset color - Resets color, solver derives prize.level
   reset_color:
     preconditions:
       - type: attribute_check
@@ -104,5 +143,5 @@ behaviors:
         target: cube.color
         value: "green"
       - type: set_attribute
-        target: prize.level
+        target: prize.result
         value: none
