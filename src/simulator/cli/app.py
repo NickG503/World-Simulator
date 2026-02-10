@@ -272,6 +272,13 @@ class MultiValueOption(click.Option):
 @click.option("--acts-path", "acts", default=None, help="Path to kb/actions folder")
 @click.option("--verbose-load", "verbose_load", is_flag=True, help="Verbose loader errors")
 @click.option("--viz", "visualize", is_flag=True, help="Open HTML visualization")
+@click.option(
+    "--ask-threshold",
+    "ask_threshold",
+    type=int,
+    default=999,
+    help="Ask user when active leaf count exceeds this threshold (default: 999)",
+)
 def simulate_cmd(
     obj: str,
     set_attrs: tuple,
@@ -281,6 +288,7 @@ def simulate_cmd(
     acts: Optional[str],
     verbose_load: bool,
     visualize: bool,
+    ask_threshold: Optional[int],
 ) -> None:
     """
     Run a simulation with tree-based execution.
@@ -329,12 +337,17 @@ def simulate_cmd(
     runner = TreeSimulationRunner(rm)
     simulation_name = run_name if run_name else None
 
+    # Build question callback if threshold is set
+    q_callback = _cli_question_callback if ask_threshold is not None else None
+
     tree = runner.run(
         object_type=obj,
         actions=action_specs,
         simulation_id=simulation_name,
         verbose=False,
         initial_values=initial_values if initial_values else None,
+        ask_question_threshold=ask_threshold,
+        question_callback=q_callback,
     )
 
     # Show initial values in output if any were set
@@ -361,13 +374,16 @@ def simulate_cmd(
     console.print(f"Saved: {history_path}")
 
     # Count results
-    successful = sum(1 for n in tree.nodes.values() if n.action_status == "ok" and n.action_name)
-    failed = sum(1 for n in tree.nodes.values() if n.action_status != "ok" and n.action_name)
+    successful = sum(1 for n in tree.nodes.values() if n.action_status == "ok" and n.action_name and not n.pruned)
+    failed = sum(1 for n in tree.nodes.values() if n.action_status != "ok" and n.action_name and not n.pruned)
+    pruned = sum(1 for n in tree.nodes.values() if n.pruned)
 
     if successful:
         console.print(f"[green]Successful: {successful}[/green]")
     if failed:
         console.print(f"[red]Failed: {failed}[/red]")
+    if pruned:
+        console.print(f"[dim]Pruned: {pruned}[/dim]")
 
     # Show path summary
     console.print(f"\n[dim]Path: {' -> '.join(tree.current_path)}[/dim]")
@@ -379,6 +395,45 @@ def simulate_cmd(
         viz_path = generate_visualization(history_path)
         console.print(f"[cyan]Visualization: {viz_path}[/cyan]")
         open_visualization(viz_path)
+
+
+def _cli_question_callback(attribute: str, options: list[str]) -> Optional[str]:
+    """Ask user a question about an uncertain attribute via Rich console.
+
+    Args:
+        attribute: The attribute path (e.g. 'battery.level')
+        options: List of possible values
+
+    Returns:
+        The user's chosen value, or None if they skip.
+    """
+    console.print("\n[bold yellow]Too many branches detected.[/bold yellow]")
+    console.print(f"What is the value of [cyan]{attribute}[/cyan]?")
+    for i, opt in enumerate(options, 1):
+        console.print(f"  [bold]{i}[/bold]. {opt}")
+    console.print("  [bold]0[/bold]. [dim]Skip (don't prune)[/dim]")
+
+    while True:
+        choice = console.input("[bold]Enter choice (number or value): [/bold]").strip()
+        if choice == "0":
+            return None
+        # Try as a number
+        try:
+            idx = int(choice)
+            if 1 <= idx <= len(options):
+                selected = options[idx - 1]
+                console.print(f"[green]Selected: {attribute} = {selected}[/green]")
+                return selected
+            else:
+                console.print(f"[red]Invalid number. Enter 1-{len(options)} or 0 to skip.[/red]")
+                continue
+        except ValueError:
+            pass
+        # Try as a literal value
+        if choice in options:
+            console.print(f"[green]Selected: {attribute} = {choice}[/green]")
+            return choice
+        console.print(f"[red]'{choice}' is not a valid option. Try again.[/red]")
 
 
 def _infer_inline_param_name(rm: RegistryManager, object_name: str, action_name: str) -> Optional[str]:

@@ -181,6 +181,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         .legend-dot.action {{ border-color: var(--accent-green); }}
         .legend-dot.solver {{ border-color: var(--accent-purple); }}
         .legend-dot.time {{ border-color: var(--accent-cyan); }}
+        .legend-dot.pruned {{ border-color: #484f58; opacity: 0.5; }}
 
         .graph-container {{
             position: relative;
@@ -471,6 +472,16 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             stroke: var(--accent-cyan);
         }}
 
+        .node.pruned .node-circle {{
+            fill: var(--bg-card);
+            stroke: #484f58;
+            opacity: 0.35;
+        }}
+
+        .node.pruned .node-label {{
+            opacity: 0.35;
+        }}
+
         .node.selected .node-circle {{
             stroke-width: 4;
             filter: drop-shadow(0 0 8px currentColor);
@@ -494,6 +505,12 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
         .edge.active {{
             stroke: var(--accent-cyan);
             stroke-width: 3;
+        }}
+
+        .edge.pruned-edge {{
+            stroke: #484f58;
+            opacity: 0.25;
+            stroke-dasharray: 4 3;
         }}
 
 
@@ -731,6 +748,7 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     <div class="legend-item"><span class="legend-dot action"></span>Action</div>
                     <div class="legend-item"><span class="legend-dot solver"></span>Solver</div>
                     <div class="legend-item"><span class="legend-dot time"></span>Time</div>
+                    <div class="legend-item"><span class="legend-dot pruned"></span>Pruned</div>
                 </div>
             </div>
         </header>
@@ -1269,7 +1287,8 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                     const pathD = `M${{pos.x}},${{pos.y + NODE_RADIUS}} ` +
                                   `Q${{pos.x}},${{midY}} ${{childPos.x}},${{childPos.y - NODE_RADIUS}}`;
 
-                    html += `<path class="edge" d="${{pathD}}" />`;
+                    const edgeClass = (childNode.pruned || node.pruned) ? 'edge pruned-edge' : 'edge';
+                    html += `<path class="${{edgeClass}}" d="${{pathD}}" />`;
                 }}
             }}
 
@@ -1477,8 +1496,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
                 const nodeType = node.node_type || 'action';
 
                 // Determine status class based on node_type
+                const isPruned = node.pruned === true;
                 let statusClass;
-                if (isRoot) {{
+                if (isPruned) {{
+                    statusClass = 'pruned';
+                }} else if (isRoot) {{
                     statusClass = 'root';
                 }} else if (nodeType === 'solver') {{
                     statusClass = 'solver';
@@ -1805,14 +1827,18 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             const isRoot = parentIds.length === 0;
             const isMerged = parentIds.length > 1;
             const status = node.action_status || 'ok';
-            const statusClass = isRoot ? '' : (status === 'ok' ? 'success' : 'failed');
+            const isPruned = node.pruned === true;
+            const statusClass = isPruned ? 'failed' : (isRoot ? '' : (status === 'ok' ? 'success' : 'failed'));
 
             const nodeType = node.node_type || 'action';
 
             // Determine node type label and color
             let nodeTypeLabel = 'Action';
             let nodeTypeColor = 'var(--accent-green)';
-            if (nodeType === 'root') {{
+            if (isPruned) {{
+                nodeTypeLabel = 'Pruned';
+                nodeTypeColor = '#484f58';
+            }} else if (nodeType === 'root') {{
                 nodeTypeLabel = 'Initial State';
                 nodeTypeColor = 'var(--accent-gold)';
             }} else if (nodeType === 'solver') {{
@@ -1841,6 +1867,11 @@ def generate_html(tree_data: Dict[str, Any], output_path: Optional[str] = None) 
             if (node.branch_condition) {{
                 const bc = node.branch_condition;
                 html += `<div class="branch">${{formatBranchCondition(bc)}}</div>`;
+            }}
+
+            if (node.pruned) {{
+                html += `<div style="color: #484f58; margin-top: 8px; font-size: 0.9em;">` +
+                        `Pruned: ${{node.pruned_reason || 'User resolved uncertainty'}}</div>`;
             }}
 
             if (node.action_error) {{

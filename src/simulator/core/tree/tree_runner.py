@@ -12,7 +12,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, List, Optional, Tuple, Union
 
 import yaml
 
@@ -82,6 +82,8 @@ class TreeSimulationRunner(
         simulation_id: Optional[str] = None,
         verbose: bool = False,
         initial_values: Optional[Dict[str, str]] = None,
+        ask_question_threshold: Optional[int] = None,
+        question_callback: Optional[Callable[[str, List[str]], Optional[str]]] = None,
     ) -> SimulationTree:
         """Run a simulation and build the execution tree."""
         if not simulation_id:
@@ -120,6 +122,11 @@ class TreeSimulationRunner(
             seen_node_ids: set = set()
 
             for current_node, current_instance in leaves:
+                # Skip pruned nodes — they are terminal (user resolved the uncertainty)
+                if current_node.pruned:
+                    new_leaves.append((current_node, current_instance))
+                    continue
+
                 results = self._process_action_multi(
                     tree=tree,
                     instance=current_instance,
@@ -182,6 +189,17 @@ class TreeSimulationRunner(
                 merged_count = sum(1 for n, _ in layer_state_cache.values() if n.has_multiple_parents)
                 if merged_count > 0:
                     logger.info("Layer deduplication: %d nodes merged", merged_count)
+
+            # Question threshold check: ask user to resolve uncertainty
+            if ask_question_threshold is not None and question_callback is not None:
+                leaves = self._check_and_ask_questions(
+                    tree=tree,
+                    leaves=leaves,
+                    object_type=object_type,
+                    threshold=ask_question_threshold,
+                    question_callback=question_callback,
+                    verbose=verbose,
+                )
 
         return tree
 
@@ -681,8 +699,8 @@ class TreeSimulationRunner(
         layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
 
         for parent_node, instance in leaves:
-            # Skip failed action nodes - they are terminal (no solver/time continues)
-            if parent_node.action_status != "ok":
+            # Skip failed or pruned nodes - they are terminal
+            if parent_node.action_status != "ok" or parent_node.pruned:
                 result_leaves.append((parent_node, instance))
                 continue
 
@@ -753,8 +771,8 @@ class TreeSimulationRunner(
         layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
 
         for parent_node, instance in leaves:
-            # Skip failed nodes
-            if parent_node.action_status != "ok":
+            # Skip failed or pruned nodes
+            if parent_node.action_status != "ok" or parent_node.pruned:
                 result_leaves.append((parent_node, instance))
                 continue
 
@@ -1331,6 +1349,316 @@ class TreeSimulationRunner(
                 "value": f"trend {effect.direction}",
             }
         return {"type": effect.__class__.__name__}
+
+    # =========================================================================
+    # Question Threshold Logic
+    # =========================================================================
+
+    def _check_and_ask_questions(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        object_type: str,
+        threshold: int,
+        question_callback: Callable[[str, List[str]], Optional[str]],
+        verbose: bool = False,
+        max_questions: int = 5,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Check if leaf count exceeds threshold and ask user questions to prune.
+
+        Loops until the active leaf count is at or below the threshold,
+        or no more uncertain attributes remain, up to max_questions rounds.
+        """
+        asked = 0
+        while asked < max_questions:
+            active_count = self._count_active_leaves(leaves)
+            if active_count <= threshold:
+                break
+
+            attr_path = self._identify_most_uncertain_attribute(leaves)
+            if attr_path is None:
+                break  # No uncertain attributes left
+
+            options = self._collect_attribute_options(leaves, attr_path)
+            if len(options) <= 1:
+                break  # Only one possible value, nothing to ask
+
+            answer = question_callback(attr_path, options)
+            if answer is None:
+                break  # User declined to answer
+
+            if answer not in options:
+                if verbose:
+                    logger.warning("Answer '%s' not in options %s, skipping", answer, options)
+                break
+
+            leaves = self._prune_leaves_by_answer(tree, leaves, attr_path, answer)
+            asked += 1
+
+            if verbose:
+                remaining = self._count_active_leaves(leaves)
+                logger.info(
+                    "Question %d: %s = %s -> %d active leaves remaining",
+                    asked,
+                    attr_path,
+                    answer,
+                    remaining,
+                )
+
+        return leaves
+
+    def _count_active_leaves(
+        self,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+    ) -> int:
+        """Count non-failed, non-pruned leaves."""
+        return sum(1 for node, _ in leaves if node.action_status == "ok" and not node.pruned)
+
+    def _identify_most_uncertain_attribute(
+        self,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+    ) -> Optional[str]:
+        """Find the attribute with the most uncertainty across active leaves.
+
+        Uncertainty is measured in two ways:
+        1. Value sets within individual nodes (e.g., battery.level = [low, medium])
+        2. Diversity across nodes: different leaves having different single values
+           for the same attribute (e.g., one leaf has battery.level=empty, another
+           has battery.level=high).
+
+        The attribute with the highest number of distinct values across all
+        active leaves is the most uncertain.
+        """
+        attr_distinct_values: Dict[str, set] = {}
+
+        for node, _ in leaves:
+            if node.action_status != "ok" or node.pruned:
+                continue
+
+            snapshot = node.snapshot
+            for attr_path in snapshot.get_all_attribute_paths():
+                value = snapshot.get_attribute_value(attr_path)
+                if attr_path not in attr_distinct_values:
+                    attr_distinct_values[attr_path] = set()
+
+                if isinstance(value, list):
+                    attr_distinct_values[attr_path].update(value)
+                elif value is None or value == "unknown":
+                    # Mark as having "unknown" — will expand to full space later
+                    attr_distinct_values[attr_path].add("__unknown__")
+                elif value is not None:
+                    attr_distinct_values[attr_path].add(value)
+
+        if not attr_distinct_values:
+            return None
+
+        # Filter: only consider attributes with >1 distinct value (i.e., actual uncertainty)
+        uncertain = {
+            path: vals for path, vals in attr_distinct_values.items() if len(vals) > 1 or "__unknown__" in vals
+        }
+
+        if not uncertain:
+            return None
+
+        # Return the attribute with the most distinct values
+        return max(uncertain, key=lambda p: len(uncertain[p]))
+
+    def _collect_attribute_options(
+        self,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        attr_path: str,
+    ) -> List[str]:
+        """Collect all possible values for an attribute across active leaves.
+
+        Returns a sorted list of unique values. For 'unknown' values,
+        expands to the full space if a space_id is available.
+        """
+        options: set = set()
+
+        for node, _ in leaves:
+            if node.action_status != "ok" or node.pruned:
+                continue
+
+            snapshot = node.snapshot
+            value = snapshot.get_attribute_value(attr_path)
+
+            if isinstance(value, list):
+                options.update(value)
+            elif value is None or value == "unknown":
+                # Expand to full space
+                space_values = self._get_space_values_for_attr(snapshot, attr_path)
+                if space_values:
+                    options.update(space_values)
+                else:
+                    options.add("unknown")
+            else:
+                options.add(value)
+
+        # Try to sort by space order
+        space_order = self._get_space_order_for_attr(leaves, attr_path)
+        if space_order:
+            ordered = [v for v in space_order if v in options]
+            remaining = sorted(v for v in options if v not in space_order)
+            return ordered + remaining
+
+        return sorted(options)
+
+    def _get_space_values_for_attr(
+        self,
+        snapshot: WorldSnapshot,
+        attr_path: str,
+    ) -> Optional[List[str]]:
+        """Get all values from an attribute's qualitative space."""
+        attr_snap = snapshot._get_attribute_snapshot(attr_path)
+        if attr_snap and attr_snap.space_id:
+            try:
+                space = self.registry_manager.spaces.get(attr_snap.space_id)
+                return list(space.levels)
+            except Exception:
+                pass
+        return None
+
+    def _get_space_order_for_attr(
+        self,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        attr_path: str,
+    ) -> Optional[List[str]]:
+        """Get the ordered levels from the qualitative space for sorting."""
+        for node, _ in leaves:
+            snapshot = node.snapshot
+            attr_snap = snapshot._get_attribute_snapshot(attr_path)
+            if attr_snap and attr_snap.space_id:
+                try:
+                    space = self.registry_manager.spaces.get(attr_snap.space_id)
+                    return list(space.levels)
+                except Exception:
+                    pass
+        return None
+
+    def _prune_leaves_by_answer(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        attr_path: str,
+        answer: str,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Prune leaves incompatible with the user's answer, narrow compatible ones.
+
+        For each active leaf:
+        - value set containing answer -> narrow instance to answer, clear trend
+        - single value == answer -> keep as-is
+        - 'unknown' -> set instance to answer, clear trend
+        - value set NOT containing answer -> mark pruned
+        - single value != answer -> mark pruned
+        """
+        from simulator.core.attributes import AttributePath
+
+        result: List[Tuple[TreeNode, ObjectInstance]] = []
+        newly_pruned_ids: List[str] = []
+        reason = f"User answered: {attr_path} = {answer}"
+
+        for node, instance in leaves:
+            # Already failed or pruned: carry forward unchanged
+            if node.action_status != "ok" or node.pruned:
+                result.append((node, instance))
+                continue
+
+            snapshot = node.snapshot
+            value = snapshot.get_attribute_value(attr_path)
+
+            if isinstance(value, list):
+                if answer in value:
+                    # Value set includes the answer: narrow to just the answer
+                    narrowed = instance.deep_copy()
+                    parsed = AttributePath.parse(attr_path)
+                    parsed.set_value_in_instance(narrowed, answer)
+                    # Clear trend on this attribute
+                    self._clear_trend_on_instance(narrowed, attr_path)
+                    result.append((node, narrowed))
+                else:
+                    # Value set does NOT include the answer: prune
+                    tree.nodes[node.id].pruned = True
+                    tree.nodes[node.id].pruned_reason = reason
+                    newly_pruned_ids.append(node.id)
+                    result.append((node, instance))
+            elif value is None or value == "unknown":
+                # Unknown: set to answer
+                narrowed = instance.deep_copy()
+                parsed = AttributePath.parse(attr_path)
+                parsed.set_value_in_instance(narrowed, answer)
+                self._clear_trend_on_instance(narrowed, attr_path)
+                result.append((node, narrowed))
+            elif value == answer:
+                # Exact match: keep as-is
+                result.append((node, instance))
+            else:
+                # Single value that doesn't match: prune
+                tree.nodes[node.id].pruned = True
+                tree.nodes[node.id].pruned_reason = reason
+                newly_pruned_ids.append(node.id)
+                result.append((node, instance))
+
+        # Propagate pruning upward through the tree
+        if newly_pruned_ids:
+            self._propagate_pruning_upward(tree, newly_pruned_ids)
+
+        return result
+
+    def _propagate_pruning_upward(
+        self,
+        tree: SimulationTree,
+        pruned_node_ids: List[str],
+    ) -> None:
+        """Propagate pruning upward: if all children of a parent are pruned/failed, prune the parent too.
+
+        Uses a bottom-up BFS from the newly pruned nodes toward the root.
+        For each pruned node, checks its parents. If ALL children of a parent
+        are pruned or failed, marks that parent as pruned and continues upward.
+        Never prunes the root node.
+        """
+        from collections import deque
+
+        queue: deque = deque(pruned_node_ids)
+        visited: set = set()
+
+        while queue:
+            node_id = queue.popleft()
+            if node_id in visited:
+                continue
+            visited.add(node_id)
+
+            node = tree.nodes.get(node_id)
+            if not node:
+                continue
+
+            for parent_id in node.parent_ids:
+                if parent_id in visited:
+                    continue
+                parent = tree.nodes.get(parent_id)
+                if not parent or parent.is_root or parent.pruned:
+                    continue
+
+                # Check if ALL children of this parent are pruned or failed
+                all_children_dead = all(
+                    tree.nodes[cid].pruned or tree.nodes[cid].failed for cid in parent.children_ids if cid in tree.nodes
+                )
+                if all_children_dead:
+                    parent.pruned = True
+                    parent.pruned_reason = parent.pruned_reason or "All children pruned"
+                    queue.append(parent_id)
+
+    def _clear_trend_on_instance(
+        self,
+        instance: ObjectInstance,
+        attr_path: str,
+    ) -> None:
+        """Clear the trend on an attribute in an ObjectInstance."""
+        from simulator.core.attributes import AttributePath
+
+        parsed = AttributePath.parse(attr_path)
+        attr_inst = parsed.resolve_from_instance(instance)
+        if attr_inst and hasattr(attr_inst, "trend"):
+            attr_inst.trend = "none"
 
     # =========================================================================
     # Serialization

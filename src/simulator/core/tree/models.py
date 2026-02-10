@@ -359,6 +359,10 @@ class TreeNode(BaseModel):
     # Changes applied in this transition (for primary edge)
     changes: List[Dict[str, Any]] = Field(default_factory=list)
 
+    # Pruning: marked when user answers a question that eliminates this branch
+    pruned: bool = False
+    pruned_reason: Optional[str] = None
+
     @property
     def is_root(self) -> bool:
         """Check if this is the root node (initial state)."""
@@ -391,8 +395,8 @@ class TreeNode(BaseModel):
 
     @property
     def failed(self) -> bool:
-        """Check if the action at this node failed."""
-        return self.action_status in ("rejected", "constraint_violated", "error")
+        """Check if the action at this node failed or was pruned."""
+        return self.action_status in ("rejected", "constraint_violated", "error") or self.pruned
 
     @property
     def change_count(self) -> int:
