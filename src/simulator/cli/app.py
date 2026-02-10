@@ -407,17 +407,28 @@ def simulate_cmd(
         open_visualization(viz_path)
 
 
-def _cli_question_callback(attribute: str, options: list[str]) -> Optional[str]:
+def _cli_question_callback(attribute: str, options: list[str], metadata: object = None) -> Optional[str]:
     """Ask user a question about an uncertain attribute via Rich console.
 
     Args:
         attribute: The attribute path (e.g. 'battery.level')
         options: List of possible values
+        metadata: QuestionMetadata with action context (action name, index, total)
 
     Returns:
         The user's chosen value, or None if they skip.
     """
-    console.print("\n[bold yellow]Too many branches detected.[/bold yellow]")
+    from simulator.core.tree.question_strategy import QuestionMetadata
+
+    console.print()
+    if isinstance(metadata, QuestionMetadata):
+        header = f"Step {metadata.action_index}/{metadata.total_actions}: {metadata.action_name}"
+        console.print(f"[bold]───  {header}  ───[/bold]")
+        console.print(
+            f"[bold yellow]Too many branches[/bold yellow] [dim]({metadata.active_leaves} active leaves)[/dim]"
+        )
+    else:
+        console.print("[bold yellow]Too many branches detected.[/bold yellow]")
     console.print(f"What is the value of [cyan]{attribute}[/cyan]?")
     for i, opt in enumerate(options, 1):
         console.print(f"  [bold]{i}[/bold]. {opt}")

@@ -29,8 +29,8 @@ def make_answer_callback(answers: Dict[str, str]):
     """
     calls: List[dict] = []
 
-    def callback(attribute: str, options: List[str]) -> Optional[str]:
-        calls.append({"attribute": attribute, "options": options})
+    def callback(attribute: str, options: List[str], metadata: object = None) -> Optional[str]:
+        calls.append({"attribute": attribute, "options": options, "metadata": metadata})
         return answers.get(attribute)
 
     callback.calls = calls  # type: ignore[attr-defined]
@@ -41,8 +41,8 @@ def make_always_skip_callback():
     """Create a callback that always skips (returns None)."""
     calls: List[dict] = []
 
-    def callback(attribute: str, options: List[str]) -> Optional[str]:
-        calls.append({"attribute": attribute, "options": options})
+    def callback(attribute: str, options: List[str], metadata: object = None) -> Optional[str]:
+        calls.append({"attribute": attribute, "options": options, "metadata": metadata})
         return None
 
     callback.calls = calls  # type: ignore[attr-defined]

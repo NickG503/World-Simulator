@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
 
 if TYPE_CHECKING:
-    from simulator.core.tree.question_strategy import QuestionStrategy
+    from simulator.core.tree.question_strategy import QuestionMetadata, QuestionStrategy
 
 import yaml
 
@@ -86,7 +86,7 @@ class TreeSimulationRunner(
         verbose: bool = False,
         initial_values: Optional[Dict[str, str]] = None,
         question_strategy: Optional["QuestionStrategy"] = None,
-        question_callback: Optional[Callable[[str, List[str]], Optional[str]]] = None,
+        question_callback: Optional[Callable[[str, List[str], "QuestionMetadata"], Optional[str]]] = None,
     ) -> SimulationTree:
         """Run a simulation and build the execution tree."""
         if not simulation_id:
@@ -118,8 +118,9 @@ class TreeSimulationRunner(
 
         action_requests = self._parse_action_requests(actions)
         leaves: List[Tuple[TreeNode, ObjectInstance]] = [(root_node, obj_instance)]
+        total_actions = len(action_requests)
 
-        for request in action_requests:
+        for action_idx, request in enumerate(action_requests):
             new_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
             layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
             seen_node_ids: set = set()
@@ -201,6 +202,9 @@ class TreeSimulationRunner(
                     object_type=object_type,
                     strategy=question_strategy,
                     question_callback=question_callback,
+                    action_name=request.name,
+                    action_index=action_idx + 1,
+                    total_actions=total_actions,
                     verbose=verbose,
                 )
 
@@ -1363,7 +1367,10 @@ class TreeSimulationRunner(
         leaves: List[Tuple[TreeNode, ObjectInstance]],
         object_type: str,
         strategy: "QuestionStrategy",
-        question_callback: Callable[[str, List[str]], Optional[str]],
+        question_callback: Callable[[str, List[str], "QuestionMetadata"], Optional[str]],
+        action_name: str = "",
+        action_index: int = 1,
+        total_actions: int = 1,
         verbose: bool = False,
         max_questions: int = 5,
     ) -> List[Tuple[TreeNode, ObjectInstance]]:
@@ -1372,12 +1379,13 @@ class TreeSimulationRunner(
         Loops until the strategy says stop, no uncertain attributes remain,
         or max_questions rounds are reached.
         """
-        from simulator.core.tree.question_strategy import QuestionContext, count_active_leaves
+        from simulator.core.tree.question_strategy import QuestionContext, QuestionMetadata, count_active_leaves
 
         asked = 0
         while asked < max_questions:
+            active_count = count_active_leaves(leaves)
             ctx = QuestionContext(
-                active_leaf_count=count_active_leaves(leaves),
+                active_leaf_count=active_count,
                 total_node_count=len(tree.nodes),
                 leaves=leaves,
                 tree=tree,
@@ -1394,7 +1402,13 @@ class TreeSimulationRunner(
 
             attr_path, options = result
 
-            answer = question_callback(attr_path, options)
+            metadata = QuestionMetadata(
+                action_name=action_name,
+                action_index=action_index,
+                total_actions=total_actions,
+                active_leaves=active_count,
+            )
+            answer = question_callback(attr_path, options, metadata)
             if answer is None:
                 break  # User declined to answer
 

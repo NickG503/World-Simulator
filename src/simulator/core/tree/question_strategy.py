@@ -43,6 +43,24 @@ class QuestionContext:
     registry_manager: RegistryManager
 
 
+@dataclass
+class QuestionMetadata:
+    """Context passed to question_callback so the caller knows where
+    in the simulation the question is being asked.
+
+    Fields:
+        action_name: Name of the current action (e.g. 'turn_on').
+        action_index: 1-based index of the current action step.
+        total_actions: Total number of actions in the simulation.
+        active_leaves: Number of active (non-pruned, non-failed) leaves.
+    """
+
+    action_name: str
+    action_index: int
+    total_actions: int
+    active_leaves: int
+
+
 # =============================================================================
 # AttributeScorer: ranks uncertain attributes
 # =============================================================================
@@ -307,6 +325,7 @@ __all__ = [
     "LeafCountThresholdStrategy",
     "MostDiverseScorer",
     "QuestionContext",
+    "QuestionMetadata",
     "QuestionStrategy",
     "UncertaintyRatioStrategy",
     "collect_attribute_options",
