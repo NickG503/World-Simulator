@@ -337,8 +337,18 @@ def simulate_cmd(
     runner = TreeSimulationRunner(rm)
     simulation_name = run_name if run_name else None
 
-    # Build question callback if threshold is set
-    q_callback = _cli_question_callback if ask_threshold is not None else None
+    # Build question strategy based on CLI flags
+    from simulator.core.tree.question_strategy import (
+        LeafCountThresholdStrategy,
+        UncertaintyRatioStrategy,
+    )
+
+    if ask_threshold != 999:
+        # User explicitly set --ask-threshold: use leaf count strategy
+        strategy = LeafCountThresholdStrategy(ask_threshold)
+    else:
+        # Default: ask when uncertainty ratio exceeds 0.25
+        strategy = UncertaintyRatioStrategy(0.25)
 
     tree = runner.run(
         object_type=obj,
@@ -346,8 +356,8 @@ def simulate_cmd(
         simulation_id=simulation_name,
         verbose=False,
         initial_values=initial_values if initial_values else None,
-        ask_question_threshold=ask_threshold,
-        question_callback=q_callback,
+        question_strategy=strategy,
+        question_callback=_cli_question_callback,
     )
 
     # Show initial values in output if any were set

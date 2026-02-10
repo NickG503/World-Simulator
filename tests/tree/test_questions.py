@@ -1,13 +1,19 @@
 """
-Tests for the ASK_QUESTION_THRESHOLD feature.
+Tests for the question strategy feature.
 
 Tests the interactive question-asking mechanism that prunes branches
-when the tree grows beyond a configured threshold.
+when the tree grows beyond a configured threshold, using pluggable strategies.
 """
 
 from typing import Dict, List, Optional
 
 from simulator.core.tree import TreeSimulationRunner
+from simulator.core.tree.question_strategy import (
+    FirstUnknownScorer,
+    LeafCountThresholdStrategy,
+    MostDiverseScorer,
+    UncertaintyRatioStrategy,
+)
 
 # =============================================================================
 # Mock Callbacks
@@ -44,22 +50,21 @@ def make_always_skip_callback():
 
 
 # =============================================================================
-# Tests: Threshold Detection
+# Tests: Threshold Strategy Detection
 # =============================================================================
 
 
 class TestThresholdDetection:
     """Tests that questions are asked only when the threshold is exceeded."""
 
-    def test_no_question_when_threshold_not_set(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
-        """Without threshold, no questions are asked even with many branches."""
+    def test_no_question_when_strategy_not_set(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
+        """Without strategy, no questions are asked even with many branches."""
         tree = runner.run(
             "flashlight",
             [{"name": "turn_on", "parameters": {}}],
-            simulation_id="test_no_threshold",
+            simulation_id="test_no_strategy",
             initial_values=flashlight_unknown,
         )
-        # Should run normally, producing branches
         assert len(tree.nodes) > 1
 
     def test_no_question_below_threshold(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
@@ -70,10 +75,9 @@ class TestThresholdDetection:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_high_threshold",
             initial_values=flashlight_unknown,
-            ask_question_threshold=1000,
+            question_strategy=LeafCountThresholdStrategy(1000),
             question_callback=cb,
         )
-        # Callback should never be called
         assert len(cb.calls) == 0  # type: ignore[attr-defined]
         assert len(tree.nodes) > 1
 
@@ -85,10 +89,9 @@ class TestThresholdDetection:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_low_threshold",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2),
             question_callback=cb,
         )
-        # Callback should have been called at least once
         assert len(cb.calls) > 0  # type: ignore[attr-defined]
 
 
@@ -100,20 +103,19 @@ class TestThresholdDetection:
 class TestAttributeIdentification:
     """Tests that the correct uncertain attribute is identified."""
 
-    def test_battery_level_identified_for_flashlight(
+    def test_battery_level_identified_with_diverse_scorer(
         self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]
     ):
-        """For flashlight with unknown battery, battery.level should be asked."""
+        """With MostDiverseScorer, battery.level (5 distinct values) should be asked."""
         cb = make_always_skip_callback()
         runner.run(
             "flashlight",
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_attr_id",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
-        # At least one call should be about battery.level
         asked_attrs = [call["attribute"] for call in cb.calls]  # type: ignore[attr-defined]
         assert "battery.level" in asked_attrs
 
@@ -134,21 +136,19 @@ class TestOptionCollection:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_options",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2),
             question_callback=cb,
         )
-        # Find the battery.level call
         battery_calls = [
             call
-            for call in cb.calls  # type: ignore[attr-defined]
-            if call["attribute"] == "battery.level"
+            for call in cb.calls
+            if call["attribute"] == "battery.level"  # type: ignore[attr-defined]
         ]
         if battery_calls:
             options = battery_calls[0]["options"]
-            # Battery levels should be from the space
             valid_levels = {"empty", "low", "medium", "high", "full"}
             assert all(opt in valid_levels for opt in options)
-            assert len(options) >= 2  # At least 2 options to be meaningful
+            assert len(options) >= 2
 
 
 # =============================================================================
@@ -160,38 +160,26 @@ class TestPruning:
     """Tests that pruning correctly marks and filters nodes."""
 
     def test_pruning_reduces_node_count(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
-        """Answering a question should result in fewer active (non-pruned) nodes
-        when continuing to subsequent actions."""
-        # Run WITH pruning (answer: medium)
+        """Answering a question should result in fewer active (non-pruned) nodes."""
         cb_answer = make_answer_callback({"battery.level": "medium"})
         tree_pruned = runner.run(
             "flashlight",
-            [
-                {"name": "turn_on", "parameters": {}},
-                {"name": "shake", "parameters": {}},
-            ],
+            [{"name": "turn_on", "parameters": {}}, {"name": "shake", "parameters": {}}],
             simulation_id="test_prune_reduce",
             initial_values=flashlight_unknown,
-            ask_question_threshold=3,
+            question_strategy=LeafCountThresholdStrategy(3, scorer=MostDiverseScorer()),
             question_callback=cb_answer,
         )
 
-        # Run WITHOUT pruning
         tree_full = runner.run(
             "flashlight",
-            [
-                {"name": "turn_on", "parameters": {}},
-                {"name": "shake", "parameters": {}},
-            ],
+            [{"name": "turn_on", "parameters": {}}, {"name": "shake", "parameters": {}}],
             simulation_id="test_no_prune",
             initial_values=flashlight_unknown,
         )
 
-        # Pruned tree should have fewer total nodes (or same with some pruned)
         full_count = len(tree_full.nodes)
         pruned_active = sum(1 for n in tree_pruned.nodes.values() if not n.pruned)
-
-        # The active count should be less than the full tree
         assert pruned_active < full_count
 
     def test_pruned_nodes_marked_correctly(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
@@ -202,43 +190,36 @@ class TestPruning:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_prune_marks",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
         pruned_nodes = [n for n in tree.nodes.values() if n.pruned]
         if len(cb.calls) > 0:  # type: ignore[attr-defined]
-            # If a question was asked, some nodes should be pruned
             assert len(pruned_nodes) > 0
             for node in pruned_nodes:
                 assert node.pruned_reason is not None
-                # Direct pruning has "battery.level" in reason;
-                # upward-propagated pruning has "All children pruned"
                 assert "battery.level" in node.pruned_reason or "All children pruned" in node.pruned_reason
 
     def test_pruned_nodes_not_expanded(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
-        """Pruned nodes should not have children from subsequent actions."""
+        """Pruned nodes should not have active children."""
         cb = make_answer_callback({"battery.level": "medium"})
         tree = runner.run(
             "flashlight",
-            [
-                {"name": "turn_on", "parameters": {}},
-                {"name": "shake", "parameters": {}},
-            ],
+            [{"name": "turn_on", "parameters": {}}, {"name": "shake", "parameters": {}}],
             simulation_id="test_prune_no_expand",
             initial_values=flashlight_unknown,
-            ask_question_threshold=3,
+            question_strategy=LeafCountThresholdStrategy(3, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
-        pruned_nodes = [n for n in tree.nodes.values() if n.pruned]
-        for node in pruned_nodes:
+        for node in tree.nodes.values():
+            if not node.pruned:
+                continue
             if node.children_ids:
-                # Pruned by upward propagation: all children must also be pruned/failed
                 for cid in node.children_ids:
                     child = tree.nodes[cid]
                     assert child.pruned or child.failed, f"Pruned node {node.id} has active child {cid}"
-            # Leaf-level pruned nodes have no children (they were pruned directly)
 
 
 # =============================================================================
@@ -257,20 +238,20 @@ class TestCallbackBehavior:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_skip",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2),
             question_callback=cb,
         )
         pruned_count = sum(1 for n in tree.nodes.values() if n.pruned)
         assert pruned_count == 0
 
     def test_no_callback_no_error(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
-        """With threshold but no callback, should run without error."""
+        """With strategy but no callback, should run without error."""
         tree = runner.run(
             "flashlight",
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_no_cb",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2),
             question_callback=None,
         )
         assert len(tree.nodes) > 1
@@ -291,26 +272,17 @@ class TestMultiActionIntegration:
         cb = make_answer_callback({"battery.level": "high"})
         tree = runner.run(
             "flashlight",
-            [
-                {"name": "turn_on", "parameters": {}},
-                {"name": "shake", "parameters": {}},
-            ],
+            [{"name": "turn_on", "parameters": {}}, {"name": "shake", "parameters": {}}],
             simulation_id="test_integration",
             initial_values=flashlight_unknown,
-            ask_question_threshold=3,
+            question_strategy=LeafCountThresholdStrategy(3, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
-        # Should complete without error
         assert len(tree.nodes) > 1
-
-        # Some nodes should be pruned
         pruned = [n for n in tree.nodes.values() if n.pruned]
         active_leaves = [n for n in tree.nodes.values() if n.is_leaf and not n.pruned and n.action_status == "ok"]
-
-        # After answering, should have significantly fewer active leaves
         assert len(pruned) > 0
-        # Active leaves should exist (the simulation continued past the question)
         assert len(active_leaves) >= 1
 
 
@@ -323,35 +295,28 @@ class TestUpwardPruningPropagation:
     """Tests that pruning propagates upward through the tree."""
 
     def test_pruning_propagates_upward(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
-        """Intermediate nodes (solver/time) whose children are ALL pruned
-        should also be marked as pruned via bottom-up propagation."""
+        """Intermediate nodes whose children are ALL pruned should also be pruned."""
         cb = make_answer_callback({"battery.level": "full"})
         tree = runner.run(
             "flashlight",
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_propagate_up",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
         pruned_nodes = [n for n in tree.nodes.values() if n.pruned]
-
-        # There should be pruned nodes (leaves + propagated parents)
         assert len(pruned_nodes) > 0
 
-        # Verify propagation: for every non-root pruned node, check that
-        # it either was a leaf that got pruned directly, or all its children are pruned/failed
         for node in pruned_nodes:
             if node.is_root:
                 continue
             if node.children_ids:
-                # This node was pruned by propagation — all children must be pruned/failed
                 for cid in node.children_ids:
                     child = tree.nodes[cid]
                     assert child.pruned or child.failed, f"Pruned node {node.id} has active child {cid}"
 
-        # The root should never be pruned
         root = tree.nodes.get("state0")
         assert root is not None
         assert not root.pruned
@@ -364,22 +329,20 @@ class TestUpwardPruningPropagation:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_propagate_stop",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
-        # Find nodes that are NOT pruned and have children
         for node in tree.nodes.values():
             if node.pruned or node.is_root:
                 continue
             if node.children_ids:
-                # At least one child should be alive (not all pruned/failed)
                 has_live_child = any(
                     not tree.nodes[cid].pruned and not tree.nodes[cid].failed
                     for cid in node.children_ids
                     if cid in tree.nodes
                 )
-                assert has_live_child, f"Active node {node.id} has no live children — should have been pruned"
+                assert has_live_child, f"Active node {node.id} has no live children"
 
     def test_propagation_increases_pruned_count(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
         """With propagation, more nodes should be pruned than just the leaves."""
@@ -389,17 +352,84 @@ class TestUpwardPruningPropagation:
             [{"name": "turn_on", "parameters": {}}],
             simulation_id="test_propagate_count",
             initial_values=flashlight_unknown,
-            ask_question_threshold=2,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
             question_callback=cb,
         )
 
         pruned = [n for n in tree.nodes.values() if n.pruned]
-        # The direct leaf pruning would only prune ~4 leaves (empty, low, medium, high)
-        # With propagation, their solver and time parents should also be pruned
-        # So total pruned should be significantly more than just the leaf count
         leaf_pruned = [n for n in pruned if len(n.children_ids) == 0]
         parent_pruned = [n for n in pruned if len(n.children_ids) > 0]
-
-        # There should be BOTH pruned leaves AND pruned parent nodes
         assert len(leaf_pruned) > 0, "Should have pruned leaf nodes"
         assert len(parent_pruned) > 0, "Propagation should have pruned parent nodes too"
+
+
+# =============================================================================
+# Tests: Strategy Pattern
+# =============================================================================
+
+
+class TestStrategyPattern:
+    """Tests for the pluggable strategy architecture."""
+
+    def test_uncertainty_ratio_strategy_triggers(
+        self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]
+    ):
+        """UncertaintyRatioStrategy with low ratio should trigger questions."""
+        cb = make_always_skip_callback()
+        runner.run(
+            "flashlight",
+            [{"name": "turn_on", "parameters": {}}],
+            simulation_id="test_ratio_trigger",
+            initial_values=flashlight_unknown,
+            question_strategy=UncertaintyRatioStrategy(0.1),
+            question_callback=cb,
+        )
+        # With 5 battery levels across 5 leaves, ratio = 5/5 = 1.0 > 0.1
+        assert len(cb.calls) > 0  # type: ignore[attr-defined]
+
+    def test_uncertainty_ratio_strategy_no_trigger(
+        self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]
+    ):
+        """UncertaintyRatioStrategy with very high ratio should not trigger."""
+        cb = make_always_skip_callback()
+        runner.run(
+            "flashlight",
+            [{"name": "turn_on", "parameters": {}}],
+            simulation_id="test_ratio_no_trigger",
+            initial_values=flashlight_unknown,
+            question_strategy=UncertaintyRatioStrategy(100.0),
+            question_callback=cb,
+        )
+        assert len(cb.calls) == 0  # type: ignore[attr-defined]
+
+    def test_most_diverse_scorer_picks_battery(self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]):
+        """MostDiverseScorer should pick battery.level (5 distinct values)."""
+        cb = make_always_skip_callback()
+        runner.run(
+            "flashlight",
+            [{"name": "turn_on", "parameters": {}}],
+            simulation_id="test_diverse_scorer",
+            initial_values=flashlight_unknown,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=MostDiverseScorer()),
+            question_callback=cb,
+        )
+        if cb.calls:  # type: ignore[attr-defined]
+            # battery.level should be the most diverse attribute
+            assert cb.calls[0]["attribute"] == "battery.level"  # type: ignore[attr-defined]
+
+    def test_first_unknown_scorer_picks_something(
+        self, runner: TreeSimulationRunner, flashlight_unknown: Dict[str, str]
+    ):
+        """FirstUnknownScorer should pick any uncertain attribute."""
+        cb = make_always_skip_callback()
+        runner.run(
+            "flashlight",
+            [{"name": "turn_on", "parameters": {}}],
+            simulation_id="test_first_scorer",
+            initial_values=flashlight_unknown,
+            question_strategy=LeafCountThresholdStrategy(2, scorer=FirstUnknownScorer()),
+            question_callback=cb,
+        )
+        # Should have asked about something
+        assert len(cb.calls) > 0  # type: ignore[attr-defined]
+        assert cb.calls[0]["attribute"] is not None  # type: ignore[attr-defined]

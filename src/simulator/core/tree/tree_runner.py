@@ -12,7 +12,10 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+
+if TYPE_CHECKING:
+    from simulator.core.tree.question_strategy import QuestionStrategy
 
 import yaml
 
@@ -82,7 +85,7 @@ class TreeSimulationRunner(
         simulation_id: Optional[str] = None,
         verbose: bool = False,
         initial_values: Optional[Dict[str, str]] = None,
-        ask_question_threshold: Optional[int] = None,
+        question_strategy: Optional["QuestionStrategy"] = None,
         question_callback: Optional[Callable[[str, List[str]], Optional[str]]] = None,
     ) -> SimulationTree:
         """Run a simulation and build the execution tree."""
@@ -190,13 +193,13 @@ class TreeSimulationRunner(
                 if merged_count > 0:
                     logger.info("Layer deduplication: %d nodes merged", merged_count)
 
-            # Question threshold check: ask user to resolve uncertainty
-            if ask_question_threshold is not None and question_callback is not None:
+            # Question strategy check: ask user to resolve uncertainty
+            if question_strategy is not None and question_callback is not None:
                 leaves = self._check_and_ask_questions(
                     tree=tree,
                     leaves=leaves,
                     object_type=object_type,
-                    threshold=ask_question_threshold,
+                    strategy=question_strategy,
                     question_callback=question_callback,
                     verbose=verbose,
                 )
@@ -1359,29 +1362,37 @@ class TreeSimulationRunner(
         tree: SimulationTree,
         leaves: List[Tuple[TreeNode, ObjectInstance]],
         object_type: str,
-        threshold: int,
+        strategy: "QuestionStrategy",
         question_callback: Callable[[str, List[str]], Optional[str]],
         verbose: bool = False,
         max_questions: int = 5,
     ) -> List[Tuple[TreeNode, ObjectInstance]]:
-        """Check if leaf count exceeds threshold and ask user questions to prune.
+        """Check if strategy says we should ask, and ask user questions to prune.
 
-        Loops until the active leaf count is at or below the threshold,
-        or no more uncertain attributes remain, up to max_questions rounds.
+        Loops until the strategy says stop, no uncertain attributes remain,
+        or max_questions rounds are reached.
         """
+        from simulator.core.tree.question_strategy import QuestionContext, count_active_leaves
+
         asked = 0
         while asked < max_questions:
-            active_count = self._count_active_leaves(leaves)
-            if active_count <= threshold:
+            ctx = QuestionContext(
+                active_leaf_count=count_active_leaves(leaves),
+                total_node_count=len(tree.nodes),
+                leaves=leaves,
+                tree=tree,
+                object_type=object_type,
+                registry_manager=self.registry_manager,
+            )
+
+            if not strategy.should_ask(ctx):
                 break
 
-            attr_path = self._identify_most_uncertain_attribute(leaves)
-            if attr_path is None:
-                break  # No uncertain attributes left
+            result = strategy.select_attribute(ctx)
+            if result is None:
+                break
 
-            options = self._collect_attribute_options(leaves, attr_path)
-            if len(options) <= 1:
-                break  # Only one possible value, nothing to ask
+            attr_path, options = result
 
             answer = question_callback(attr_path, options)
             if answer is None:
@@ -1396,7 +1407,7 @@ class TreeSimulationRunner(
             asked += 1
 
             if verbose:
-                remaining = self._count_active_leaves(leaves)
+                remaining = count_active_leaves(leaves)
                 logger.info(
                     "Question %d: %s = %s -> %d active leaves remaining",
                     asked,
@@ -1406,134 +1417,6 @@ class TreeSimulationRunner(
                 )
 
         return leaves
-
-    def _count_active_leaves(
-        self,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-    ) -> int:
-        """Count non-failed, non-pruned leaves."""
-        return sum(1 for node, _ in leaves if node.action_status == "ok" and not node.pruned)
-
-    def _identify_most_uncertain_attribute(
-        self,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-    ) -> Optional[str]:
-        """Find the attribute with the most uncertainty across active leaves.
-
-        Uncertainty is measured in two ways:
-        1. Value sets within individual nodes (e.g., battery.level = [low, medium])
-        2. Diversity across nodes: different leaves having different single values
-           for the same attribute (e.g., one leaf has battery.level=empty, another
-           has battery.level=high).
-
-        The attribute with the highest number of distinct values across all
-        active leaves is the most uncertain.
-        """
-        attr_distinct_values: Dict[str, set] = {}
-
-        for node, _ in leaves:
-            if node.action_status != "ok" or node.pruned:
-                continue
-
-            snapshot = node.snapshot
-            for attr_path in snapshot.get_all_attribute_paths():
-                value = snapshot.get_attribute_value(attr_path)
-                if attr_path not in attr_distinct_values:
-                    attr_distinct_values[attr_path] = set()
-
-                if isinstance(value, list):
-                    attr_distinct_values[attr_path].update(value)
-                elif value is None or value == "unknown":
-                    # Mark as having "unknown" — will expand to full space later
-                    attr_distinct_values[attr_path].add("__unknown__")
-                elif value is not None:
-                    attr_distinct_values[attr_path].add(value)
-
-        if not attr_distinct_values:
-            return None
-
-        # Filter: only consider attributes with >1 distinct value (i.e., actual uncertainty)
-        uncertain = {
-            path: vals for path, vals in attr_distinct_values.items() if len(vals) > 1 or "__unknown__" in vals
-        }
-
-        if not uncertain:
-            return None
-
-        # Return the attribute with the most distinct values
-        return max(uncertain, key=lambda p: len(uncertain[p]))
-
-    def _collect_attribute_options(
-        self,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-        attr_path: str,
-    ) -> List[str]:
-        """Collect all possible values for an attribute across active leaves.
-
-        Returns a sorted list of unique values. For 'unknown' values,
-        expands to the full space if a space_id is available.
-        """
-        options: set = set()
-
-        for node, _ in leaves:
-            if node.action_status != "ok" or node.pruned:
-                continue
-
-            snapshot = node.snapshot
-            value = snapshot.get_attribute_value(attr_path)
-
-            if isinstance(value, list):
-                options.update(value)
-            elif value is None or value == "unknown":
-                # Expand to full space
-                space_values = self._get_space_values_for_attr(snapshot, attr_path)
-                if space_values:
-                    options.update(space_values)
-                else:
-                    options.add("unknown")
-            else:
-                options.add(value)
-
-        # Try to sort by space order
-        space_order = self._get_space_order_for_attr(leaves, attr_path)
-        if space_order:
-            ordered = [v for v in space_order if v in options]
-            remaining = sorted(v for v in options if v not in space_order)
-            return ordered + remaining
-
-        return sorted(options)
-
-    def _get_space_values_for_attr(
-        self,
-        snapshot: WorldSnapshot,
-        attr_path: str,
-    ) -> Optional[List[str]]:
-        """Get all values from an attribute's qualitative space."""
-        attr_snap = snapshot._get_attribute_snapshot(attr_path)
-        if attr_snap and attr_snap.space_id:
-            try:
-                space = self.registry_manager.spaces.get(attr_snap.space_id)
-                return list(space.levels)
-            except Exception:
-                pass
-        return None
-
-    def _get_space_order_for_attr(
-        self,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-        attr_path: str,
-    ) -> Optional[List[str]]:
-        """Get the ordered levels from the qualitative space for sorting."""
-        for node, _ in leaves:
-            snapshot = node.snapshot
-            attr_snap = snapshot._get_attribute_snapshot(attr_path)
-            if attr_snap and attr_snap.space_id:
-                try:
-                    space = self.registry_manager.spaces.get(attr_snap.space_id)
-                    return list(space.levels)
-                except Exception:
-                    pass
-        return None
 
     def _prune_leaves_by_answer(
         self,
