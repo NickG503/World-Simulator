@@ -259,11 +259,11 @@ class TestSolverNodeTypes:
         """Test that action nodes have correct node_type."""
         tree = run_simulation(runner, "flashlight", "turn_on")
 
-        # Find the first action node (not root)
-        _action_nodes = [n for n in tree.nodes.values() if n.node_type == "action"]
+        action_nodes = [n for n in tree.nodes.values() if n.node_type == "action"]
+        assert len(action_nodes) > 0, "Expected at least one action node"
 
-        # With the new flow, action nodes represent the direct postcondition effect
-        # Solver nodes should be separate
+        solver_nodes = [n for n in tree.nodes.values() if n.node_type == "solver"]
+        assert len(solver_nodes) > 0, "Expected at least one solver node (separate from action)"
 
     def test_solver_node_has_purple_classification(
         self, registry_manager: RegistryManager, runner: TreeSimulationRunner

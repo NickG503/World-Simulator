@@ -15,7 +15,7 @@ from simulator.core.tree.utils.branch_condition_helpers import (
     create_compound_branch_condition,
     create_simple_branch_condition,
 )
-from simulator.core.tree.utils.change_helpers import build_changes_list
+from simulator.core.tree.utils.change_helpers import build_changes_list, build_precondition_error
 from simulator.core.tree.utils.instance_helpers import clone_instance_with_values
 
 if TYPE_CHECKING:
@@ -92,7 +92,7 @@ class BranchCreationMixin:
             parent_node.snapshot, attr_path, values, self.registry_manager
         )
 
-        error_msg = self._build_precondition_error(action, attr_path, values)
+        error_msg = build_precondition_error(action, attr_path, values)
         changes = compute_narrowing_change(parent_node.snapshot, attr_path, values)
 
         for cc in constraint_changes:

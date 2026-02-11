@@ -15,6 +15,7 @@ from simulator.core.attributes import AttributePath
 from simulator.core.constraints.constraint import BranchingConstraint
 from simulator.core.registries.registry_manager import RegistryManager
 from simulator.core.tree.models import WorldSnapshot
+from simulator.core.tree.node_factory import compute_has_active_trends
 from simulator.core.tree.snapshot_utils import compute_value_set_from_trend
 from simulator.core.types import ChangeDict
 
@@ -55,7 +56,6 @@ def _expand_trends_to_value_sets(
     """
     modified = deepcopy(snapshot)
 
-    # Iterate over all parts and attributes
     for part_name, part_data in modified.object_state.parts.items():
         for attr_name, attr_snapshot in part_data.attributes.items():
             trend = attr_snapshot.trend
@@ -63,12 +63,10 @@ def _expand_trends_to_value_sets(
                 current_value = attr_snapshot.value
                 space_id = attr_snapshot.space_id
 
-                # Skip if no space defined or value is unknown
                 if not space_id or current_value == "unknown":
                     continue
 
                 if isinstance(current_value, list):
-                    # Value is already a list - expand each value and union
                     all_values = set()
                     for val in current_value:
                         expanded = compute_value_set_from_trend(val, trend, space_id, registry_manager)
@@ -85,14 +83,11 @@ def _expand_trends_to_value_sets(
                     except Exception:
                         sorted_values = sorted(all_values)
 
-                    # Update if we expanded the value set
                     if len(sorted_values) > len(current_value):
                         attr_snapshot.value = sorted_values
                 else:
-                    # Single value - compute value set from trend
                     value_set = compute_value_set_from_trend(current_value, trend, space_id, registry_manager)
 
-                    # If we got multiple values, update the snapshot
                     if len(value_set) > 1:
                         attr_snapshot.value = value_set
 
@@ -130,14 +125,12 @@ def apply_branching_constraints(
     Returns:
         List of (modified_snapshot, branch_info) tuples for each branch
     """
-    # First, expand any trends to value sets in the snapshot
     expanded_snapshot = _expand_trends_to_value_sets(snapshot, registry_manager)
 
     constraints = get_branching_constraints(object_type_name, registry_manager)
     if not constraints:
-        # No branching constraints - return snapshot with trend cleanup
         cleaned = cleanup_single_value_trends(expanded_snapshot, registry_manager)
-        has_trends = _has_active_trends(cleaned)
+        has_trends = compute_has_active_trends(cleaned)
         return [
             (
                 cleaned,
@@ -164,7 +157,6 @@ def apply_branching_constraints(
             next_branches.extend(new_branches)
         current_branches = next_branches
 
-    # If we have branches, return them; otherwise return the original
     if current_branches:
         return current_branches
 
@@ -187,21 +179,17 @@ def _apply_single_branching_constraint(
     # Get current value from snapshot
     current_value = snapshot.get_attribute_value(attr_path)
 
-    # Check if it's a value set (multiple possible values)
     if isinstance(current_value, list):
-        # Value set - need to branch
         return _create_constraint_branches(
             snapshot, constraint, attr_path, current_value, condition_value, condition_operator, registry_manager
         )
     else:
-        # Single value - check if condition matches
         matches = _value_matches_condition(current_value, condition_value, condition_operator)
 
         if matches:
-            # Apply effects
             modified, changes = _apply_constraint_effects(snapshot, constraint, registry_manager)
             cleaned = cleanup_single_value_trends(modified, registry_manager)
-            has_trends = _has_active_trends(cleaned)
+            has_trends = compute_has_active_trends(cleaned)
             return [
                 (
                     cleaned,
@@ -216,9 +204,8 @@ def _apply_single_branching_constraint(
                 )
             ]
         else:
-            # Condition doesn't match - return as ELSE branch
             cleaned = cleanup_single_value_trends(snapshot, registry_manager)
-            has_trends = _has_active_trends(cleaned)
+            has_trends = compute_has_active_trends(cleaned)
             return [
                 (
                     cleaned,
@@ -261,13 +248,12 @@ def _create_constraint_branches(
         else:
             non_if_values.append(val)
 
-    # Create IF branch (condition matches)
     if if_values:
         if_snapshot = deepcopy(snapshot)
         _set_snapshot_value(if_snapshot, attr_path, if_values)
         if_modified, if_changes = _apply_constraint_effects(if_snapshot, constraint, registry_manager)
         if_cleaned = cleanup_single_value_trends(if_modified, registry_manager)
-        has_trends = _has_active_trends(if_cleaned)
+        has_trends = compute_has_active_trends(if_cleaned)
         branches.append(
             (
                 if_cleaned,
@@ -282,7 +268,6 @@ def _create_constraint_branches(
             )
         )
 
-    # Check if we have elif_cases to handle non-IF values individually
     if constraint.elif_cases and non_if_values:
         elif_branches = _create_elif_branches(snapshot, constraint, attr_path, non_if_values, registry_manager)
         branches.extend(elif_branches)
@@ -293,7 +278,7 @@ def _create_constraint_branches(
         # Apply else_effects to the ELSE branch
         else_modified, else_changes = _apply_constraint_else_effects(else_snapshot, constraint, registry_manager)
         else_cleaned = cleanup_single_value_trends(else_modified, registry_manager)
-        has_trends = _has_active_trends(else_cleaned)
+        has_trends = compute_has_active_trends(else_cleaned)
         branches.append(
             (
                 else_cleaned,
@@ -343,7 +328,7 @@ def _create_elif_branches(
                     _set_snapshot_value(elif_snapshot, attr_path, [val])
                     elif_modified, elif_changes = _apply_elif_case_effects(elif_snapshot, elif_case, registry_manager)
                     elif_cleaned = cleanup_single_value_trends(elif_modified, registry_manager)
-                    has_trends = _has_active_trends(elif_cleaned)
+                    has_trends = compute_has_active_trends(elif_cleaned)
                     branches.append(
                         (
                             elif_cleaned,
@@ -363,13 +348,12 @@ def _create_elif_branches(
         if not matched:
             unmatched_values.append(val)
 
-    # Create ELSE branch for any remaining unmatched values
     if unmatched_values:
         else_snapshot = deepcopy(snapshot)
         _set_snapshot_value(else_snapshot, attr_path, unmatched_values)
         else_modified, else_changes = _apply_constraint_else_effects(else_snapshot, constraint, registry_manager)
         else_cleaned = cleanup_single_value_trends(else_modified, registry_manager)
-        has_trends = _has_active_trends(else_cleaned)
+        has_trends = compute_has_active_trends(else_cleaned)
         branches.append(
             (
                 else_cleaned,
@@ -402,14 +386,9 @@ def _apply_elif_case_effects(
         if isinstance(effect, SetAttributeEffect):
             effect_attr_path = effect.target.to_string()
             new_value = effect.value
-
-            # Get old value
             old_value = modified.get_attribute_value(effect_attr_path)
-
-            # Set new value
             _set_snapshot_value(modified, effect_attr_path, [new_value] if isinstance(new_value, str) else new_value)
 
-            # Record change
             if old_value != new_value:
                 changes.append(
                     {
@@ -455,14 +434,9 @@ def _apply_constraint_effects(
         if isinstance(effect, SetAttributeEffect):
             attr_path = effect.target.to_string()
             new_value = effect.value
-
-            # Get old value
             old_value = modified.get_attribute_value(attr_path)
-
-            # Set new value
             _set_snapshot_value(modified, attr_path, [new_value] if isinstance(new_value, str) else new_value)
 
-            # Record change
             if old_value != new_value:
                 changes.append(
                     {
@@ -497,13 +471,11 @@ def _apply_constraint_else_effects(
             attr_path = effect.target.to_string()
             effect_value = effect.value
 
-            # Get old value
             old_value = modified.get_attribute_value(attr_path)
 
             # Check if this is an exclusion (value starts with "!" or is a list of exclusions)
             if isinstance(effect_value, str) and effect_value.startswith("!"):
-                # Exclude single value
-                exclude_val = effect_value[1:]  # Remove the "!" prefix
+                exclude_val = effect_value[1:]
                 if isinstance(old_value, list):
                     new_values = [v for v in old_value if v != exclude_val]
                     if new_values and new_values != old_value:
@@ -518,8 +490,7 @@ def _apply_constraint_else_effects(
                             }
                         )
             elif isinstance(effect_value, list) and all(isinstance(v, str) and v.startswith("!") for v in effect_value):
-                # Exclude multiple values
-                exclude_vals = [v[1:] for v in effect_value]  # Remove "!" prefixes
+                exclude_vals = [v[1:] for v in effect_value]
                 if isinstance(old_value, list):
                     new_values = [v for v in old_value if v not in exclude_vals]
                     if new_values and new_values != old_value:
@@ -575,7 +546,6 @@ def cleanup_single_value_trends(
     """
     modified = deepcopy(snapshot)
 
-    # Process part attributes
     for part_name, part in modified.object_state.parts.items():
         for attr_name, attr in part.attributes.items():
             if attr.trend and attr.trend != "none":
@@ -584,7 +554,6 @@ def cleanup_single_value_trends(
                 if not isinstance(value, list) or len(value) == 1:
                     attr.trend = "none"
 
-    # Process global attributes
     for attr_name, attr in modified.object_state.global_attributes.items():
         if attr.trend and attr.trend != "none":
             value = attr.value
@@ -592,22 +561,6 @@ def cleanup_single_value_trends(
                 attr.trend = "none"
 
     return modified
-
-
-def _has_active_trends(snapshot: WorldSnapshot) -> bool:
-    """Check if any attribute in the snapshot has an active trend."""
-    # Check part attributes
-    for part_name, part in snapshot.object_state.parts.items():
-        for attr_name, attr in part.attributes.items():
-            if attr.trend and attr.trend != "none":
-                return True
-
-    # Check global attributes
-    for attr_name, attr in snapshot.object_state.global_attributes.items():
-        if attr.trend and attr.trend != "none":
-            return True
-
-    return False
 
 
 __all__ = [

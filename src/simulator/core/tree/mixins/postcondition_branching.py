@@ -18,13 +18,14 @@ from simulator.core.tree.node_factory import compute_narrowing_change, create_or
 from simulator.core.tree.snapshot_utils import (
     capture_snapshot,
     capture_snapshot_with_values,
+    snapshot_with_constrained_values,
 )
 from simulator.core.tree.utils.branch_condition_helpers import (
     create_simple_branch_condition,
     merge_branch_conditions,
 )
 from simulator.core.tree.utils.change_helpers import build_changes_list
-from simulator.core.tree.utils.condition_evaluation import evaluate_condition_for_value
+from simulator.core.tree.utils.instance_helpers import set_attribute_value, update_snapshot_attribute
 from simulator.core.tree.utils.value_helpers import (
     get_fail_constraints_for_or,
     get_satisfying_values,
@@ -204,15 +205,15 @@ class PostconditionBranchingMixin:
 
         if precond_attr == postcond_attr:
             if isinstance(postcond_value, list):
-                self._set_attribute_value(new_instance, precond_attr, postcond_value[0])
+                set_attribute_value(new_instance, precond_attr, postcond_value[0])
             else:
-                self._set_attribute_value(new_instance, precond_attr, postcond_value)
+                set_attribute_value(new_instance, precond_attr, postcond_value)
         else:
-            self._set_attribute_value(new_instance, precond_attr, precond_values[0])
+            set_attribute_value(new_instance, precond_attr, precond_values[0])
             if isinstance(postcond_value, list):
-                self._set_attribute_value(new_instance, postcond_attr, postcond_value[0])
+                set_attribute_value(new_instance, postcond_attr, postcond_value[0])
             else:
-                self._set_attribute_value(new_instance, postcond_attr, postcond_value)
+                set_attribute_value(new_instance, postcond_attr, postcond_value)
 
         action_result = self.engine.apply_action(new_instance, action, parameters)
         raw_changes = action_result.changes if action_result else []
@@ -229,12 +230,12 @@ class PostconditionBranchingMixin:
 
         snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
 
-        self._update_snapshot_attribute(snapshot, precond_attr, precond_values)
+        update_snapshot_attribute(snapshot, precond_attr, precond_values)
         if precond_attr != postcond_attr:
             if isinstance(postcond_value, list):
-                self._update_snapshot_attribute(snapshot, postcond_attr, postcond_value)
+                update_snapshot_attribute(snapshot, postcond_attr, postcond_value)
             else:
-                self._update_snapshot_attribute(snapshot, postcond_attr, [postcond_value])
+                update_snapshot_attribute(snapshot, postcond_attr, [postcond_value])
 
         branch_condition = create_simple_branch_condition(postcond_attr, postcond_value, "postcondition", branch_type)
 
@@ -388,13 +389,11 @@ class PostconditionBranchingMixin:
 
         # Capture snapshot
         result_instance = result.after if result.after else modified_instance
-        new_snapshot = self._capture_snapshot(result_instance, parent_node.snapshot)
+        new_snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
 
         for attr_path, values in precond_constraints.items():
-            new_snapshot, _ = self._snapshot_with_constrained_values(
-                new_snapshot, attr_path, values, self.registry_manager
-            )
-        new_snapshot, _ = self._snapshot_with_constrained_values(
+            new_snapshot, _ = snapshot_with_constrained_values(new_snapshot, attr_path, values, self.registry_manager)
+        new_snapshot, _ = snapshot_with_constrained_values(
             new_snapshot, postcond_attr, [postcond_value], self.registry_manager
         )
 
@@ -456,16 +455,12 @@ class PostconditionBranchingMixin:
 
         # Capture snapshot
         result_instance = result.after if result.after else modified_instance
-        new_snapshot = self._capture_snapshot(result_instance, parent_node.snapshot)
+        new_snapshot = capture_snapshot(result_instance, self.registry_manager, parent_node.snapshot)
 
         for attr_path, values in precond_constraints.items():
-            new_snapshot, _ = self._snapshot_with_constrained_values(
-                new_snapshot, attr_path, values, self.registry_manager
-            )
+            new_snapshot, _ = snapshot_with_constrained_values(new_snapshot, attr_path, values, self.registry_manager)
         for attr_path, values in fail_constraints.items():
-            new_snapshot, _ = self._snapshot_with_constrained_values(
-                new_snapshot, attr_path, values, self.registry_manager
-            )
+            new_snapshot, _ = snapshot_with_constrained_values(new_snapshot, attr_path, values, self.registry_manager)
 
         # Build combined branch condition
         sub_conditions = []
@@ -642,27 +637,3 @@ class PostconditionBranchingMixin:
             branches.append(node)
 
         return branches
-
-    def _set_attribute_value(self, instance: "ObjectInstance", attr_path: str, value: str) -> None:
-        """Set an attribute to a single value."""
-        AttributePath.parse(attr_path).set_value_in_instance(instance, value)
-
-    def _update_snapshot_attribute(self, snapshot: "WorldSnapshot", attr_path: str, values: List[str]) -> None:
-        """Update snapshot attribute, preserving existing value sets from trends."""
-        attr = AttributePath.parse(attr_path).resolve_from_snapshot(snapshot)
-        if attr and not isinstance(attr.value, list):
-            attr.value = values[0] if len(values) == 1 else values
-
-    def _evaluate_condition_for_value(self, condition, value: str, instance: "ObjectInstance") -> bool:
-        """Evaluate if a value satisfies a condition."""
-        return evaluate_condition_for_value(condition, value, instance, self.registry_manager)
-
-    def _capture_snapshot(self, instance: "ObjectInstance", parent_snapshot) -> "WorldSnapshot":
-        """Capture snapshot from instance."""
-        return capture_snapshot(instance, self.registry_manager, parent_snapshot)
-
-    def _snapshot_with_constrained_values(self, snapshot, attr_path, values, registry_manager):
-        """Apply constraints to snapshot."""
-        from simulator.core.tree.snapshot_utils import snapshot_with_constrained_values
-
-        return snapshot_with_constrained_values(snapshot, attr_path, values, registry_manager)

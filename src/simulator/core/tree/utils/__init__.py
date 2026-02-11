@@ -6,7 +6,7 @@ from simulator.core.tree.utils.branch_condition_helpers import (
     create_simple_branch_condition,
     merge_branch_conditions,
 )
-from simulator.core.tree.utils.evaluation import (
+from simulator.core.tree.utils.condition_evaluation import (
     evaluate_condition_for_value,
     get_possible_values_for_attr,
 )

@@ -8,10 +8,6 @@ spaces:
     name: Brightness Level
     levels: ["none", "low", "medium", "high"]
 
-  - id: volume_level
-    name: Volume Level
-    levels: ["mute", "low", "medium", "high"]
-
   - id: generic_level
     name: Generic Level
     levels: ["empty", "low", "medium", "high", "full"]

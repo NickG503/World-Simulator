@@ -75,11 +75,8 @@ class TestTimeConstraintBranching:
             initial_values={"battery.level": "medium"},
         )
 
-        # With medium battery and trend down, branches should be created
-        _leaves = tree.get_leaf_nodes()
-
-        # Should have multiple leaf nodes due to branching
-        # (battery could become empty, low, or stay medium)
+        leaves = tree.get_leaf_nodes()
+        assert len(leaves) > 1, "Expected multiple branches from trend-down on medium battery"
 
     def test_multiple_trends_create_branches(self, registry_manager: RegistryManager, runner: TreeSimulationRunner):
         """Test that multiple trends create appropriate branches."""
@@ -90,9 +87,8 @@ class TestTimeConstraintBranching:
             initial_values={"battery.level": "unknown"},
         )
 
-        _leaves = tree.get_leaf_nodes()
-
-        # With unknown battery, more branches are expected
+        leaves = tree.get_leaf_nodes()
+        assert len(leaves) > 1, "Expected multiple branches from unknown battery with trends"
 
 
 class TestSolverFixesTimeState:

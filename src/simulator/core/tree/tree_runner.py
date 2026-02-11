@@ -47,6 +47,7 @@ from simulator.core.tree.models import (
     WorldSnapshot,
 )
 from simulator.core.tree.node_factory import (
+    compute_has_active_trends,
     create_constraint_node,
     create_error_node,
     create_or_merge_node,
@@ -54,9 +55,15 @@ from simulator.core.tree.node_factory import (
     create_solver_node,
     create_time_node,
 )
+from simulator.core.tree.question_handler import check_and_ask_questions
+from simulator.core.tree.serialization import (
+    store_action_definition,
+    store_constraint_definitions,
+    store_solver_definitions,
+)
 from simulator.core.tree.snapshot_utils import capture_snapshot
 from simulator.core.tree.utils.change_helpers import build_changes_list
-from simulator.core.tree.utils.evaluation import evaluate_condition_for_value
+from simulator.core.tree.utils.condition_evaluation import evaluate_condition_for_value
 from simulator.core.tree.utils.instance_helpers import clone_instance_with_values
 
 logger = logging.getLogger(__name__)
@@ -118,88 +125,50 @@ class TreeSimulationRunner(
 
         action_requests = self._parse_action_requests(actions)
         leaves: List[Tuple[TreeNode, ObjectInstance]] = [(root_node, obj_instance)]
+
+        leaves = self._process_action_sequence(
+            tree=tree,
+            leaves=leaves,
+            action_requests=action_requests,
+            object_type=object_type,
+            verbose=verbose,
+            question_strategy=question_strategy,
+            question_callback=question_callback,
+        )
+
+        return tree
+
+    def _process_action_sequence(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        action_requests: List[ActionRequest],
+        object_type: str,
+        verbose: bool = False,
+        question_strategy: Optional["QuestionStrategy"] = None,
+        question_callback: Optional[Callable[[str, List[str], "QuestionMetadata"], Optional[str]]] = None,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Process a sequence of actions, applying solver/time/constraints after each."""
         total_actions = len(action_requests)
 
         for action_idx, request in enumerate(action_requests):
-            new_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
-            layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
-            seen_node_ids: set = set()
-
-            for current_node, current_instance in leaves:
-                # Skip pruned nodes — they are terminal (user resolved the uncertainty)
-                if current_node.pruned:
-                    new_leaves.append((current_node, current_instance))
-                    continue
-
-                results = self._process_action_multi(
-                    tree=tree,
-                    instance=current_instance,
-                    parent_node=current_node,
-                    action_name=request.name,
-                    parameters=request.parameters,
-                    verbose=verbose,
-                    layer_state_cache=layer_state_cache,
-                )
-
-                for result in results:
-                    if result.node.id not in seen_node_ids:
-                        new_leaves.append((result.node, result.instance or current_instance))
-                        seen_node_ids.add(result.node.id)
-
-                if verbose:
-                    for result in results:
-                        logger.info("Created node: %s", result.node.describe())
-
-            # Multi-step flow:
-            # Step 1: Action postcondition (already done above in new_leaves)
-            # Step 2: Apply solver rules
-            solver_leaves = self._apply_solver_to_leaves(
+            leaves = self._process_single_action_step(
                 tree=tree,
-                leaves=new_leaves,
+                leaves=leaves,
+                request=request,
                 object_type=object_type,
                 verbose=verbose,
             )
 
-            # Check if any solver leaves have active trends
-            has_trends = any(
-                self._snapshot_has_active_trends(node.snapshot)
-                for node, _ in solver_leaves
-                if node.action_status == "ok"
-            )
+            if verbose:
+                logger.info("Action '%s' produced %d leaves", request.name, len(leaves))
 
-            if has_trends:
-                # Step 3: Apply time constraints (expand trends to value sets)
-                time_leaves = self._apply_time_constraints_to_leaves(
-                    tree=tree,
-                    leaves=solver_leaves,
-                    object_type=object_type,
-                    verbose=verbose,
-                )
-
-                # Step 4: Apply solver again (fix impossible states from time)
-                final_leaves = self._apply_solver_to_leaves(
-                    tree=tree,
-                    leaves=time_leaves,
-                    object_type=object_type,
-                    verbose=verbose,
-                    step_name="solver_fix",
-                )
-                leaves = final_leaves
-            else:
-                # No trends - just use solver leaves
-                leaves = solver_leaves
-
-            if verbose and layer_state_cache:
-                merged_count = sum(1 for n, _ in layer_state_cache.values() if n.has_multiple_parents)
-                if merged_count > 0:
-                    logger.info("Layer deduplication: %d nodes merged", merged_count)
-
-            # Question strategy check: ask user to resolve uncertainty
             if question_strategy is not None and question_callback is not None:
-                leaves = self._check_and_ask_questions(
+                leaves = check_and_ask_questions(
                     tree=tree,
                     leaves=leaves,
                     object_type=object_type,
+                    registry_manager=self.registry_manager,
                     strategy=question_strategy,
                     question_callback=question_callback,
                     action_name=request.name,
@@ -208,7 +177,66 @@ class TreeSimulationRunner(
                     verbose=verbose,
                 )
 
-        return tree
+        return leaves
+
+    def _process_single_action_step(
+        self,
+        tree: SimulationTree,
+        leaves: List[Tuple[TreeNode, ObjectInstance]],
+        request: ActionRequest,
+        object_type: str,
+        verbose: bool = False,
+    ) -> List[Tuple[TreeNode, ObjectInstance]]:
+        """Process one action across all active leaves, then apply solver/time/constraints."""
+        new_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
+        layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
+        seen_node_ids: set = set()
+
+        for current_node, current_instance in leaves:
+            if current_node.pruned:
+                new_leaves.append((current_node, current_instance))
+                continue
+
+            results = self._process_action_multi(
+                tree=tree,
+                instance=current_instance,
+                parent_node=current_node,
+                action_name=request.name,
+                parameters=request.parameters,
+                verbose=verbose,
+                layer_state_cache=layer_state_cache,
+            )
+
+            for result in results:
+                if result.node.id not in seen_node_ids:
+                    new_leaves.append((result.node, result.instance or current_instance))
+                    seen_node_ids.add(result.node.id)
+
+            if verbose:
+                for result in results:
+                    logger.info("Created node: %s", result.node.describe())
+
+        # Multi-step post-processing: solver -> time constraints -> solver fix
+        solver_leaves = self._apply_solver_to_leaves(
+            tree=tree, leaves=new_leaves, object_type=object_type, verbose=verbose
+        )
+
+        has_trends = any(
+            compute_has_active_trends(node.snapshot)
+            for node, _ in solver_leaves
+            if node.action_status == "ok" and not node.pruned
+        )
+
+        if has_trends:
+            time_leaves = self._apply_time_constraints_to_leaves(
+                tree=tree, leaves=solver_leaves, object_type=object_type, verbose=verbose
+            )
+            # Fix impossible states introduced by time expansion
+            return self._apply_solver_to_leaves(
+                tree=tree, leaves=time_leaves, object_type=object_type, verbose=verbose, step_name="solver_fix"
+            )
+
+        return solver_leaves
 
     # =========================================================================
     # Action Processing
@@ -289,8 +317,7 @@ class TreeSimulationRunner(
             tree.add_node(node)
             return ActionResult(node=node, instance=None, action=None)
 
-        # Store action definition for visualization
-        self._store_action_definition(tree, action)
+        store_action_definition(tree, action)
 
         parent_snapshot = parent_node.snapshot if parent_node else None
 
@@ -368,7 +395,6 @@ class TreeSimulationRunner(
                 has_compound = self._has_compound_postcondition(action)
 
                 if has_compound and len(postcond_unknowns) > 1:
-                    # Compound OR postcondition with multiple unknown attributes
                     child_nodes = self._create_compound_postcondition_branches(
                         tree=tree,
                         instance=instance,
@@ -379,7 +405,6 @@ class TreeSimulationRunner(
                         layer_state_cache=layer_state_cache,
                     )
                 else:
-                    # Simple postcondition branching on single attribute
                     child_nodes = self._create_postcondition_branches(
                         tree=tree,
                         instance=instance,
@@ -531,25 +556,29 @@ class TreeSimulationRunner(
         Returns:
             List of (node, instance) tuples for next action
         """
-        # Check if there are any branching constraints
         constraints = get_branching_constraints(object_type, self.registry_manager)
         if not constraints:
-            return []  # No constraints, return empty to use action leaves
+            return []
 
-        # Store constraint definitions for visualization
-        self._store_constraint_definitions(tree, object_type)
+        store_constraint_definitions(tree, object_type, self.registry_manager)
 
         result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
         layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
 
-        # Check if ANY sibling has trends (to determine if we need placeholders)
+        # Check if ANY non-pruned sibling has trends (to determine if we need placeholders)
         any_sibling_has_trends = any(
-            self._snapshot_has_active_trends(node.snapshot) for node, _ in leaves if node.action_status == "ok"
+            compute_has_active_trends(node.snapshot)
+            for node, _ in leaves
+            if node.action_status == "ok" and not node.pruned
         )
 
         for action_node, instance in leaves:
-            # Check if the action node has any active trends
-            has_trends = self._snapshot_has_active_trends(action_node.snapshot)
+            # Skip pruned nodes
+            if action_node.pruned:
+                result_leaves.append((action_node, instance))
+                continue
+
+            has_trends = compute_has_active_trends(action_node.snapshot)
 
             # For failed nodes: create placeholder Time node if siblings have trends
             if action_node.action_status != "ok":
@@ -573,7 +602,6 @@ class TreeSimulationRunner(
                     result_leaves.append((action_node, instance))
                 continue
 
-            # Apply branching constraints to this action node's snapshot
             branches = apply_branching_constraints(
                 snapshot=action_node.snapshot,
                 object_type_name=object_type,
@@ -588,12 +616,10 @@ class TreeSimulationRunner(
                         result_leaves.append((action_node, instance))
                         break
 
-                    # Update the action node's snapshot with constraint changes
                     action_node.snapshot = branch_snapshot
                     action_node.changes.extend(branch_info.changes)
-                    action_node.constraints_applied = True  # Mark that constraints were applied
+                    action_node.constraints_applied = True
 
-                    # Create instance that matches the constrained snapshot
                     constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
                     result_leaves.append((action_node, constrained_instance))
                     break  # Only take the first branch when no trends
@@ -604,7 +630,6 @@ class TreeSimulationRunner(
                         result_leaves.append((action_node, instance))
                         continue
 
-                    # Create Time constraint node
                     constraint_node = create_constraint_node(
                         tree=tree,
                         parent_node=action_node,
@@ -623,22 +648,10 @@ class TreeSimulationRunner(
                     if verbose:
                         logger.info("Created Time node: %s", constraint_node.describe())
 
-                    # Create instance that matches the constrained snapshot
                     constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
                     result_leaves.append((constraint_node, constrained_instance))
 
         return result_leaves
-
-    def _snapshot_has_active_trends(self, snapshot: WorldSnapshot) -> bool:
-        """Check if any attribute in the snapshot has an active trend."""
-        for part_name, part in snapshot.object_state.parts.items():
-            for attr_name, attr in part.attributes.items():
-                if attr.trend and attr.trend != "none":
-                    return True
-        for attr_name, attr in snapshot.object_state.global_attributes.items():
-            if attr.trend and attr.trend != "none":
-                return True
-        return False
 
     def _create_instance_from_snapshot(
         self, original_instance: ObjectInstance, snapshot: WorldSnapshot
@@ -646,7 +659,6 @@ class TreeSimulationRunner(
         """Create an ObjectInstance that matches the snapshot's state."""
         new_instance = original_instance.deep_copy()
 
-        # Update part attributes from snapshot
         for part_name, part_snapshot in snapshot.object_state.parts.items():
             if part_name in new_instance.parts:
                 for attr_name, attr_snapshot in part_snapshot.attributes.items():
@@ -655,7 +667,6 @@ class TreeSimulationRunner(
                         attr.current_value = attr_snapshot.value
                         attr.trend = attr_snapshot.trend
 
-        # Update global attributes from snapshot
         for attr_name, attr_snapshot in snapshot.object_state.global_attributes.items():
             if attr_name in new_instance.global_attributes:
                 attr = new_instance.global_attributes[attr_name]
@@ -691,16 +702,12 @@ class TreeSimulationRunner(
         Returns:
             List of (node, instance) tuples for next step
         """
-        # Check if there are any solver rules
         solver_rules = get_solver_rules(object_type, self.registry_manager)
         if not solver_rules:
-            return leaves  # No solver rules, return leaves unchanged
+            return leaves
 
-        # Store solver definitions for visualization
-        self._store_solver_definitions(tree, object_type)
-
-        # Also store constraint definitions (time constraints) for visualization
-        self._store_constraint_definitions(tree, object_type)
+        store_solver_definitions(tree, object_type, self.registry_manager)
+        store_constraint_definitions(tree, object_type, self.registry_manager)
 
         result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
         layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
@@ -711,7 +718,6 @@ class TreeSimulationRunner(
                 result_leaves.append((parent_node, instance))
                 continue
 
-            # Apply solver rules to this node's snapshot
             branches = apply_solver_rules(
                 snapshot=parent_node.snapshot,
                 object_type_name=object_type,
@@ -720,11 +726,9 @@ class TreeSimulationRunner(
 
             for branch_snapshot, branch_info in branches:
                 if branch_info.branch_type == "none" and not branch_info.changes:
-                    # No changes from solver - use parent node
                     result_leaves.append((parent_node, instance))
                     continue
 
-                # Create solver node
                 solver_node = create_solver_node(
                     tree=tree,
                     parent_node=parent_node,
@@ -742,7 +746,6 @@ class TreeSimulationRunner(
                 if verbose:
                     logger.info("Created %s node: %s", step_name, solver_node.describe())
 
-                # Create instance that matches the solver snapshot
                 constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
                 result_leaves.append((solver_node, constrained_instance))
 
@@ -769,22 +772,19 @@ class TreeSimulationRunner(
         Returns:
             List of (node, instance) tuples for solver fix step
         """
-        # Check if there are any branching constraints
         constraints = get_branching_constraints(object_type, self.registry_manager)
         if not constraints:
-            return leaves  # No constraints, return leaves unchanged
+            return leaves
 
         result_leaves: List[Tuple[TreeNode, ObjectInstance]] = []
         layer_state_cache: Dict[str, Tuple[TreeNode, ObjectInstance]] = {}
 
         for parent_node, instance in leaves:
-            # Skip failed or pruned nodes
             if parent_node.action_status != "ok" or parent_node.pruned:
                 result_leaves.append((parent_node, instance))
                 continue
 
-            # Check if this node has active trends
-            has_trends = self._snapshot_has_active_trends(parent_node.snapshot)
+            has_trends = compute_has_active_trends(parent_node.snapshot)
             if not has_trends:
                 # Create placeholder time node to maintain level alignment
                 # This ensures all branches stay at the same depth for proper DAG merging
@@ -807,7 +807,6 @@ class TreeSimulationRunner(
                 result_leaves.append((placeholder_node, instance))
                 continue
 
-            # Apply branching constraints to this node's snapshot
             branches = apply_branching_constraints(
                 snapshot=parent_node.snapshot,
                 object_type_name=object_type,
@@ -816,7 +815,6 @@ class TreeSimulationRunner(
 
             for branch_snapshot, branch_info in branches:
                 if branch_info.branch_type == "none" and not branch_info.constraint_name:
-                    # Still create placeholder for alignment
                     placeholder_node = create_time_node(
                         tree=tree,
                         parent_node=parent_node,
@@ -832,7 +830,6 @@ class TreeSimulationRunner(
                     result_leaves.append((placeholder_node, instance))
                     continue
 
-                # Create time node
                 time_node = create_time_node(
                     tree=tree,
                     parent_node=parent_node,
@@ -850,7 +847,6 @@ class TreeSimulationRunner(
                 if verbose:
                     logger.info("Created time node: %s", time_node.describe())
 
-                # Create instance that matches the time snapshot
                 constrained_instance = self._create_instance_from_snapshot(instance, branch_snapshot)
                 result_leaves.append((time_node, constrained_instance))
 
@@ -986,7 +982,6 @@ class TreeSimulationRunner(
                 attr_changes[attr] = []
             attr_changes[attr].append(change)
 
-        # Merge changes for each attribute
         result: List[Dict[str, Any]] = []
         for attr in attr_order:
             attr_list = attr_changes[attr]
@@ -1015,547 +1010,6 @@ class TreeSimulationRunner(
                     )
 
         return result
-
-    def _build_precondition_error(self, action: Action, attr_path: str, actual_values: List[str]) -> str:
-        """Build detailed precondition error message."""
-        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.utils.error_formatting import format_precondition_error
-
-        for condition in action.preconditions:
-            if isinstance(condition, AttributeCondition):
-                if condition.target.to_string() == attr_path:
-                    actual = actual_values[0] if len(actual_values) == 1 else actual_values
-                    msg = format_precondition_error(
-                        attr_path=attr_path,
-                        operator=condition.operator,
-                        expected_value=condition.value,
-                        actual_value=actual,
-                    )
-                    return f"Precondition failed: {msg}"
-
-        actual_str = actual_values[0] if len(actual_values) == 1 else "{" + ", ".join(actual_values) + "}"
-        return f"Precondition failed: {attr_path} (actual: {actual_str})"
-
-    # =========================================================================
-    # Action Definition Serialization
-    # =========================================================================
-
-    def _serialize_action_definition(self, action: Action) -> Dict[str, Any]:
-        """Serialize action preconditions and effects for visualization."""
-        return {
-            "preconditions": self._serialize_preconditions(action.preconditions),
-            "effects": self._serialize_effects(action.effects),
-        }
-
-    def _serialize_preconditions(self, preconditions: List[Any]) -> List[Dict[str, Any]]:
-        """Serialize preconditions to a visualization-friendly format."""
-        result = []
-        for cond in preconditions:
-            result.append(self._serialize_condition(cond))
-        return result
-
-    def _serialize_condition(self, cond: Any) -> Dict[str, Any]:
-        """Serialize a single condition recursively."""
-        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
-
-        if isinstance(cond, OrCondition):
-            return {
-                "type": "or",
-                "description": cond.describe(),
-                "conditions": [self._serialize_condition(c) for c in cond.conditions],
-            }
-        elif isinstance(cond, AndCondition):
-            return {
-                "type": "and",
-                "description": cond.describe(),
-                "conditions": [self._serialize_condition(c) for c in cond.conditions],
-            }
-        elif isinstance(cond, AttributeCondition):
-            return {
-                "type": "attribute_check",
-                "attribute": cond.target.to_string(),
-                "operator": cond.operator,
-                "value": cond.value,
-                "description": cond.describe(),
-            }
-        else:
-            return {
-                "type": "unknown",
-                "description": cond.describe() if hasattr(cond, "describe") else str(cond),
-            }
-
-    def _serialize_effects(self, effects: List[Any]) -> List[Dict[str, Any]]:
-        """Serialize effects to a visualization-friendly format."""
-        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
-        from simulator.core.actions.effects.trend_effects import TrendEffect
-
-        result = []
-        is_first_conditional = True
-
-        for effect in effects:
-            if isinstance(effect, ConditionalEffect):
-                branch_type = "if" if is_first_conditional else "elif"
-                is_first_conditional = False
-
-                serialized = {
-                    "type": "conditional",
-                    "branch_type": branch_type,
-                    "condition": self._serialize_condition(effect.condition),
-                    "then_effects": self._serialize_effect_list(effect.then_effect),
-                }
-                if effect.else_effect:
-                    serialized["else_effects"] = self._serialize_effect_list(effect.else_effect)
-                result.append(serialized)
-            elif isinstance(effect, SetAttributeEffect):
-                result.append(
-                    {
-                        "type": "set_attribute",
-                        "target": effect.target.to_string(),
-                        "value": effect.value,
-                    }
-                )
-            elif isinstance(effect, TrendEffect):
-                result.append(
-                    {
-                        "type": "trend",
-                        "target": effect.target.to_string(),
-                        "direction": effect.direction,
-                    }
-                )
-            else:
-                result.append(
-                    {
-                        "type": "other",
-                        "description": str(effect),
-                    }
-                )
-
-        return result
-
-    def _serialize_effect_list(self, effects: Any) -> List[Dict[str, Any]]:
-        """Serialize a list of effects (or single effect)."""
-        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-        from simulator.core.actions.effects.conditional_effects import ConditionalEffect
-        from simulator.core.actions.effects.trend_effects import TrendEffect
-
-        if effects is None:
-            return []
-
-        effect_list = effects if isinstance(effects, list) else [effects]
-        result = []
-
-        for effect in effect_list:
-            if isinstance(effect, ConditionalEffect):
-                # Nested conditional (for ELIF in ELSE)
-                serialized = {
-                    "type": "conditional",
-                    "branch_type": "elif",
-                    "condition": self._serialize_condition(effect.condition),
-                    "then_effects": self._serialize_effect_list(effect.then_effect),
-                }
-                if effect.else_effect:
-                    serialized["else_effects"] = self._serialize_effect_list(effect.else_effect)
-                result.append(serialized)
-            elif isinstance(effect, SetAttributeEffect):
-                result.append(
-                    {
-                        "type": "set_attribute",
-                        "target": effect.target.to_string(),
-                        "value": effect.value,
-                    }
-                )
-            elif isinstance(effect, TrendEffect):
-                result.append(
-                    {
-                        "type": "trend",
-                        "target": effect.target.to_string(),
-                        "direction": effect.direction,
-                    }
-                )
-            else:
-                result.append(
-                    {
-                        "type": "other",
-                        "description": str(effect),
-                    }
-                )
-
-        return result
-
-    def _store_action_definition(self, tree: SimulationTree, action: Action) -> None:
-        """Store action definition in the tree for visualization."""
-        if action.name not in tree.action_definitions:
-            tree.action_definitions[action.name] = self._serialize_action_definition(action)
-
-    def _store_constraint_definitions(self, tree: SimulationTree, object_type: str) -> None:
-        """Store constraint definitions in the tree for visualization."""
-        from simulator.core.constraints.constraint import BranchingConstraint
-
-        if "constraint" in tree.constraint_definitions:
-            return  # Already stored
-
-        obj_type = self.registry_manager.objects.get(object_type)
-        if not obj_type:
-            return
-
-        constraint_def = {"branches": []}
-
-        # First try compiled constraints
-        if obj_type.compiled_constraints:
-            branching_constraints = [c for c in obj_type.compiled_constraints if isinstance(c, BranchingConstraint)]
-            for bc in branching_constraints:
-                branch_def = {
-                    "condition": self._serialize_condition_for_display(bc.condition),
-                    "effects": [self._serialize_effect_for_display(e) for e in bc.effects],
-                }
-                if bc.elif_cases:
-                    branch_def["elif_cases"] = [
-                        {
-                            "condition": self._serialize_condition_for_display(ec.condition),
-                            "effects": [self._serialize_effect_for_display(e) for e in ec.effects],
-                        }
-                        for ec in bc.elif_cases
-                    ]
-                if bc.else_effects:
-                    branch_def["else_effects"] = [self._serialize_effect_for_display(e) for e in bc.else_effects]
-                constraint_def["branches"].append(branch_def)
-
-        # If no compiled constraints, try raw constraint specs
-        if not constraint_def["branches"] and obj_type.constraints:
-            for c in obj_type.constraints:
-                if hasattr(c, "type") and c.type == "branching_constraint":
-                    branch_def = {}
-                    if hasattr(c, "condition") and c.condition:
-                        branch_def["condition"] = self._serialize_condition_spec(c.condition)
-                    if hasattr(c, "effects") and c.effects:
-                        branch_def["effects"] = [self._serialize_effect_spec(e) for e in c.effects]
-                    if hasattr(c, "elif_cases") and c.elif_cases:
-                        branch_def["elif_cases"] = [
-                            {
-                                "condition": self._serialize_condition_spec(ec.condition)
-                                if hasattr(ec, "condition")
-                                else {},
-                                "effects": [self._serialize_effect_spec(e) for e in ec.effects]
-                                if hasattr(ec, "effects")
-                                else [],
-                            }
-                            for ec in c.elif_cases
-                        ]
-                    if hasattr(c, "else_effects") and c.else_effects:
-                        branch_def["else_effects"] = [self._serialize_effect_spec(e) for e in c.else_effects]
-                    if hasattr(c, "name"):
-                        branch_def["name"] = c.name
-                    constraint_def["branches"].append(branch_def)
-
-        if constraint_def["branches"]:
-            tree.constraint_definitions["constraint"] = constraint_def
-
-    def _serialize_condition_spec(self, condition) -> Dict[str, Any]:
-        """Serialize a raw condition spec for display."""
-        if hasattr(condition, "type"):
-            ctype = condition.type
-            if ctype == "attribute_check":
-                target = getattr(condition, "target", "")
-                operator = getattr(condition, "operator", "equals")
-                value = getattr(condition, "value", "")
-                op_map = {
-                    "equals": "==",
-                    "not_equals": "!=",
-                    "greater_than": ">",
-                    "less_than": "<",
-                    "in": "in",
-                }
-                op_str = op_map.get(operator, operator)
-                return {"description": f"{target} {op_str} {value}"}
-        return {"description": str(condition)}
-
-    def _serialize_effect_spec(self, effect) -> Dict[str, Any]:
-        """Serialize a raw effect spec for display."""
-        if hasattr(effect, "type"):
-            etype = effect.type
-            if etype == "set_attribute":
-                target = getattr(effect, "target", "")
-                value = getattr(effect, "value", "")
-                return {"target": target, "value": value}
-            elif etype == "set_trend":
-                target = getattr(effect, "target", "")
-                direction = getattr(effect, "direction", "none")
-                return {"target": target, "value": f"trend {direction}"}
-        return {"target": "unknown", "value": "unknown"}
-
-    def _store_solver_definitions(self, tree: SimulationTree, object_type: str) -> None:
-        """Store solver rule definitions in the tree for visualization."""
-        if "solver" in tree.solver_definitions:
-            return  # Already stored
-
-        rules = get_solver_rules(object_type, self.registry_manager)
-        if not rules:
-            return
-
-        # Serialize solver rules
-        solver_def = {"rules": []}
-        for rule in rules:
-            rule_def = {
-                "name": rule.name,
-                "priority": rule.priority,
-                "description": rule.description or rule.describe(),
-            }
-            if rule.condition:
-                rule_def["condition"] = self._serialize_condition(rule.condition)
-            if rule.precondition:
-                rule_def["precondition"] = self._serialize_condition(rule.precondition)
-            if rule.implies:
-                rule_def["implies"] = [self._serialize_effect_for_display(e) for e in rule.implies]
-            if rule.otherwise:
-                rule_def["otherwise"] = [self._serialize_effect_for_display(e) for e in rule.otherwise]
-            if rule.cases:
-                rule_def["cases"] = []
-                for case in rule.cases:
-                    case_def = {
-                        "condition": self._serialize_condition(case.condition),
-                        "implies": [self._serialize_effect_for_display(e) for e in case.implies],
-                    }
-                    rule_def["cases"].append(case_def)
-            solver_def["rules"].append(rule_def)
-
-        tree.solver_definitions["solver"] = solver_def
-
-    def _serialize_condition_for_display(self, condition) -> Dict[str, Any]:
-        """Serialize a condition for visualization display."""
-        from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
-        from simulator.utils.error_formatting import get_operator_symbol
-
-        if isinstance(condition, AttributeCondition):
-            op_symbol = get_operator_symbol(condition.operator)
-            return {
-                "type": "attribute_check",
-                "attribute": condition.target.to_string(),
-                "operator": condition.operator,
-                "value": condition.value,
-                "description": f"{condition.target.to_string()} {op_symbol} {condition.value}",
-            }
-        return {"type": condition.__class__.__name__}
-
-    def _serialize_effect_for_display(self, effect) -> Dict[str, Any]:
-        """Serialize an effect for visualization display."""
-        from simulator.core.actions.effects.attribute_effects import SetAttributeEffect
-        from simulator.core.actions.effects.trend_effects import TrendEffect
-
-        if isinstance(effect, SetAttributeEffect):
-            return {
-                "type": "set_attribute",
-                "target": effect.target.to_string(),
-                "value": effect.value,
-            }
-        elif isinstance(effect, TrendEffect):
-            return {
-                "type": "set_trend",
-                "target": effect.target.to_string(),
-                "value": f"trend {effect.direction}",
-            }
-        return {"type": effect.__class__.__name__}
-
-    # =========================================================================
-    # Question Threshold Logic
-    # =========================================================================
-
-    def _check_and_ask_questions(
-        self,
-        tree: SimulationTree,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-        object_type: str,
-        strategy: "QuestionStrategy",
-        question_callback: Callable[[str, List[str], "QuestionMetadata"], Optional[str]],
-        action_name: str = "",
-        action_index: int = 1,
-        total_actions: int = 1,
-        verbose: bool = False,
-        max_questions: int = 5,
-    ) -> List[Tuple[TreeNode, ObjectInstance]]:
-        """Check if strategy says we should ask, and ask user questions to prune.
-
-        Loops until the strategy says stop, no uncertain attributes remain,
-        or max_questions rounds are reached.
-        """
-        from simulator.core.tree.question_strategy import QuestionContext, QuestionMetadata, count_active_leaves
-
-        asked = 0
-        while asked < max_questions:
-            active_count = count_active_leaves(leaves)
-            ctx = QuestionContext(
-                active_leaf_count=active_count,
-                total_node_count=len(tree.nodes),
-                leaves=leaves,
-                tree=tree,
-                object_type=object_type,
-                registry_manager=self.registry_manager,
-            )
-
-            if not strategy.should_ask(ctx):
-                break
-
-            result = strategy.select_attribute(ctx)
-            if result is None:
-                break
-
-            attr_path, options = result
-
-            metadata = QuestionMetadata(
-                action_name=action_name,
-                action_index=action_index,
-                total_actions=total_actions,
-                active_leaves=active_count,
-            )
-            answer = question_callback(attr_path, options, metadata)
-            if answer is None:
-                break  # User declined to answer
-
-            if answer not in options:
-                if verbose:
-                    logger.warning("Answer '%s' not in options %s, skipping", answer, options)
-                break
-
-            leaves = self._prune_leaves_by_answer(tree, leaves, attr_path, answer)
-            asked += 1
-
-            if verbose:
-                remaining = count_active_leaves(leaves)
-                logger.info(
-                    "Question %d: %s = %s -> %d active leaves remaining",
-                    asked,
-                    attr_path,
-                    answer,
-                    remaining,
-                )
-
-        return leaves
-
-    def _prune_leaves_by_answer(
-        self,
-        tree: SimulationTree,
-        leaves: List[Tuple[TreeNode, ObjectInstance]],
-        attr_path: str,
-        answer: str,
-    ) -> List[Tuple[TreeNode, ObjectInstance]]:
-        """Prune leaves incompatible with the user's answer, narrow compatible ones.
-
-        For each active leaf:
-        - value set containing answer -> narrow instance to answer, clear trend
-        - single value == answer -> keep as-is
-        - 'unknown' -> set instance to answer, clear trend
-        - value set NOT containing answer -> mark pruned
-        - single value != answer -> mark pruned
-        """
-        from simulator.core.attributes import AttributePath
-
-        result: List[Tuple[TreeNode, ObjectInstance]] = []
-        newly_pruned_ids: List[str] = []
-        reason = f"User answered: {attr_path} = {answer}"
-
-        for node, instance in leaves:
-            # Already failed or pruned: carry forward unchanged
-            if node.action_status != "ok" or node.pruned:
-                result.append((node, instance))
-                continue
-
-            snapshot = node.snapshot
-            value = snapshot.get_attribute_value(attr_path)
-
-            if isinstance(value, list):
-                if answer in value:
-                    # Value set includes the answer: narrow to just the answer
-                    narrowed = instance.deep_copy()
-                    parsed = AttributePath.parse(attr_path)
-                    parsed.set_value_in_instance(narrowed, answer)
-                    # Clear trend on this attribute
-                    self._clear_trend_on_instance(narrowed, attr_path)
-                    result.append((node, narrowed))
-                else:
-                    # Value set does NOT include the answer: prune
-                    tree.nodes[node.id].pruned = True
-                    tree.nodes[node.id].pruned_reason = reason
-                    newly_pruned_ids.append(node.id)
-                    result.append((node, instance))
-            elif value is None or value == "unknown":
-                # Unknown: set to answer
-                narrowed = instance.deep_copy()
-                parsed = AttributePath.parse(attr_path)
-                parsed.set_value_in_instance(narrowed, answer)
-                self._clear_trend_on_instance(narrowed, attr_path)
-                result.append((node, narrowed))
-            elif value == answer:
-                # Exact match: keep as-is
-                result.append((node, instance))
-            else:
-                # Single value that doesn't match: prune
-                tree.nodes[node.id].pruned = True
-                tree.nodes[node.id].pruned_reason = reason
-                newly_pruned_ids.append(node.id)
-                result.append((node, instance))
-
-        # Propagate pruning upward through the tree
-        if newly_pruned_ids:
-            self._propagate_pruning_upward(tree, newly_pruned_ids)
-
-        return result
-
-    def _propagate_pruning_upward(
-        self,
-        tree: SimulationTree,
-        pruned_node_ids: List[str],
-    ) -> None:
-        """Propagate pruning upward: if all children of a parent are pruned/failed, prune the parent too.
-
-        Uses a bottom-up BFS from the newly pruned nodes toward the root.
-        For each pruned node, checks its parents. If ALL children of a parent
-        are pruned or failed, marks that parent as pruned and continues upward.
-        Never prunes the root node.
-        """
-        from collections import deque
-
-        queue: deque = deque(pruned_node_ids)
-        visited: set = set()
-
-        while queue:
-            node_id = queue.popleft()
-            if node_id in visited:
-                continue
-            visited.add(node_id)
-
-            node = tree.nodes.get(node_id)
-            if not node:
-                continue
-
-            for parent_id in node.parent_ids:
-                if parent_id in visited:
-                    continue
-                parent = tree.nodes.get(parent_id)
-                if not parent or parent.is_root or parent.pruned:
-                    continue
-
-                # Check if ALL children of this parent are pruned or failed
-                all_children_dead = all(
-                    tree.nodes[cid].pruned or tree.nodes[cid].failed for cid in parent.children_ids if cid in tree.nodes
-                )
-                if all_children_dead:
-                    parent.pruned = True
-                    parent.pruned_reason = parent.pruned_reason or "All children pruned"
-                    queue.append(parent_id)
-
-    def _clear_trend_on_instance(
-        self,
-        instance: ObjectInstance,
-        attr_path: str,
-    ) -> None:
-        """Clear the trend on an attribute in an ObjectInstance."""
-        from simulator.core.attributes import AttributePath
-
-        parsed = AttributePath.parse(attr_path)
-        attr_inst = parsed.resolve_from_instance(instance)
-        if attr_inst and hasattr(attr_inst, "trend"):
-            attr_inst.trend = "none"
 
     # =========================================================================
     # Serialization

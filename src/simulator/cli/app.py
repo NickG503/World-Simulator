@@ -338,17 +338,14 @@ def simulate_cmd(
     simulation_name = run_name if run_name else None
 
     # Build question strategy based on CLI flags
-    from simulator.core.tree.question_strategy import (
-        LeafCountThresholdStrategy,
-        UncertaintyRatioStrategy,
-    )
+    strategy = None
+    callback = None
 
     if ask_threshold != 999:
-        # User explicitly set --ask-threshold: use leaf count strategy
+        from simulator.core.tree.question_strategy import LeafCountThresholdStrategy
+
         strategy = LeafCountThresholdStrategy(ask_threshold)
-    else:
-        # Default: ask when uncertainty ratio exceeds 0.25
-        strategy = UncertaintyRatioStrategy(0.25)
+        callback = _cli_question_callback
 
     tree = runner.run(
         object_type=obj,
@@ -357,7 +354,7 @@ def simulate_cmd(
         verbose=False,
         initial_values=initial_values if initial_values else None,
         question_strategy=strategy,
-        question_callback=_cli_question_callback,
+        question_callback=callback,
     )
 
     # Show initial values in output if any were set

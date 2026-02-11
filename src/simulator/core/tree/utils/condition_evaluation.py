@@ -18,52 +18,75 @@ def evaluate_condition_for_value(
     value: str,
     instance: Optional[ObjectInstance] = None,
     registry_manager: Optional["RegistryManager"] = None,
+    space_levels: Optional[List[str]] = None,
 ) -> bool:
-    """
-    Check if a specific value would pass a condition.
+    """Check if a specific value would pass a condition.
 
-    Args:
-        condition: The condition to evaluate
-        value: The value to test
-        instance: Optional object instance for resolving qualitative spaces
-        registry_manager: Optional registry manager for space lookups
-
-    Returns:
-        True if the condition would pass with this value
+    Supports two calling conventions for comparison operators:
+    - Pass ``space_levels`` directly when the ordered space is already resolved.
+    - Pass ``instance`` + ``registry_manager`` to resolve the space on the fly.
     """
     from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
 
     if not isinstance(condition, AttributeCondition):
         return True
 
-    if condition.operator == "equals":
-        return value == condition.value
-    elif condition.operator == "not_equals":
-        return value != condition.value
-    elif condition.operator == "in":
-        # Check if value is in the list
-        if isinstance(condition.value, list):
-            return value in condition.value
-        return value == condition.value
-    elif condition.operator == "not_in":
-        # Check if value is NOT in the list
-        if isinstance(condition.value, list):
-            return value not in condition.value
-        return value != condition.value
-    elif condition.operator in ("gt", "gte", "lt", "lte"):
-        # For qualitative spaces, compare by order using the space
-        if instance is None or registry_manager is None:
+    op = condition.operator
+    expected = condition.value
+
+    if op == "equals":
+        return value == expected
+    elif op == "not_equals":
+        return value != expected
+    elif op == "in":
+        return value in expected if isinstance(expected, list) else value == expected
+    elif op == "not_in":
+        return value not in expected if isinstance(expected, list) else value != expected
+    elif op in ("gt", "gte", "lt", "lte", ">", "<", ">=", "<="):
+        # Try explicit space_levels first
+        if space_levels:
+            try:
+                value_idx = space_levels.index(value)
+                expected_idx = space_levels.index(expected)
+            except ValueError:
+                return True
+            if op in ("gt", ">"):
+                return value_idx > expected_idx
+            elif op in ("lt", "<"):
+                return value_idx < expected_idx
+            elif op in ("gte", ">="):
+                return value_idx >= expected_idx
+            elif op in ("lte", "<="):
+                return value_idx <= expected_idx
+
+        # Fall back to instance + registry_manager resolution
+        if instance is not None and registry_manager is not None:
+            try:
+                ai = condition.target.resolve(instance)
+                space = registry_manager.spaces.get(ai.spec.space_id)
+                if space:
+                    satisfying_values = space.get_values_for_comparison(str(expected), op)
+                    return value in satisfying_values
+            except (ValueError, AttributeError):
+                pass
             return False
-        try:
-            ai = condition.target.resolve(instance)
-            space = registry_manager.spaces.get(ai.spec.space_id)
-            if space:
-                satisfying_values = space.get_values_for_comparison(str(condition.value), condition.operator)
-                return value in satisfying_values
-        except (ValueError, AttributeError):
-            pass
-        return False
+
+        return True
     return True
+
+
+def get_possible_values_for_attr(
+    attr_path: str,
+    instance: "ObjectInstance",
+    parent_snapshot: Optional[WorldSnapshot],
+) -> List[str]:
+    """Get possible values for an attribute from snapshot (simple version)."""
+    possible_values: List[str] = []
+    if parent_snapshot:
+        snapshot_value = parent_snapshot.get_attribute_value(attr_path)
+        if isinstance(snapshot_value, list):
+            possible_values = list(snapshot_value)
+    return possible_values
 
 
 def get_possible_values_for_attribute(

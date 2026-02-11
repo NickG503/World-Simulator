@@ -7,6 +7,7 @@ Tests cover:
 - apply command
 """
 
+import pytest
 from typer.testing import CliRunner
 
 from simulator.cli.app import app
@@ -35,27 +36,13 @@ class TestValidateCommand:
 class TestShowCommand:
     """Tests for show commands."""
 
-    def test_show_object_flashlight(self):
-        """Show flashlight object definition."""
-        result = runner.invoke(app, ["show", "object", "flashlight"])
+    @pytest.mark.parametrize("object_name", ["flashlight", "tv", "kettle"])
+    def test_show_object(self, object_name: str):
+        """Show object definition for various object types."""
+        result = runner.invoke(app, ["show", "object", object_name])
 
         assert result.exit_code == 0
-        assert "flashlight" in result.stdout
-        assert "battery.level" in result.stdout or "battery" in result.stdout
-
-    def test_show_object_tv(self):
-        """Show TV object definition."""
-        result = runner.invoke(app, ["show", "object", "tv"])
-
-        assert result.exit_code == 0
-        assert "tv" in result.stdout
-
-    def test_show_object_kettle(self):
-        """Show kettle object definition."""
-        result = runner.invoke(app, ["show", "object", "kettle"])
-
-        assert result.exit_code == 0
-        assert "kettle" in result.stdout
+        assert object_name in result.stdout
 
     def test_show_object_invalid(self):
         """Show invalid object returns error."""
@@ -63,17 +50,10 @@ class TestShowCommand:
 
         assert result.exit_code != 0
 
-    def test_show_behaviors_flashlight(self):
-        """Show flashlight behaviors."""
-        result = runner.invoke(app, ["show", "behaviors", "flashlight"])
-
-        assert result.exit_code == 0
-        assert "turn_on" in result.stdout
-        assert "turn_off" in result.stdout
-
-    def test_show_behaviors_tv(self):
-        """Show TV behaviors."""
-        result = runner.invoke(app, ["show", "behaviors", "tv"])
+    @pytest.mark.parametrize("object_name", ["flashlight", "tv"])
+    def test_show_behaviors(self, object_name: str):
+        """Show behaviors for various object types."""
+        result = runner.invoke(app, ["show", "behaviors", object_name])
 
         assert result.exit_code == 0
         assert "turn_on" in result.stdout

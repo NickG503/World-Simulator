@@ -29,7 +29,7 @@ run_sim() {
     shift
 
     echo "  Running: $name"
-    uv run sim simulate "$@" --name "$name"
+    uv run sim simulate "$@" --name "$name" --ask-threshold 999
 
     # Move the generated file to the output folder
     if [ -f "outputs/histories/${name}.yaml" ]; then
@@ -140,7 +140,13 @@ run_sim kettle_pour --obj kettle --set tank.level=full --actions turn_on pour
 # Coffee machine heat_up with full workflow showing time constraints
 run_sim coffee_heat_time --obj coffee_machine --set heater.temperature=cold --actions heat_up
 
-# Flashlight shake - demonstrates persistent trend across passive action
+# Flashlight turn_on + shake - demonstrates persistent trend across passive action
+run_sim flashlight_on_and_shake --obj flashlight --actions turn_on shake
+
+# Flashlight turn_on + shake with full battery
+run_sim flashlight_on_shake --obj flashlight --set battery.level=full --actions turn_on shake
+
+# Flashlight shake with unknown battery - trend branching during passive action
 run_sim flashlight_shake --obj flashlight --set battery.level=unknown --actions turn_on shake
 
 # Generate all visualizations at the end

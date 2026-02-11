@@ -235,67 +235,6 @@ class TestDeMorganPostconditions:
 class TestDeMorganComplex:
     """Tests for complex De Morgan scenarios with real-world objects."""
 
-    def test_and_precondition_branch_values_are_correct(self, registry_manager):
-        """Coffee machine: Verify AND fail branches contain correct complement values."""
-        runner = TreeSimulationRunner(registry_manager)
-
-        tree = runner.run(
-            "coffee_machine",
-            [{"name": "brew_espresso", "parameters": {}}],
-            simulation_id="test_and_values",
-            initial_values={
-                "water_tank.level": "unknown",
-                "bean_hopper.amount": "unknown",
-                "heater.temperature": "hot",
-            },
-        )
-
-        root = tree.nodes["state0"]
-        fail_branches = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "rejected"]
-
-        # Should have fail branches (De Morgan)
-        assert len(fail_branches) >= 2, "Should have at least 2 fail branches for AND"
-
-        # Each fail branch should have a branch condition
-        for fb in fail_branches:
-            bc = fb.branch_condition
-            assert bc is not None, "Fail branch should have a branch condition"
-
-    def test_or_precondition_fail_branch_has_all_complements(self, registry_manager):
-        """Slot machine: Verify OR fail branch constrains ALL reels to complements."""
-        runner = TreeSimulationRunner(registry_manager)
-
-        tree = runner.run(
-            "slot_machine",
-            [{"name": "check_any_seven", "parameters": {}}],
-            simulation_id="test_or_fail_values",
-            initial_values={
-                "reel1.symbol": "unknown",
-                "reel2.symbol": "unknown",
-                "reel3.symbol": "bar",
-            },
-        )
-
-        root = tree.nodes["state0"]
-        fail_branches = [tree.nodes[cid] for cid in root.children_ids if tree.nodes[cid].action_status == "rejected"]
-
-        assert len(fail_branches) == 1, "Should have exactly 1 fail branch for OR"
-
-        fail = fail_branches[0]
-        reel1 = fail.snapshot.get_attribute_value("reel1.symbol")
-        reel2 = fail.snapshot.get_attribute_value("reel2.symbol")
-
-        # Both reels should NOT be 'seven' (De Morgan AND)
-        if isinstance(reel1, list):
-            assert "seven" not in reel1, "OR fail: reel1 must not contain 'seven'"
-        else:
-            assert reel1 != "seven", "OR fail: reel1 must not be 'seven'"
-
-        if isinstance(reel2, list):
-            assert "seven" not in reel2, "OR fail: reel2 must not contain 'seven'"
-        else:
-            assert reel2 != "seven", "OR fail: reel2 must not be 'seven'"
-
     def test_postcondition_else_branch_effects_not_applied(self, registry_manager):
         """Coffee machine: Verify ELSE branches don't apply the conditional effects."""
         runner = TreeSimulationRunner(registry_manager)

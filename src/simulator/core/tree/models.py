@@ -74,10 +74,8 @@ class WorldSnapshot(BaseModel):
         parts = path.split(".")
 
         if len(parts) == 1:
-            # Global attribute
             return self.object_state.global_attributes.get(parts[0])
         elif len(parts) == 2:
-            # Part attribute
             part = self.object_state.parts.get(parts[0])
             if part:
                 return part.attributes.get(parts[1])
@@ -133,12 +131,10 @@ class WorldSnapshot(BaseModel):
         """Get all attribute paths in this snapshot."""
         paths = []
 
-        # Part attributes
         for part_name, part in self.object_state.parts.items():
             for attr_name in part.attributes:
                 paths.append(f"{part_name}.{attr_name}")
 
-        # Global attributes
         for attr_name in self.object_state.global_attributes:
             paths.append(attr_name)
 
@@ -160,8 +156,6 @@ class WorldSnapshot(BaseModel):
         import json
 
         state_parts = []
-
-        # Object type
         state_parts.append(f"type:{self.object_state.type}")
 
         # Process part attributes in sorted order for determinism
@@ -187,7 +181,6 @@ class WorldSnapshot(BaseModel):
             trend = attr.trend or "none"
             state_parts.append(f"global.{attr_name}:{value_repr}:{trend}")
 
-        # Create deterministic string and hash it
         canonical = "|".join(state_parts)
         return hashlib.sha256(canonical.encode()).hexdigest()[:16]
 
@@ -569,11 +562,9 @@ class SimulationTree(BaseModel):
         if not node:
             return
 
-        # Add parent if not already present
         if parent_id not in node.parent_ids:
             node.parent_ids.append(parent_id)
 
-        # Add the incoming edge
         node.incoming_edges.append(edge)
 
         # Update parent's children list
@@ -701,15 +692,12 @@ class SimulationTree(BaseModel):
             "nodes": nodes_dict,
         }
 
-        # Include action definitions if present
         if self.action_definitions:
             result["action_definitions"] = self.action_definitions
 
-        # Include constraint definitions if present
         if self.constraint_definitions:
             result["constraint_definitions"] = self.constraint_definitions
 
-        # Include solver definitions if present
         if self.solver_definitions:
             result["solver_definitions"] = self.solver_definitions
 

@@ -411,7 +411,7 @@ class PreconditionBranchingMixin:
                     space_id = get_attribute_space_id(instance, attr_path)
                     space_levels = get_all_space_values(space_id, self.registry_manager) if space_id else None
 
-                    if evaluate_condition_for_value(sub_cond, current_value, space_levels):
+                    if evaluate_condition_for_value(sub_cond, current_value, space_levels=space_levels):
                         return True  # Known value satisfies this disjunct → OR passes
                 except Exception:
                     pass
@@ -445,7 +445,7 @@ class PreconditionBranchingMixin:
                     space_id = get_attribute_space_id(instance, attr_path)
                     space_levels = get_all_space_values(space_id, self.registry_manager) if space_id else None
 
-                    if not evaluate_condition_for_value(sub_cond, current_value, space_levels):
+                    if not evaluate_condition_for_value(sub_cond, current_value, space_levels=space_levels):
                         return False  # One part fails, AND fails
                 except Exception:
                     return False

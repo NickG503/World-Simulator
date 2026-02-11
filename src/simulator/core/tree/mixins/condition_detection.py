@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from simulator.core.actions.conditions.attribute_conditions import AttributeCondition
 from simulator.core.actions.conditions.logical_conditions import AndCondition, OrCondition
 from simulator.core.tree.snapshot_utils import get_all_space_values, get_attribute_space_id
-from simulator.core.tree.utils.evaluation import (
+from simulator.core.tree.utils.condition_evaluation import (
     evaluate_condition_for_value,
     get_possible_values_for_attr,
 )
@@ -194,7 +194,9 @@ class ConditionDetectionMixin:
                 if not possible_values:
                     return {}
 
-                pass_values = [v for v in possible_values if evaluate_condition_for_value(condition, v, space_levels)]
+                pass_values = [
+                    v for v in possible_values if evaluate_condition_for_value(condition, v, space_levels=space_levels)
+                ]
                 return {attr_path: pass_values} if pass_values else {}
             except Exception:
                 return {}
@@ -264,7 +266,9 @@ class ConditionDetectionMixin:
                     return {}
 
                 fail_values = [
-                    v for v in possible_values if not evaluate_condition_for_value(condition, v, space_levels)
+                    v
+                    for v in possible_values
+                    if not evaluate_condition_for_value(condition, v, space_levels=space_levels)
                 ]
                 return {attr_path: fail_values} if fail_values else {}
             except Exception:
